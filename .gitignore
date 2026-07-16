@@ -18,3 +18,10 @@ reports/**/*.json
 # Keep documentation
 !reports/**/*.md
 !reports/**/README.md
+
+# Smithers run store (ephemeral — never commit)
+smithers.db
+smithers.db-shm
+smithers.db-wal
+
+node_modules/
