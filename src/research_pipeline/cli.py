@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+import yaml
+from pydantic import ValidationError
+
+from .config.loader import load_pipeline_config
+from .config.logging_setup import configure_logging
+from .controller.pipeline_controller import PipelineController
+from .enums import PipelineState
+from .errors import ResearchPipelineError
+from .registry.database import Database
+from .registry.repositories import Registry
+from .schemas.decisions import DecisionRecord
+from .schemas.splits import SplitDefinition, calculate_split_hash
+from .schemas.strategy_spec import load_strategy_spec
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m research_pipeline", description="Deterministic Phase A research-pipeline registry")
+    parser.add_argument("--registry", default=os.environ.get("RESEARCH_PIPELINE_REGISTRY", "research_registry/research_pipeline.sqlite3"))
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("init")
+    command = sub.add_parser("new-strategy"); command.add_argument("path")
+    sub.add_parser("list-strategies")
+    command = sub.add_parser("status"); command.add_argument("strategy_id")
+    command = sub.add_parser("validate-spec"); command.add_argument("strategy_id")
+    command = sub.add_parser("submit-spec"); command.add_argument("strategy_id")
+    command = sub.add_parser("approve-spec"); command.add_argument("strategy_id")
+    command = sub.add_parser("transition"); command.add_argument("strategy_id"); command.add_argument("new_state", choices=[state.value for state in PipelineState]); command.add_argument("--reason", required=True)
+    command = sub.add_parser("show-budget"); command.add_argument("strategy_id")
+    command = sub.add_parser("consume-budget"); command.add_argument("strategy_id"); command.add_argument("--backtests", type=int, default=0); command.add_argument("--family"); command.add_argument("--rounds", type=int, default=0); command.add_argument("--values", type=int, default=0); command.add_argument("--research-round", type=int, default=None); command.add_argument("--codex-repairs", type=int, default=0); command.add_argument("--runtime-minutes", type=int, default=0); command.add_argument("--report-size-mb", type=float, default=0.0)
+    command = sub.add_parser("create-split"); command.add_argument("strategy_id"); command.add_argument("split_config")
+    command = sub.add_parser("holdout-status"); command.add_argument("strategy_id")
+    command = sub.add_parser("open-holdout"); command.add_argument("strategy_id"); command.add_argument("--reason", required=True); command.add_argument("--dataset-hash", default=None)
+    command = sub.add_parser("record-decision"); command.add_argument("strategy_id"); command.add_argument("decision_json")
+    command = sub.add_parser("history"); command.add_argument("strategy_id")
+    return parser
+
+
+def _controller(registry_path: str) -> PipelineController:
+    configure_logging(Path(registry_path).with_suffix(".log"))
+    return PipelineController(Registry(Database(registry_path)))
+
+
+def _load_split_config(path: str) -> SplitDefinition:
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    raw.setdefault("created_timestamp", datetime.now(timezone.utc).isoformat())
+    raw.setdefault("split_hash", calculate_split_hash(raw))
+    return SplitDefinition.model_validate(raw)
+
+
+def _print(value) -> None:
+    print(json.dumps(value, indent=2, sort_keys=True, default=str))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        controller = _controller(args.registry)
+        registry = controller.registry
+        if args.command == "init":
+            print(f"initialized registry: {Path(args.registry)}")
+        elif args.command == "new-strategy":
+            spec = load_strategy_spec(args.path)
+            config = load_pipeline_config(Path("configs/research_pipeline/defaults.yaml"), strategy_id=spec.strategy_id)
+            _print(controller.register_strategy(spec, str(Path(args.path).resolve()), config["budgets"]))
+        elif args.command == "list-strategies":
+            _print(registry.list_strategies())
+        elif args.command == "status":
+            _print(controller.status(args.strategy_id))
+        elif args.command == "validate-spec":
+            _print(controller.validate_specification(args.strategy_id))
+        elif args.command == "submit-spec":
+            _print(controller.submit_specification(args.strategy_id))
+        elif args.command == "approve-spec":
+            _print(controller.approve_specification(args.strategy_id))
+        elif args.command == "transition":
+            _print(controller.transition(args.strategy_id, args.new_state, args.reason))
+        elif args.command == "show-budget":
+            _print(registry.get_budget(args.strategy_id))
+        elif args.command == "consume-budget":
+            _print(controller.consume_budget(args.strategy_id, backtests=args.backtests, family=args.family, rounds=args.rounds, values=args.values, research_round=args.research_round, codex_repairs=args.codex_repairs, runtime_minutes=args.runtime_minutes, report_size_mb=args.report_size_mb).model_dump())
+        elif args.command == "create-split":
+            split = _load_split_config(args.split_config)
+            controller.create_split(args.strategy_id, split)
+            _print(split.model_dump(mode="json"))
+        elif args.command == "holdout-status":
+            _print(controller.holdout_status(args.strategy_id))
+        elif args.command == "open-holdout":
+            _print(controller.open_holdout(args.strategy_id, args.reason, args.dataset_hash))
+        elif args.command == "record-decision":
+            source = Path(args.decision_json)
+            raw = json.loads(source.read_text(encoding="utf-8")) if source.exists() else json.loads(args.decision_json)
+            _print({"decision_id": controller.record_decision(args.strategy_id, DecisionRecord.model_validate(raw))})
+        elif args.command == "history":
+            _print(registry.history(args.strategy_id))
+        return 0
+    except (ResearchPipelineError, ValidationError, ValueError, OSError, json.JSONDecodeError) as exc:
+        logging.getLogger("research_pipeline").warning("command_error type=%s message=%s", type(exc).__name__, str(exc))
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
