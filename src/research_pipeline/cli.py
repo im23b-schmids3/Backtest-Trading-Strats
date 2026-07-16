@@ -43,9 +43,20 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("record-decision"); command.add_argument("strategy_id"); command.add_argument("decision_json")
     command = sub.add_parser("history"); command.add_argument("strategy_id")
     workflow = sub.add_parser("workflow", help="typed Smithers bridge commands")
-    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "technical-verification", "final-status", "diagnose-tools"])
+    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
     workflow.add_argument("--input-json")
     workflow.add_argument("--repository-root", default=".")
+    verification = sub.add_parser("verification", help="Phase B.5 technical integrity verification")
+    verification_sub = verification.add_subparsers(dest="verification_command", required=True)
+    command = verification_sub.add_parser("create-manifest"); command.add_argument("strategy_id"); command.add_argument("--diagnostic-dir"); command.add_argument("--output")
+    command = verification_sub.add_parser("run"); command.add_argument("strategy_id"); command.add_argument("--manifest", required=True)
+    command = verification_sub.add_parser("status"); command.add_argument("strategy_id"); command.add_argument("--run-id")
+    command = verification_sub.add_parser("show-failures"); command.add_argument("strategy_id"); command.add_argument("--run-id")
+    command = verification_sub.add_parser("reconcile-report"); command.add_argument("strategy_id"); command.add_argument("--manifest", required=True)
+    command = verification_sub.add_parser("rerun-check"); command.add_argument("strategy_id"); command.add_argument("check_name"); command.add_argument("--manifest", required=True)
+    command = verification_sub.add_parser("export-defect-prompt"); command.add_argument("strategy_id"); command.add_argument("--manifest", required=True)
+    command = verification_sub.add_parser("fixture"); command.add_argument("strategy_id"); command.add_argument("--kind", default="correct"); command.add_argument("--output", required=True); command.add_argument("--version", default="phase-b-1")
+    command = verification_sub.add_parser("dry-run"); command.add_argument("--kind", default="correct")
     return parser
 
 
@@ -117,6 +128,48 @@ def main(argv: list[str] | None = None) -> int:
             source = Path(args.input_json)
             payload = json.loads(source.read_text(encoding="utf-8")) if source.exists() else json.loads(args.input_json)
             _print(PhaseBBridge().dispatch(args.workflow_command, payload))
+        elif args.command == "verification":
+            from .verification.fixtures import make_fixture
+            from .verification.services import VerificationService
+            service = VerificationService(args.registry)
+            if args.verification_command == "create-manifest":
+                manifest = service.create_manifest(args.strategy_id, args.diagnostic_dir)
+                target = Path(args.output) if args.output else Path(args.diagnostic_dir or service.registry_path.parent / "verification" / args.strategy_id) / "manifest.yaml"
+                manifest.save(target); _print(manifest.model_dump(mode="json"))
+            elif args.verification_command == "fixture":
+                _print({"manifest": str(make_fixture(args.output, args.strategy_id, args.version, args.kind))})
+            elif args.verification_command == "dry-run":
+                import tempfile
+                from .phase_b.models import WorkflowInput
+                with tempfile.TemporaryDirectory(prefix="research-pipeline-b5-") as temp:
+                    root = Path(temp)
+                    registry_path = root / "registry.sqlite3"
+                    phase_b = __import__("research_pipeline.phase_b.services", fromlist=["PhaseBService"]).PhaseBService(registry_path)
+                    strategy_name = "b5-dry-run"
+                    generated = phase_b.generate_spec(WorkflowInput(strategy_name=strategy_name, natural_language_description="A deterministic B.5 verification fixture strategy.", requested_markets=["TEST"], requested_timeframes=["1h"], repository_root=str(root)))
+                    phase_b.register_generated(phase_b.validate_spec(generated)); phase_b.approve(generated.strategy_id, "APPROVE")
+                    phase_b.controller.transition(generated.strategy_id, PipelineState.IMPLEMENTATION_VERIFICATION, "fixture implementation verified")
+                    manifest_path = make_fixture(root / "diagnostics", generated.strategy_id, kind=args.kind)
+                    result = VerificationService(registry_path).run(generated.strategy_id, manifest_path)
+                    _print({"kind": args.kind, "strategy_id": generated.strategy_id, "registry_path": str(registry_path), "result": result})
+            elif args.verification_command == "run":
+                _print(service.run(args.strategy_id, args.manifest))
+            elif args.verification_command in {"status", "show-failures"}:
+                result = service.status(args.strategy_id, args.run_id)
+                if args.verification_command == "show-failures" and result:
+                    result = {"verification_run_id": result["verification_run_id"], "outcome": result["outcome"], "failed_checks": result.get("mandatory_checks_failed", []), "blocking_issues": result.get("blocking_issues", [])}
+                _print(result or {})
+            elif args.verification_command in {"reconcile-report", "rerun-check"}:
+                result = service.run(args.strategy_id, args.manifest)
+                if args.verification_command == "rerun-check":
+                    result = {"check_name": args.check_name, "check": next((check for check in result.get("checks", []) if check["check_name"] == args.check_name), None), "verification_run_id": result["verification_run_id"]}
+                else:
+                    result = {"verification_run_id": result["verification_run_id"], "check": next((check for check in result.get("checks", []) if check["check_name"] == "report_reconciliation"), None)}
+                _print(result)
+            elif args.verification_command == "export-defect-prompt":
+                result = service.status(args.strategy_id)
+                if not result: raise ValueError("no verification result found")
+                _print({"strategy_id": args.strategy_id, "prompt": "Repair only proven Phase B.5 defects. Failed checks: " + ", ".join(result.get("mandatory_checks_failed", [])) + ". Evidence: " + json.dumps(result.get("blocking_issues", []))})
         return 0
     except (ResearchPipelineError, ValidationError, ValueError, OSError, json.JSONDecodeError) as exc:
         logging.getLogger("research_pipeline").warning("command_error type=%s message=%s", type(exc).__name__, str(exc))

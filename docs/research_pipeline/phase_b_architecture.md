@@ -6,7 +6,7 @@ The workflow is `.smithers/workflows/trading-research-phase-b.tsx` and is named 
 
 The normal path is:
 
-`generate-spec -> validate -> register -> approve-spec -> apply-approval -> implementation-plan -> implement-strategy -> tests -> bounded repair loop -> IMPLEMENTATION_VERIFICATION`
+`generate-spec -> validate -> register -> approve-spec -> apply-approval -> implementation-plan -> implement-strategy -> tests -> bounded repair loop -> IMPLEMENTATION_VERIFICATION -> Phase B.5 technical integrity -> BASELINE_BACKTEST`
 
 Phase B deliberately stops before baseline backtesting, edge gates, parameter research, holdout access, and optimization.
 

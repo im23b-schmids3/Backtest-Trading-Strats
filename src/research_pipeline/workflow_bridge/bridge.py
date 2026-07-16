@@ -46,6 +46,16 @@ class PhaseBBridge:
             return self.service.run_tests(str(payload["repository_root"]), dry_run=bool(payload.get("dry_run", True)), worktree_path=payload.get("worktree_path")).model_dump(mode="json")
         if command == "run-required-tests":
             return self.service.run_required_tests(str(payload["repository_root"]), [list(item) for item in payload["required_tests"]], dry_run=bool(payload.get("dry_run", True)), worktree_path=payload.get("worktree_path")).model_dump(mode="json")
+        if command == "verification-create-manifest":
+            from ..verification.services import VerificationService
+            if payload.get("manifest_path") and Path(str(payload["manifest_path"])).is_file():
+                from ..verification.models import VerificationManifest
+                return {**VerificationManifest.load(str(payload["manifest_path"])).model_dump(mode="json"), "manifest_path": str(Path(str(payload["manifest_path"])).resolve())}
+            manifest = VerificationService(self.service.registry_path).create_manifest(str(payload["strategy_id"]), payload.get("diagnostic_dir"), payload.get("verification_run_id"))
+            return {**manifest.model_dump(mode="json"), "manifest_path": str((Path(payload.get("diagnostic_dir") or self.service.registry_path.parent / "verification" / str(payload["strategy_id"])) / "manifest.yaml").resolve())}
+        if command == "verification-run":
+            from ..verification.services import VerificationService
+            return VerificationService(self.service.registry_path).run(str(payload["strategy_id"]), str(payload["manifest_path"]))
         if command in {"technical-verification", "final-status"}:
             from ..phase_b.models import TestResult
             return self.service.technical_verification(str(payload["strategy_id"]), TestResult.model_validate(payload["test_result"]), implementation_executed=bool(payload.get("implementation_executed", False)), repair_attempts=int(payload.get("repair_attempts", 0)), worktree_path=payload.get("worktree_path")).model_dump(mode="json")
@@ -54,7 +64,7 @@ class PhaseBBridge:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m research_pipeline workflow")
-    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "technical-verification", "final-status"])
+    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
     parser.add_argument("--input-json", required=True)
     args = parser.parse_args(argv)
     try:

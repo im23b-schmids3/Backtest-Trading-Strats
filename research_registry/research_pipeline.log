@@ -18,3 +18,19 @@
 {"timestamp": "2026-07-16T17:29:02+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-real-ca3dca6c old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
 {"timestamp": "2026-07-16T17:29:43+0200", "level": "WARNING", "event": "command_error type=RegistryError message=strategy not found: phase-b-isolated-dbc88cee"}
 {"timestamp": "2026-07-16T17:31:21+0200", "level": "WARNING", "event": "command_error type=RegistryError message=strategy not found: phase-b-final-4f42ca32"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "strategy_registered strategy_id=b5-dry-run version=phase-b-1"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "strategy_registered strategy_id=b5-dry-run version=phase-b-1"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-16T17:53:45+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
+{"timestamp": "2026-07-16T17:53:46+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
+{"timestamp": "2026-07-16T17:53:46+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=TECHNICAL_REPAIR_REQUIRED"}
+{"timestamp": "2026-07-16T17:53:46+0200", "level": "INFO", "event": "state_transition strategy_id=b5-dry-run old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=BASELINE_BACKTEST"}
+{"timestamp": "2026-07-16T17:55:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run-5 old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
+{"timestamp": "2026-07-16T17:55:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run-5 old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=BASELINE_BACKTEST"}
+{"timestamp": "2026-07-16T17:56:21+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
+{"timestamp": "2026-07-16T17:56:21+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=TECHNICAL_REPAIR_REQUIRED"}

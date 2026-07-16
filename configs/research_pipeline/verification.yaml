@@ -1,0 +1,19 @@
+tolerances:
+  absolute_pnl: 1.0e-9
+  relative_pnl: 1.0e-9
+  quantity: 1.0e-9
+  fees: 1.0e-9
+  timestamp: 0.0
+  hash: 0.0
+  report_metric: 1.0e-9
+required_checks:
+  - trade_pnl
+  - partial_exits
+  - position_scaling
+  - fees
+  - trade_counts
+  - causality
+  - session_boundary
+  - report_reconciliation
+  - data_sources
+  - determinism

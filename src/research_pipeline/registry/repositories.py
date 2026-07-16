@@ -188,3 +188,36 @@ class Registry:
                 rows = connection.execute(f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=? ORDER BY rowid", (strategy["strategy_id"], strategy["version"])).fetchall()
                 result[table] = [dict(row) for row in rows]
             return result
+
+    def record_verification(self, result: dict, manifest: dict, artifact_rows: list[dict] | None = None) -> dict:
+        """Persist a B.5 result idempotently, including its check evidence."""
+        strategy = self.get_strategy(result["strategy_id"], result["strategy_version"])
+        checks = result.get("checks", [])
+        with self.database.transaction() as connection:
+            existing = connection.execute("SELECT result_json FROM verification_runs WHERE verification_run_id=?", (result["verification_run_id"],)).fetchone()
+            if existing:
+                return json.loads(existing[0])
+            connection.execute("""INSERT INTO verification_runs(verification_run_id,strategy_id,strategy_version,implementation_commit,manifest_path,manifest_hash,started_at,ended_at,status,outcome,result_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (result["verification_run_id"], strategy["strategy_id"], strategy["version"], manifest.get("implementation_commit"), manifest.get("manifest_path", ""), manifest["manifest_hash"], result["timestamp"], result["timestamp"], "COMPLETED", result["outcome"], json.dumps(result, sort_keys=True)))
+            for check in checks:
+                connection.execute("""INSERT INTO verification_checks(verification_run_id,check_name,applicability,status,severity,observed_value,expected_value,tolerance,evidence_path,repair_eligibility)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""", (result["verification_run_id"], check["check_name"], check.get("applicability", "mandatory"), check["status"], check.get("severity", "blocking"), json.dumps(check.get("observed_value"), sort_keys=True), json.dumps(check.get("expected_value"), sort_keys=True), str(check.get("tolerance")) if check.get("tolerance") is not None else None, check.get("evidence_path"), int(check.get("repair_eligible", False))))
+            for artifact in artifact_rows or []:
+                connection.execute("INSERT INTO diagnostic_artifacts(verification_run_id,file_path,file_hash,schema_version,row_count,created_at) VALUES(?,?,?,?,?,?)", (result["verification_run_id"], artifact["file_path"], artifact["file_hash"], artifact.get("schema_version", "1"), artifact.get("row_count", 0), artifact.get("created_at", now_iso())))
+        return result
+
+    def get_verification(self, strategy_id: str, verification_run_id: str | None = None) -> dict | None:
+        strategy = self.get_strategy(strategy_id)
+        with self.database.session() as connection:
+            query = "SELECT result_json FROM verification_runs WHERE strategy_id=? AND strategy_version=?"
+            params: list = [strategy["strategy_id"], strategy["version"]]
+            if verification_run_id:
+                query += " AND verification_run_id=?"; params.append(verification_run_id)
+            query += " ORDER BY started_at DESC LIMIT 1"
+            row = connection.execute(query, params).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def has_verified_verification(self, strategy_id: str, version: str | None = None) -> bool:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            return connection.execute("SELECT 1 FROM verification_runs WHERE strategy_id=? AND strategy_version=? AND outcome='VERIFIED' LIMIT 1", (strategy["strategy_id"], strategy["version"])).fetchone() is not None

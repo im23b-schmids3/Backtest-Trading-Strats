@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def apply_migrations(connection) -> None:
@@ -8,6 +8,8 @@ def apply_migrations(connection) -> None:
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif row[0] > SCHEMA_VERSION:
         raise RuntimeError(f"registry schema {row[0]} is newer than supported schema {SCHEMA_VERSION}")
+    elif row[0] < SCHEMA_VERSION:
+        connection.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS strategies (
@@ -102,6 +104,53 @@ def apply_migrations(connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_transitions_strategy ON transitions(strategy_id, strategy_version, id);
         CREATE INDEX IF NOT EXISTS idx_experiments_strategy ON experiments(strategy_id, strategy_version, start_time);
+        CREATE TABLE IF NOT EXISTS verification_runs (
+            verification_run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            implementation_commit TEXT,
+            manifest_path TEXT NOT NULL,
+            manifest_hash TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            status TEXT NOT NULL,
+            outcome TEXT,
+            result_json TEXT,
+            FOREIGN KEY(strategy_id, strategy_version) REFERENCES strategies(strategy_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS verification_checks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            verification_run_id TEXT NOT NULL,
+            check_name TEXT NOT NULL,
+            applicability TEXT NOT NULL,
+            status TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            observed_value TEXT NOT NULL,
+            expected_value TEXT NOT NULL,
+            tolerance TEXT,
+            evidence_path TEXT,
+            repair_eligibility INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(verification_run_id) REFERENCES verification_runs(verification_run_id)
+        );
+        CREATE TABLE IF NOT EXISTS diagnostic_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            verification_run_id TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            row_count INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(verification_run_id) REFERENCES verification_runs(verification_run_id)
+        );
+        CREATE TABLE IF NOT EXISTS verification_repairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            verification_run_id TEXT NOT NULL,
+            failed_checks_json TEXT NOT NULL,
+            codex_result_json TEXT,
+            resulting_commit TEXT,
+            rerun_result_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(verification_run_id) REFERENCES verification_runs(verification_run_id)
+        );
         """
     )
-

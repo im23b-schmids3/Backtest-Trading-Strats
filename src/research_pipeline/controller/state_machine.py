@@ -9,7 +9,9 @@ LEGAL_TRANSITIONS: dict[PipelineState, frozenset[PipelineState]] = {
     PipelineState.STRATEGY_DRAFT: frozenset({PipelineState.WAITING_FOR_SPEC_APPROVAL}),
     PipelineState.WAITING_FOR_SPEC_APPROVAL: frozenset({PipelineState.IMPLEMENTATION, PipelineState.REJECTED, PipelineState.MANUAL_REVIEW_REQUIRED}),
     PipelineState.IMPLEMENTATION: frozenset({PipelineState.IMPLEMENTATION_VERIFICATION, PipelineState.TECHNICAL_FAILURE, PipelineState.MANUAL_REVIEW_REQUIRED}),
-    PipelineState.IMPLEMENTATION_VERIFICATION: frozenset({PipelineState.BASELINE_BACKTEST, PipelineState.TECHNICAL_FAILURE, PipelineState.MANUAL_REVIEW_REQUIRED}),
+    PipelineState.IMPLEMENTATION_VERIFICATION: frozenset({PipelineState.TECHNICAL_INTEGRITY_VERIFICATION, PipelineState.BASELINE_BACKTEST, PipelineState.TECHNICAL_FAILURE, PipelineState.MANUAL_REVIEW_REQUIRED}),
+    PipelineState.TECHNICAL_INTEGRITY_VERIFICATION: frozenset({PipelineState.BASELINE_BACKTEST, PipelineState.TECHNICAL_REPAIR_REQUIRED, PipelineState.MANUAL_REVIEW_REQUIRED, PipelineState.INSUFFICIENT_DIAGNOSTIC_DATA, PipelineState.TECHNICAL_FAILURE}),
+    PipelineState.TECHNICAL_REPAIR_REQUIRED: frozenset({PipelineState.TECHNICAL_INTEGRITY_VERIFICATION, PipelineState.MANUAL_REVIEW_REQUIRED, PipelineState.TECHNICAL_FAILURE}),
     PipelineState.BASELINE_BACKTEST: frozenset({PipelineState.EDGE_GATE, PipelineState.TECHNICAL_FAILURE, PipelineState.MANUAL_REVIEW_REQUIRED}),
     PipelineState.EDGE_GATE: frozenset({PipelineState.PARAMETER_RESEARCH, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),
     PipelineState.PARAMETER_RESEARCH: frozenset({PipelineState.CANDIDATE_FREEZE, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.TECHNICAL_FAILURE, PipelineState.MANUAL_REVIEW_REQUIRED}),
@@ -37,4 +39,3 @@ class StateMachine:
             raise TerminalStateError(f"terminal state {old_state} cannot transition")
         if new_state not in LEGAL_TRANSITIONS.get(old_state, frozenset()):
             raise InvalidTransitionError(f"illegal transition: {old_state} -> {new_state}")
-
