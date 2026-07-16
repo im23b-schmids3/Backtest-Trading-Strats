@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fib-backtester"
+version = "0.1.0"
+description = "Auditable Fibonacci retracement backtesting research project"
+requires-python = ">=3.12"
+dependencies = [
+  "ccxt>=4.4.0",
+  "matplotlib>=3.9.0",
+  "numpy>=2.0.0",
+  "pandas>=2.2.0",
+  "pyarrow>=16.0.0",
+  "PyYAML>=6.0.0",
+  "scikit-learn>=1.5.0",
+  "scipy>=1.11.0",
+  "yfinance>=0.2.0",
+]
+
+[project.scripts]
+fib-backtester = "fib_backtester.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

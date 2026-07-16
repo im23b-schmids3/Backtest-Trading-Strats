@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+data/raw/*.parquet
+data/binance_cache/
+.env
+.env.example
+reports/runs/
+reports/**/*.csv
+reports/**/*.parquet
+reports/**/*.html
+reports/**/*.png
+reports/**/*.xlsx
+reports/**/*.json
+
+# Keep documentation
+!reports/**/*.md
+!reports/**/README.md

@@ -1,0 +1,21 @@
+run_name: baseline
+seed: 42
+start: "2022-01-01T00:00:00Z"
+initial_cash: 10000.0
+assets: [BTC, ETH, SOL, XRP, GOLD]
+timeframes: [1h, 4h, 1d]
+swing_n: 3
+min_pivot_distance: 10
+max_anchor_age_days: {1h: 30, 4h: 60, 1d: 180}
+entry_max_age_bars: null
+reentry: false
+execution_policy: conservative
+max_positions: 5
+max_total_risk_fraction: 0.10
+leverage: 1.0
+asset_configs:
+  BTC: {symbol: BTC/USDT, source: binance, fee_rate: 0.001, slippage_rate: 0.0002}
+  ETH: {symbol: ETH/USDT, source: binance, fee_rate: 0.001, slippage_rate: 0.0002}
+  SOL: {symbol: SOL/USDT, source: binance, fee_rate: 0.001, slippage_rate: 0.0002}
+  XRP: {symbol: XRP/USDT, source: binance, fee_rate: 0.001, slippage_rate: 0.0002}
+  GOLD: {symbol: GC=F, source: yfinance, fee_rate: 0.0005, slippage_rate: 0.0002}

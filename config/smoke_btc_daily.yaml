@@ -1,0 +1,16 @@
+run_name: btc-daily-smoke
+seed: 42
+start: "2025-01-01T00:00:00Z"
+initial_cash: 10000.0
+assets: [BTC]
+timeframes: [1d]
+swing_n: 3
+min_pivot_distance: 10
+entry_max_age_bars: null
+reentry: false
+execution_policy: conservative
+max_positions: 1
+max_total_risk_fraction: 0.10
+leverage: 1.0
+asset_configs:
+  BTC: {symbol: BTC/USDT, source: binance, fee_rate: 0.001, slippage_rate: 0.0002}
