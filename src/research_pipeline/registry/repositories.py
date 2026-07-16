@@ -185,6 +185,6 @@ class Registry:
         with self.database.session() as connection:
             result = {}
             for table in ("transitions", "experiments", "holdout_accesses", "decisions", "failures"):
-                rows = connection.execute(f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=? ORDER BY id", (strategy["strategy_id"], strategy["version"])).fetchall()
+                rows = connection.execute(f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=? ORDER BY rowid", (strategy["strategy_id"], strategy["version"])).fetchall()
                 result[table] = [dict(row) for row in rows]
             return result

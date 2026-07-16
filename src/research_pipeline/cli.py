@@ -42,6 +42,10 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("open-holdout"); command.add_argument("strategy_id"); command.add_argument("--reason", required=True); command.add_argument("--dataset-hash", default=None)
     command = sub.add_parser("record-decision"); command.add_argument("strategy_id"); command.add_argument("decision_json")
     command = sub.add_parser("history"); command.add_argument("strategy_id")
+    workflow = sub.add_parser("workflow", help="typed Smithers bridge commands")
+    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "technical-verification", "final-status", "diagnose-tools"])
+    workflow.add_argument("--input-json")
+    workflow.add_argument("--repository-root", default=".")
     return parser
 
 
@@ -103,6 +107,16 @@ def main(argv: list[str] | None = None) -> int:
             _print({"decision_id": controller.record_decision(args.strategy_id, DecisionRecord.model_validate(raw))})
         elif args.command == "history":
             _print(registry.history(args.strategy_id))
+        elif args.command == "workflow":
+            if args.workflow_command == "diagnose-tools":
+                from .tools import print_diagnostics
+                return print_diagnostics(args.repository_root)
+            if not args.input_json:
+                raise ValueError("--input-json is required for workflow bridge commands")
+            from .workflow_bridge.bridge import PhaseBBridge
+            source = Path(args.input_json)
+            payload = json.loads(source.read_text(encoding="utf-8")) if source.exists() else json.loads(args.input_json)
+            _print(PhaseBBridge().dispatch(args.workflow_command, payload))
         return 0
     except (ResearchPipelineError, ValidationError, ValueError, OSError, json.JSONDecodeError) as exc:
         logging.getLogger("research_pipeline").warning("command_error type=%s message=%s", type(exc).__name__, str(exc))

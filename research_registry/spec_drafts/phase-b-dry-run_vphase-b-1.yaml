@@ -1,0 +1,44 @@
+strategy_id: phase-b-dry-run
+version: phase-b-1
+name: phase-b-dry-run
+description: A fictional deterministic entry and exit rule for a workflow fixture.
+hypothesis: A fictional deterministic entry and exit rule for a workflow fixture.
+strategy_family: phase_b_fictional
+markets:
+- TEST
+timeframes:
+- 1h
+long_rules:
+- Use the described long condition.
+short_rules:
+- Use the described short condition.
+entry_logic: Use the described entry condition.
+initial_stop_logic: Use a fixed initial stop described by the specification.
+exit_logic: Use the described exit condition.
+session_assumptions:
+- Chronological timestamps.
+baseline_parameters:
+  fictional_baseline: 1
+parameter_families:
+- name: fictional_baseline
+  description: Immutable dry-run baseline.
+  baseline_value: 1
+  value_type: integer
+  allowed_min: 1
+  allowed_max: 1
+  allowed_values:
+  - 1
+  optimization_order: 0
+  maximum_rounds: 0
+  mutable: false
+  hypothesis_relevance: Fixture only.
+invariants:
+- This fictional dry run must not alter existing trading behavior.
+required_data:
+- OHLCV candles
+known_limitations:
+- Phase B dry-run fixture; no trading research.
+status: DRAFT
+created_at: '2026-07-16T15:00:13.405419Z'
+approved_at: null
+specification_hash: d92e2de290d7abb52e180d012f103c06e8128aec0a99064a91dcf12b59559c7b

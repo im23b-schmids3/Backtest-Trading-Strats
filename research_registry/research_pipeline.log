@@ -1,0 +1,20 @@
+{"timestamp": "2026-07-16T16:59:51+0200", "level": "WARNING", "event": "command_error type=ValidationError message=1 validation error for WorkflowInput\nrunId\n  Extra inputs are not permitted [type=extra_forbidden, input_value='6ae4711e-d21f-41d9-a23d-a1fdb0db8f2e', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.12/v/extra_forbidden"}
+{"timestamp": "2026-07-16T16:59:53+0200", "level": "WARNING", "event": "command_error type=ValidationError message=1 validation error for WorkflowInput\nrunId\n  Extra inputs are not permitted [type=extra_forbidden, input_value='6ae4711e-d21f-41d9-a23d-a1fdb0db8f2e', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.12/v/extra_forbidden"}
+{"timestamp": "2026-07-16T17:00:17+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-b-dry-run version=phase-b-1"}
+{"timestamp": "2026-07-16T17:00:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-16T17:00:44+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-16T17:00:46+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-16T17:03:29+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-b-dry-run-4 version=phase-b-1"}
+{"timestamp": "2026-07-16T17:03:29+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run-4 old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-16T17:03:45+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run-4 old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-16T17:04:12+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-b-dry-run-5 version=phase-b-1"}
+{"timestamp": "2026-07-16T17:04:12+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run-5 old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-16T17:04:25+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run-5 old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-16T17:04:27+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run-5 old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-16T17:14:57+0200", "level": "WARNING", "event": "command_error type=InvalidTransitionError message=implementation planning requires IMPLEMENTATION, got IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-16T17:28:18+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-b-real-ca3dca6c version=phase-b-1"}
+{"timestamp": "2026-07-16T17:28:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-real-ca3dca6c old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-16T17:28:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-real-ca3dca6c old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-16T17:29:02+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-real-ca3dca6c old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-16T17:29:43+0200", "level": "WARNING", "event": "command_error type=RegistryError message=strategy not found: phase-b-isolated-dbc88cee"}
+{"timestamp": "2026-07-16T17:31:21+0200", "level": "WARNING", "event": "command_error type=RegistryError message=strategy not found: phase-b-final-4f42ca32"}
