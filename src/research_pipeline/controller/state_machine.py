@@ -19,7 +19,7 @@ LEGAL_TRANSITIONS: dict[PipelineState, frozenset[PipelineState]] = {
     PipelineState.WALK_FORWARD: frozenset({PipelineState.HOLDOUT, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),
     PipelineState.HOLDOUT: frozenset({PipelineState.STRESS_TESTS, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),
     PipelineState.STRESS_TESTS: frozenset({PipelineState.THROUGHPUT, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),
-    PipelineState.THROUGHPUT: frozenset({PipelineState.RISK_SIZING, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),
+    PipelineState.THROUGHPUT: frozenset({PipelineState.RISK_SIZING, PipelineState.FINAL_REVIEW, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),
     PipelineState.RISK_SIZING: frozenset({PipelineState.PROP_SIMULATION, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),
     PipelineState.PROP_SIMULATION: frozenset({PipelineState.MULTI_STRATEGY_PORTFOLIO, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),
     PipelineState.MULTI_STRATEGY_PORTFOLIO: frozenset({PipelineState.FINAL_REVIEW, PipelineState.REJECTED, PipelineState.INSUFFICIENT_EVIDENCE, PipelineState.MANUAL_REVIEW_REQUIRED}),

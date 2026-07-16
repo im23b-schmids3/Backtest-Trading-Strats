@@ -46,6 +46,28 @@ class PhaseBBridge:
             return self.service.run_tests(str(payload["repository_root"]), dry_run=bool(payload.get("dry_run", True)), worktree_path=payload.get("worktree_path")).model_dump(mode="json")
         if command == "run-required-tests":
             return self.service.run_required_tests(str(payload["repository_root"]), [list(item) for item in payload["required_tests"]], dry_run=bool(payload.get("dry_run", True)), worktree_path=payload.get("worktree_path")).model_dump(mode="json")
+        if command.startswith("research-"):
+            from ..research.models import AnalystDecision, ParameterProposal
+            from ..research.services import PhaseCService
+            research = PhaseCService(self.service.registry_path, repository_root=payload.get("repository_root", "."), scenario=payload.get("scenario", "strong-stable"))
+            strategy_id = str(payload.get("strategy_id", ""))
+            if command == "research-start": return research.start(strategy_id, payload.get("run_id"))
+            if command == "research-run-baseline": return research.run_baseline(strategy_id).model_dump(mode="json")
+            if command == "research-edge-gate": return research.evaluate_edge(strategy_id)
+            if command == "research-analyze": return research.analyze(strategy_id).model_dump(mode="json")
+            if command == "research-propose-round": return research.propose_round(AnalystDecision.model_validate(payload["decision"])).model_dump(mode="json")
+            if command == "research-run-round": return research.run_round(strategy_id, ParameterProposal.model_validate(payload["proposal"])).model_dump(mode="json")
+            if command == "research-review-round": return research.review_round(strategy_id, str(payload["round_id"])).model_dump(mode="json")
+            if command == "research-freeze-family": return research.freeze_family(strategy_id, str(payload["round_id"]))
+            if command == "research-freeze-candidate": return research.freeze_candidate(strategy_id).model_dump(mode="json")
+            if command == "research-walk-forward": return research.run_walk_forward(strategy_id).model_dump(mode="json")
+            if command == "research-holdout": return research.run_holdout(strategy_id).model_dump(mode="json")
+            if command == "research-stress": return research.run_stress(strategy_id).model_dump(mode="json")
+            if command == "research-throughput": return research.run_throughput(strategy_id).model_dump(mode="json")
+            if command == "research-final-review": return research.final_review(strategy_id).model_dump(mode="json")
+            if command == "research-status": return research.status(strategy_id)
+            if command == "research-journal": return {"entries": research.journal(strategy_id)}
+            raise ValueError(f"unsupported research command: {command}")
         if command == "verification-create-manifest":
             from ..verification.services import VerificationService
             if payload.get("manifest_path") and Path(str(payload["manifest_path"])).is_file():
@@ -64,7 +86,7 @@ class PhaseBBridge:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m research_pipeline workflow")
-    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
+    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
     parser.add_argument("--input-json", required=True)
     args = parser.parse_args(argv)
     try:

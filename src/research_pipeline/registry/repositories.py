@@ -221,3 +221,96 @@ class Registry:
         strategy = self.get_strategy(strategy_id, version)
         with self.database.session() as connection:
             return connection.execute("SELECT 1 FROM verification_runs WHERE strategy_id=? AND strategy_version=? AND outcome='VERIFIED' LIMIT 1", (strategy["strategy_id"], strategy["version"])).fetchone() is not None
+
+    # Phase C research records. These methods are intentionally small,
+    # idempotent persistence primitives; policy remains in PhaseCService.
+    def _strategy_key(self, strategy_id: str, version: str | None = None) -> tuple[str, str]:
+        strategy = self.get_strategy(strategy_id, version)
+        return strategy["strategy_id"], strategy["version"]
+
+    def research_run(self, run_id: str, strategy_id: str, version: str, phase: str, root_path: str, scenario: str | None = None) -> dict:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO research_runs(run_id,strategy_id,strategy_version,current_phase,status,root_path,scenario,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (run_id, strategy_id, version, phase, "RUNNING", root_path, scenario, timestamp, timestamp))
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM research_runs WHERE run_id=?", (run_id,)).fetchone()
+            return dict(row)
+
+    def save_research_json(self, table: str, strategy_id: str, version: str, payload: dict) -> None:
+        allowed = {"research_walk_forward", "research_holdout", "research_stress", "research_throughput", "research_final_reviews"}
+        if table not in allowed:
+            raise RegistryError(f"unsupported research result table: {table}")
+        with self.database.transaction() as connection:
+            connection.execute(f"INSERT INTO {table}(strategy_id,strategy_version,result_json,created_at) VALUES(?,?,?,?) ON CONFLICT(strategy_id,strategy_version) DO UPDATE SET result_json=excluded.result_json", (strategy_id, version, json.dumps(payload, sort_keys=True), now_iso()))
+
+    def get_research_json(self, table: str, strategy_id: str, version: str | None = None) -> dict | None:
+        allowed = {"research_walk_forward", "research_holdout", "research_stress", "research_throughput", "research_final_reviews"}
+        if table not in allowed:
+            raise RegistryError(f"unsupported research result table: {table}")
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute(f"SELECT result_json FROM {table} WHERE strategy_id=? AND strategy_version=?", (sid, ver)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def save_baseline(self, strategy_id: str, version: str, experiment_id: str, artifact: dict, verification_outcome: str, gates: list[dict]) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO research_baselines(strategy_id,strategy_version,experiment_id,artifact_json,verification_outcome,gate_outcomes_json,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(strategy_id,strategy_version) DO UPDATE SET experiment_id=excluded.experiment_id,artifact_json=excluded.artifact_json,verification_outcome=excluded.verification_outcome,gate_outcomes_json=excluded.gate_outcomes_json", (strategy_id, version, experiment_id, json.dumps(artifact, sort_keys=True), verification_outcome, json.dumps(gates, sort_keys=True), now_iso()))
+
+    def get_baseline(self, strategy_id: str, version: str | None = None) -> dict | None:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM research_baselines WHERE strategy_id=? AND strategy_version=?", (sid, ver)).fetchone()
+            if not row: return None
+            result = dict(row); result["artifact_json"] = json.loads(result["artifact_json"]); result["gate_outcomes_json"] = json.loads(result["gate_outcomes_json"]); return result
+
+    def save_research_round(self, round_id: str, strategy_id: str, version: str, family: str, number: int, proposed: list, status: str = "PROPOSED", reason: str = "") -> None:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO research_rounds(round_id,strategy_id,strategy_version,family,round_number,proposed_values_json,status,reason,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (round_id, strategy_id, version, family, number, json.dumps(proposed, sort_keys=True), status, reason, timestamp, timestamp))
+
+    def update_research_round(self, round_id: str, *, experiments: list | None = None, review: dict | None = None, selected_value: Any = None, status: str | None = None, reason: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            row = connection.execute("SELECT * FROM research_rounds WHERE round_id=?", (round_id,)).fetchone()
+            if not row: raise RegistryError(f"research round not found: {round_id}")
+            connection.execute("UPDATE research_rounds SET experiments_json=?,review_json=?,selected_value_json=?,status=?,reason=?,updated_at=? WHERE round_id=?", (json.dumps(experiments if experiments is not None else json.loads(row["experiments_json"]), sort_keys=True), json.dumps(review, sort_keys=True) if review is not None else row["review_json"], json.dumps(selected_value, sort_keys=True) if selected_value is not None else row["selected_value_json"], status or row["status"], reason if reason is not None else row["reason"], now_iso(), round_id))
+
+    def get_research_round(self, round_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM research_rounds WHERE round_id=?", (round_id,)).fetchone()
+            if not row: return None
+            result = dict(row)
+            for key in ("proposed_values_json", "experiments_json", "review_json", "selected_value_json"):
+                if result[key] is not None: result[key] = json.loads(result[key])
+            return result
+
+    def list_research_rounds(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM research_rounds WHERE strategy_id=? AND strategy_version=? ORDER BY round_number,created_at", (sid, ver)).fetchall()]
+
+    def save_candidate(self, strategy_id: str, version: str, candidate_hash: str, manifest: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO research_candidates(strategy_id,strategy_version,candidate_hash,manifest_json,created_at) VALUES(?,?,?,?,?)", (strategy_id, version, candidate_hash, json.dumps(manifest, sort_keys=True), now_iso()))
+
+    def get_candidate(self, strategy_id: str, version: str | None = None) -> dict | None:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM research_candidates WHERE strategy_id=? AND strategy_version=? ORDER BY created_at DESC LIMIT 1", (sid, ver)).fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["manifest_json"] = json.loads(result["manifest_json"])
+            return result
+
+    def record_metric_citation(self, strategy_id: str, version: str, phase: str, citation: dict, valid: bool, reason: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO research_metric_citations(strategy_id,strategy_version,phase,experiment_id,metric_name,cited_value,source_file,source_path,validation_status,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (strategy_id, version, phase, citation["experiment_id"], citation["metric_name"], citation["value"], citation["source_file"], citation["source_path"], "VALID" if valid else "INVALID", reason, now_iso()))
+
+    def journal(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM research_journal WHERE strategy_id=? AND strategy_version=? ORDER BY id", (sid, ver)).fetchall()]
+
+    def add_journal_entry(self, strategy_id: str, version: str, phase: str, entry: dict, markdown: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO research_journal(strategy_id,strategy_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))

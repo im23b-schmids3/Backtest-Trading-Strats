@@ -1,0 +1,182 @@
+{
+  "blocking_issues": [],
+  "checks": [
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "trade_pnl",
+      "evidence_path": null,
+      "evidence_rows": [
+        {
+          "calculated_gross": 20.0,
+          "reported_gross": 20.0,
+          "trade_id": "T1"
+        }
+      ],
+      "expected_value": 0,
+      "observed_value": 0,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": 1e-09,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "partial_exits",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "position_scaling",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "fees",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "trade_counts",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "causality",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "session_boundary",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "report_reconciliation",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "data_sources",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "determinism",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    }
+  ],
+  "evidence_rows": [
+    {
+      "calculated_gross": 20.0,
+      "reported_gross": 20.0,
+      "trade_id": "T1"
+    }
+  ],
+  "files_inspected": [
+    "C:\\Users\\sandr\\Trading-Bot-Fib\\research_runs\\phase-c-dry-run\\phase-c-1\\baseline\\b5\\diagnostics.json"
+  ],
+  "mandatory_checks_failed": [],
+  "mandatory_checks_passed": [
+    "trade_pnl",
+    "partial_exits",
+    "position_scaling",
+    "fees",
+    "trade_counts",
+    "causality",
+    "session_boundary",
+    "report_reconciliation",
+    "data_sources",
+    "determinism"
+  ],
+  "outcome": "VERIFIED",
+  "recommended_next_state": "BASELINE_BACKTEST",
+  "repair_eligibility": false,
+  "strategy_id": "phase-c-dry-run",
+  "strategy_version": "phase-c-1",
+  "timestamp": "2026-07-16T21:05:20.573688Z",
+  "verification_run_id": "64c7bcac-7b20-4023-959a-c4501aa6c9dc",
+  "warnings": []
+}

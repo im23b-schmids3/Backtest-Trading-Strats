@@ -43,9 +43,27 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("record-decision"); command.add_argument("strategy_id"); command.add_argument("decision_json")
     command = sub.add_parser("history"); command.add_argument("strategy_id")
     workflow = sub.add_parser("workflow", help="typed Smithers bridge commands")
-    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
+    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
     workflow.add_argument("--input-json")
     workflow.add_argument("--repository-root", default=".")
+    research = sub.add_parser("research", help="deterministic Phase C research commands")
+    research_sub = research.add_subparsers(dest="research_command", required=True)
+    command = research_sub.add_parser("dry-run"); command.add_argument("--strategy-id", default="phase-c-dry-run"); command.add_argument("--scenario", default="strong-stable"); command.add_argument("--repository-root", default="."); command.add_argument("--registry-path")
+    for name in ("fixture", "run-baseline", "baseline-status", "analyze", "propose-round", "run-round", "review-round", "freeze-family", "freeze-candidate", "run-walk-forward", "run-holdout", "run-stress", "run-throughput", "final-review", "journal", "status"):
+        command = research_sub.add_parser(name); command.add_argument("strategy_id")
+        command.add_argument("--scenario", default=argparse.SUPPRESS)
+        command.add_argument("--repository-root", default=argparse.SUPPRESS)
+        command.add_argument("--decision-json", default=argparse.SUPPRESS)
+        command.add_argument("--proposal-json", default=argparse.SUPPRESS)
+        command.add_argument("--round-id", default=argparse.SUPPRESS)
+        command.add_argument("--registry-path", default=argparse.SUPPRESS)
+    research.add_argument("--scenario", default="strong-stable")
+    research.add_argument("--repository-root", default=".")
+    research.add_argument("--decision-json")
+    research.add_argument("--proposal-json")
+    research.add_argument("--round-id")
+    research.add_argument("--run-id")
+    research.add_argument("--registry-path")
     verification = sub.add_parser("verification", help="Phase B.5 technical integrity verification")
     verification_sub = verification.add_subparsers(dest="verification_command", required=True)
     command = verification_sub.add_parser("create-manifest"); command.add_argument("strategy_id"); command.add_argument("--diagnostic-dir"); command.add_argument("--output")
@@ -128,6 +146,44 @@ def main(argv: list[str] | None = None) -> int:
             source = Path(args.input_json)
             payload = json.loads(source.read_text(encoding="utf-8")) if source.exists() else json.loads(args.input_json)
             _print(PhaseBBridge().dispatch(args.workflow_command, payload))
+        elif args.command == "research":
+            from .research.models import AnalystDecision, ParameterProposal
+            from .research.services import PhaseCService
+            if args.research_command == "dry-run":
+                from .research.fixtures import run_phase_c_dry_run
+                import tempfile
+                if args.registry_path:
+                    result = run_phase_c_dry_run(args.registry_path, args.repository_root, args.strategy_id, args.scenario)
+                else:
+                    with tempfile.TemporaryDirectory(prefix="research-pipeline-phase-c-") as temp:
+                        root = Path(temp)
+                        result = run_phase_c_dry_run(root / "research_registry.sqlite3", root, args.strategy_id, args.scenario)
+                _print(result)
+                return 0
+            service = PhaseCService(args.registry, repository_root=args.repository_root, scenario=args.scenario)
+            command = args.research_command
+            if command == "fixture":
+                from .research.fixtures import prepare_phase_c_fixture
+                result = prepare_phase_c_fixture(args.registry_path or args.registry, args.repository_root, args.strategy_id, args.scenario)
+            elif command == "run-baseline": result = service.run_baseline(args.strategy_id)
+            elif command == "baseline-status": result = service.registry.get_baseline(args.strategy_id)
+            elif command == "analyze": result = service.analyze(args.strategy_id)
+            elif command == "propose-round":
+                source = Path(args.decision_json); result = service.propose_round(AnalystDecision.model_validate(json.loads(source.read_text(encoding="utf-8") if source.exists() else args.decision_json)))
+            elif command == "run-round":
+                source = Path(args.proposal_json); result = service.run_round(args.strategy_id, ParameterProposal.model_validate(json.loads(source.read_text(encoding="utf-8") if source.exists() else args.proposal_json)))
+            elif command == "review-round": result = service.review_round(args.strategy_id, args.round_id)
+            elif command == "freeze-family": result = service.freeze_family(args.strategy_id, args.round_id)
+            elif command == "freeze-candidate": result = service.freeze_candidate(args.strategy_id)
+            elif command == "run-walk-forward": result = service.run_walk_forward(args.strategy_id)
+            elif command == "run-holdout": result = service.run_holdout(args.strategy_id)
+            elif command == "run-stress": result = service.run_stress(args.strategy_id)
+            elif command == "run-throughput": result = service.run_throughput(args.strategy_id)
+            elif command == "final-review": result = service.final_review(args.strategy_id)
+            elif command == "journal": result = {"entries": service.journal(args.strategy_id)}
+            elif command == "status": result = service.status(args.strategy_id)
+            else: raise ValueError(f"unsupported research command: {command}")
+            _print(result.model_dump(mode="json") if hasattr(result, "model_dump") else result)
         elif args.command == "verification":
             from .verification.fixtures import make_fixture
             from .verification.services import VerificationService

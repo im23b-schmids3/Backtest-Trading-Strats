@@ -1,0 +1,24 @@
+# Phase C defaults. These are process limits, not claims about trading quality.
+budgets:
+  max_parameter_families: 6
+  max_rounds_per_family: 3
+  max_values_per_round: 5
+  max_total_backtests: 500
+  max_runtime_minutes_per_phase: 180
+  max_holdout_accesses: 1
+plateau:
+  score_tolerance: 0.25
+  minimum_stable_values: 2
+  isolated_maximum_expectancy: 0.30
+stopping:
+  minimum_trade_support: 30
+  maximum_families_without_improvement: 2
+walk_forward:
+  minimum_folds: 3
+  require_profitable_validation_ratio: true
+roles:
+  analyst: Research Analyst
+  statistical_reviewer: Statistical Reviewer
+  final_critic: Final Research Critic
+fixture:
+  scenario: strong-stable

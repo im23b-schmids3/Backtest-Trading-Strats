@@ -1,0 +1,12 @@
+{"timestamp": "2026-07-16T23:05:38+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=BASELINE_BACKTEST new_state=EDGE_GATE"}
+{"timestamp": "2026-07-16T23:05:39+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=EDGE_GATE new_state=PARAMETER_RESEARCH"}
+{"timestamp": "2026-07-16T23:05:42+0200", "level": "INFO", "event": "budget_used strategy_id=phase-c-smithers-dry-run total_backtests=5"}
+{"timestamp": "2026-07-16T23:05:47+0200", "level": "INFO", "event": "budget_used strategy_id=phase-c-smithers-dry-run total_backtests=10"}
+{"timestamp": "2026-07-16T23:05:51+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=PARAMETER_RESEARCH new_state=CANDIDATE_FREEZE"}
+{"timestamp": "2026-07-16T23:05:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=CANDIDATE_FREEZE new_state=WALK_FORWARD"}
+{"timestamp": "2026-07-16T23:05:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=WALK_FORWARD new_state=HOLDOUT"}
+{"timestamp": "2026-07-16T23:05:54+0200", "level": "INFO", "event": "holdout_access strategy_id=phase-c-smithers-dry-run"}
+{"timestamp": "2026-07-16T23:05:54+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=HOLDOUT new_state=STRESS_TESTS"}
+{"timestamp": "2026-07-16T23:05:56+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=STRESS_TESTS new_state=THROUGHPUT"}
+{"timestamp": "2026-07-16T23:05:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=THROUGHPUT new_state=FINAL_REVIEW"}
+{"timestamp": "2026-07-16T23:05:59+0200", "level": "INFO", "event": "state_transition strategy_id=phase-c-smithers-dry-run old_state=FINAL_REVIEW new_state=ACCEPTED"}

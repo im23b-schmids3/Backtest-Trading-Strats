@@ -1,0 +1,6 @@
+# Throughput thresholds are configurable per strategy and are not universal truths.
+minimum_executable_trades_per_month: 5
+maximum_median_days_between_trades: 31
+maximum_zero_trade_month_percentage: 0.50
+standalone_minimum_trades_per_month: 5
+portfolio_component_minimum_trades_per_month: 0.1

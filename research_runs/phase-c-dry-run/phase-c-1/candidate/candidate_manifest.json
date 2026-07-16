@@ -1,0 +1,51 @@
+{
+  "approved_specification_hash": "1f2dca6bfed7bd852f41e8bcc1a16531777f9cf2413fabb9c11435b897925c98",
+  "budget_usage": {
+    "codex_repair_attempts": 0,
+    "family_by_round": {
+      "1": "entry_depth",
+      "2": "stop_distance"
+    },
+    "holdout_accesses": 0,
+    "parameter_families": [
+      "entry_depth",
+      "stop_distance"
+    ],
+    "report_size_mb": 0.0,
+    "rounds_per_family": {
+      "entry_depth": 1,
+      "stop_distance": 1
+    },
+    "runtime_minutes_by_phase": {
+      "current": 0
+    },
+    "total_backtests": 10,
+    "values_by_round": {
+      "1": 5,
+      "2": 5
+    },
+    "values_per_round": {
+      "entry_depth": 5,
+      "stop_distance": 5
+    }
+  },
+  "candidate_hash": "ec6ad56042e4ef4e5ad3c31f34849b3708eb55fdb3d767747b7069a56e258dba",
+  "code_commit": null,
+  "frozen_families": [
+    "entry_depth",
+    "stop_distance"
+  ],
+  "manifest_path": "C:\\Users\\sandr\\Trading-Bot-Fib\\research_runs\\phase-c-dry-run\\phase-c-1\\candidate\\candidate_manifest.json",
+  "research_decisions": [
+    "round-phase-c-dry-run-1-entry_depth",
+    "round-phase-c-dry-run-2-stop_distance"
+  ],
+  "selected_parameters": {
+    "entry_depth": 5,
+    "stop_distance": 3
+  },
+  "split_hash": "db25061102570583a938f5aee178834874b3d7d964fd96c5d4a96fe03739e8b5",
+  "strategy_id": "phase-c-dry-run",
+  "strategy_version": "phase-c-1",
+  "total_selection_count": 2
+}

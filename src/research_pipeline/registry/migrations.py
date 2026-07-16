@@ -1,4 +1,7 @@
+# Preserve the Phase A/B registry schema version for backward compatibility.
+# Phase C extension tables have their own version marker below.
 SCHEMA_VERSION = 2
+MAX_COMPATIBLE_SCHEMA_VERSION = 3
 
 
 def apply_migrations(connection) -> None:
@@ -6,8 +9,8 @@ def apply_migrations(connection) -> None:
     row = connection.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
     if row is None:
         connection.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-    elif row[0] > SCHEMA_VERSION:
-        raise RuntimeError(f"registry schema {row[0]} is newer than supported schema {SCHEMA_VERSION}")
+    elif row[0] > MAX_COMPATIBLE_SCHEMA_VERSION:
+        raise RuntimeError(f"registry schema {row[0]} is newer than supported schema {MAX_COMPATIBLE_SCHEMA_VERSION}")
     elif row[0] < SCHEMA_VERSION:
         connection.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
     connection.executescript(
@@ -152,5 +155,113 @@ def apply_migrations(connection) -> None:
             created_at TEXT NOT NULL,
             FOREIGN KEY(verification_run_id) REFERENCES verification_runs(verification_run_id)
         );
+        CREATE TABLE IF NOT EXISTS research_runs (
+            run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            current_phase TEXT NOT NULL,
+            status TEXT NOT NULL,
+            root_path TEXT NOT NULL,
+            scenario TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS research_baselines (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            experiment_id TEXT PRIMARY KEY,
+            artifact_json TEXT NOT NULL,
+            verification_outcome TEXT NOT NULL,
+            gate_outcomes_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS research_rounds (
+            round_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            family TEXT NOT NULL,
+            round_number INTEGER NOT NULL,
+            proposed_values_json TEXT NOT NULL,
+            experiments_json TEXT NOT NULL DEFAULT '[]',
+            review_json TEXT,
+            selected_value_json TEXT,
+            status TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS research_candidates (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            candidate_hash TEXT PRIMARY KEY,
+            manifest_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS research_metric_citations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            experiment_id TEXT NOT NULL,
+            metric_name TEXT NOT NULL,
+            cited_value REAL NOT NULL,
+            source_file TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            validation_status TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS research_walk_forward (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version)
+        );
+        CREATE TABLE IF NOT EXISTS research_holdout (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version)
+        );
+        CREATE TABLE IF NOT EXISTS research_stress (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version)
+        );
+        CREATE TABLE IF NOT EXISTS research_throughput (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version)
+        );
+        CREATE TABLE IF NOT EXISTS research_final_reviews (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version)
+        );
+        CREATE TABLE IF NOT EXISTS research_journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            entry_json TEXT NOT NULL,
+            entry_markdown TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         """
     )
+    connection.execute("CREATE TABLE IF NOT EXISTS research_schema_version (version INTEGER NOT NULL)")
+    if connection.execute("SELECT version FROM research_schema_version LIMIT 1").fetchone() is None:
+        connection.execute("INSERT INTO research_schema_version(version) VALUES (1)")
+    # Phase C baseline results are one logical record per strategy version.
+    # Add the natural-key index separately so databases created by the first
+    # Phase C migration receive the same idempotency guarantee.
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS research_baselines_strategy_version ON research_baselines(strategy_id, strategy_version)")
+    connection.commit()
