@@ -1,10 +1,11 @@
 # Phase D entry requirements
 
-Phase D may begin only after Phase C has verified adapter contracts, durable
-resume behavior, citation checks, budget enforcement, candidate immutability,
-and holdout audit records on representative non-historical fixtures. It must
-also define a reviewed execution adapter, reproducible data snapshots, and
-operational ownership for manual-review outcomes.
+The controller requires a Phase C final classification of
+`ACCEPTED_STANDALONE` or `ACCEPTED_PORTFOLIO_COMPONENT`, a frozen candidate
+with a hash and persisted manifest, frozen parameters, a persisted split,
+holdout access count no greater than one, and a verified Phase B.5 result.
+Any mismatch blocks the prop run before rules or sizing execute.
 
-Phase D is not live trading. Any paper or live execution integration requires
-a separate approval and safety design.
+Phase D owns a separate `PropPhase` run state and cannot reopen Phase C's
+terminal `ACCEPTED` state. It does not combine strategies, optimize parameters,
+or access untouched holdout data.

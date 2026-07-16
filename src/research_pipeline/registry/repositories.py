@@ -314,3 +314,77 @@ class Registry:
     def add_journal_entry(self, strategy_id: str, version: str, phase: str, entry: dict, markdown: str) -> None:
         with self.database.transaction() as connection:
             connection.execute("INSERT INTO research_journal(strategy_id,strategy_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))
+
+    # Phase D records use hashed JSON artifacts rather than storing trade
+    # journals directly in SQLite. The table name is allow-listed so callers
+    # cannot turn this helper into arbitrary SQL execution.
+    def prop_run(self, run_id: str, strategy_id: str, version: str, phase: str, root_path: str, scenario: str | None = None) -> dict:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO prop_runs(run_id,strategy_id,strategy_version,current_phase,status,root_path,scenario,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (run_id, strategy_id, version, phase, "RUNNING", root_path, scenario, timestamp, timestamp))
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM prop_runs WHERE run_id=?", (run_id,)).fetchone()
+            return dict(row)
+
+    def update_prop_run(self, run_id: str, phase: str | None = None, status: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            row = connection.execute("SELECT * FROM prop_runs WHERE run_id=?", (run_id,)).fetchone()
+            if not row: raise RegistryError(f"prop run not found: {run_id}")
+            connection.execute("UPDATE prop_runs SET current_phase=?,status=?,updated_at=? WHERE run_id=?", (phase or row["current_phase"], status or row["status"], now_iso(), run_id))
+
+    def save_prop_budget(self, strategy_id: str, version: str, limits: dict, usage: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO prop_budgets(strategy_id,strategy_version,limits_json,usage_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(strategy_id,strategy_version) DO UPDATE SET limits_json=excluded.limits_json, usage_json=excluded.usage_json, updated_at=excluded.updated_at", (strategy_id, version, json.dumps(limits, sort_keys=True), json.dumps(usage, sort_keys=True), now_iso()))
+
+    def get_prop_budget(self, strategy_id: str, version: str | None = None) -> dict | None:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM prop_budgets WHERE strategy_id=? AND strategy_version=?", (sid, ver)).fetchone()
+            if not row: return None
+            result = dict(row); result["limits_json"] = json.loads(result["limits_json"]); result["usage_json"] = json.loads(result["usage_json"]); return result
+
+    def save_prop_record(self, table: str, record_key: str, strategy_id: str, version: str, payload: dict, **fields: Any) -> None:
+        allowed = {"prop_rules", "prop_contracts", "prop_mappings", "prop_risk_runs", "prop_scenarios", "prop_accounts", "prop_payouts", "prop_billing_events", "prop_economics", "prop_compliance", "prop_final_reviews"}
+        if table not in allowed: raise RegistryError(f"unsupported prop table: {table}")
+        columns = ["record_key", "strategy_id", "strategy_version"] + list(fields) + ["result_json", "created_at"]
+        values = [record_key, strategy_id, version] + list(fields.values()) + [json.dumps(payload, sort_keys=True), now_iso()]
+        placeholders = ",".join("?" for _ in values)
+        updates = ",".join(f"{column}=excluded.{column}" for column in columns[1:] if column != "created_at")
+        with self.database.transaction() as connection:
+            connection.execute(f"INSERT INTO {table}({','.join(columns)}) VALUES({placeholders}) ON CONFLICT(record_key) DO UPDATE SET {updates}", values)
+
+    def get_prop_record(self, table: str, strategy_id: str, version: str | None = None, record_key: str | None = None) -> dict | None:
+        allowed = {"prop_rules", "prop_contracts", "prop_mappings", "prop_risk_runs", "prop_scenarios", "prop_accounts", "prop_payouts", "prop_billing_events", "prop_economics", "prop_compliance", "prop_final_reviews"}
+        if table not in allowed: raise RegistryError(f"unsupported prop table: {table}")
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            query = f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=?"
+            params: list[Any] = [sid, ver]
+            if record_key: query += " AND record_key=?"; params.append(record_key)
+            query += " ORDER BY created_at DESC LIMIT 1"
+            row = connection.execute(query, params).fetchone()
+            if not row: return None
+            result = dict(row); result["result_json"] = json.loads(result["result_json"]); return result
+
+    def list_prop_records(self, table: str, strategy_id: str, version: str | None = None) -> list[dict]:
+        allowed = {"prop_scenarios", "prop_economics", "prop_accounts", "prop_payouts", "prop_billing_events"}
+        if table not in allowed: raise RegistryError(f"unsupported prop table: {table}")
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            result = []
+            for row in connection.execute(f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=? ORDER BY created_at", (sid, ver)).fetchall():
+                item = dict(row); item["result_json"] = json.loads(item["result_json"]); result.append(item)
+            return result
+
+    def add_prop_event(self, strategy_id: str, version: str, account_id: str, event: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO prop_account_events(strategy_id,strategy_version,account_id,event_json,created_at) VALUES(?,?,?,?,?)", (strategy_id, version, account_id, json.dumps(event, sort_keys=True), now_iso()))
+
+    def prop_journal(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM prop_journal WHERE strategy_id=? AND strategy_version=? ORDER BY id", (sid, ver)).fetchall()]
+
+    def add_prop_journal_entry(self, strategy_id: str, version: str, phase: str, entry: dict, markdown: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO prop_journal(strategy_id,strategy_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))

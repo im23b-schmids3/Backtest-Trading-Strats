@@ -14,8 +14,8 @@ from ..verification.fixtures import make_fixture
 from ..verification.services import VerificationService
 
 
-def make_phase_c_spec(strategy_id: str = "phase-c-fixture", version: str = "phase-c-1") -> StrategySpec:
-    raw = {"strategy_id": strategy_id, "version": version, "name": "Phase C synthetic fixture", "description": "Deterministic synthetic Phase C fixture.", "hypothesis": "A local parameter neighborhood is stable.", "strategy_family": "synthetic", "markets": ["TEST"], "timeframes": ["1h"], "long_rules": ["fixture long"], "short_rules": ["fixture short"], "entry_logic": "fixture entry", "initial_stop_logic": "fixture stop", "exit_logic": "fixture exit", "session_assumptions": ["UTC"], "baseline_parameters": {"entry_depth": 5, "stop_distance": 3}, "parameter_families": [ParameterFamily(name="entry_depth", description="entry neighborhood", baseline_value=5, value_type="integer", allowed_min=1, allowed_max=9, optimization_order=1, maximum_rounds=3, mutable=True, hypothesis_relevance="entry sensitivity"), ParameterFamily(name="stop_distance", description="stop neighborhood", baseline_value=3, value_type="integer", allowed_min=1, allowed_max=5, optimization_order=2, maximum_rounds=3, mutable=True, hypothesis_relevance="loss containment")], "invariants": ["synthetic only"], "required_data": ["synthetic candles"], "known_limitations": ["fixture only"], "status": "DRAFT", "created_at": datetime.now(timezone.utc), "approved_at": None, "specification_hash": "pending"}
+def make_phase_c_spec(strategy_id: str = "phase-c-fixture", version: str = "phase-c-1", markets: list[str] | None = None) -> StrategySpec:
+    raw = {"strategy_id": strategy_id, "version": version, "name": "Phase C synthetic fixture", "description": "Deterministic synthetic Phase C fixture.", "hypothesis": "A local parameter neighborhood is stable.", "strategy_family": "synthetic", "markets": markets or ["TEST"], "timeframes": ["1h"], "long_rules": ["fixture long"], "short_rules": ["fixture short"], "entry_logic": "fixture entry", "initial_stop_logic": "fixture stop", "exit_logic": "fixture exit", "session_assumptions": ["UTC"], "baseline_parameters": {"entry_depth": 5, "stop_distance": 3}, "parameter_families": [ParameterFamily(name="entry_depth", description="entry neighborhood", baseline_value=5, value_type="integer", allowed_min=1, allowed_max=9, optimization_order=1, maximum_rounds=3, mutable=True, hypothesis_relevance="entry sensitivity"), ParameterFamily(name="stop_distance", description="stop neighborhood", baseline_value=3, value_type="integer", allowed_min=1, allowed_max=5, optimization_order=2, maximum_rounds=3, mutable=True, hypothesis_relevance="loss containment")], "invariants": ["synthetic only"], "required_data": ["synthetic candles"], "known_limitations": ["fixture only"], "status": "DRAFT", "created_at": datetime.now(timezone.utc), "approved_at": None, "specification_hash": "pending"}
     candidate = StrategySpec.model_construct(**raw)
     raw["specification_hash"] = calculate_specification_hash(candidate)
     return StrategySpec.model_validate(raw)
@@ -29,8 +29,8 @@ def make_phase_c_split() -> SplitDefinition:
     return SplitDefinition.model_validate(raw)
 
 
-def prepare_phase_c_fixture(registry_path: str | Path, repository_root: str | Path, strategy_id: str = "phase-c-fixture", scenario: str = "strong-stable") -> dict:
-    registry = Registry(Database(registry_path)); controller = PipelineController(registry); spec = make_phase_c_spec(strategy_id)
+def prepare_phase_c_fixture(registry_path: str | Path, repository_root: str | Path, strategy_id: str = "phase-c-fixture", scenario: str = "strong-stable", markets: list[str] | None = None) -> dict:
+    registry = Registry(Database(registry_path)); controller = PipelineController(registry); spec = make_phase_c_spec(strategy_id, markets=markets)
     try: controller.register_strategy(spec, str(Path(repository_root) / "phase-c-fixture.yaml"), DEFAULT_BUDGETS)
     except Exception:
         pass
@@ -45,11 +45,11 @@ def prepare_phase_c_fixture(registry_path: str | Path, repository_root: str | Pa
     return {"strategy_id": strategy_id, "version": spec.version, "scenario": scenario, "registry_path": str(Path(registry_path).resolve()), "repository_root": str(Path(repository_root).resolve()), "current_phase": registry.get_strategy(strategy_id)["current_phase"]}
 
 
-def run_phase_c_dry_run(registry_path: str | Path, repository_root: str | Path, strategy_id: str, scenario: str = "strong-stable") -> dict:
+def run_phase_c_dry_run(registry_path: str | Path, repository_root: str | Path, strategy_id: str, scenario: str = "strong-stable", markets: list[str] | None = None) -> dict:
     """Run only the deterministic synthetic fixture; never touches strategy code."""
     from .services import PhaseCService
 
-    prepare_phase_c_fixture(registry_path, repository_root, strategy_id, scenario)
+    prepare_phase_c_fixture(registry_path, repository_root, strategy_id, scenario, markets=markets)
     service = PhaseCService(registry_path, repository_root=repository_root, scenario=scenario)
     service.start(strategy_id, f"dry-run-{strategy_id}-{scenario}")
     service.run_baseline(strategy_id)

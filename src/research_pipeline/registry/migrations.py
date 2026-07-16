@@ -255,6 +255,132 @@ def apply_migrations(connection) -> None:
             entry_markdown TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS prop_runs (
+            run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            current_phase TEXT NOT NULL,
+            status TEXT NOT NULL,
+            root_path TEXT NOT NULL,
+            scenario TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_budgets (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            limits_json TEXT NOT NULL,
+            usage_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version)
+        );
+        CREATE TABLE IF NOT EXISTS prop_rules (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            product TEXT NOT NULL,
+            rule_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_contracts (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            registry_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_mappings (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            mapping_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_risk_runs (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_scenarios (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            scenario_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_accounts (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_account_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_payouts (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            payout_number INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_billing_events (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_economics (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            scenario_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_compliance (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            scenario_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_final_reviews (
+            record_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            classification TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS prop_journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            entry_json TEXT NOT NULL,
+            entry_markdown TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         """
     )
     connection.execute("CREATE TABLE IF NOT EXISTS research_schema_version (version INTEGER NOT NULL)")
@@ -264,4 +390,11 @@ def apply_migrations(connection) -> None:
     # Add the natural-key index separately so databases created by the first
     # Phase C migration receive the same idempotency guarantee.
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS research_baselines_strategy_version ON research_baselines(strategy_id, strategy_version)")
+    connection.execute("CREATE TABLE IF NOT EXISTS prop_schema_version (version INTEGER NOT NULL)")
+    if connection.execute("SELECT version FROM prop_schema_version LIMIT 1").fetchone() is None:
+        connection.execute("INSERT INTO prop_schema_version(version) VALUES (1)")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS prop_rules_strategy_product ON prop_rules(strategy_id, strategy_version, provider, product)")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS prop_contracts_strategy ON prop_contracts(strategy_id, strategy_version)")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS prop_mappings_strategy ON prop_mappings(strategy_id, strategy_version)")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS prop_final_reviews_strategy ON prop_final_reviews(strategy_id, strategy_version)")
     connection.commit()

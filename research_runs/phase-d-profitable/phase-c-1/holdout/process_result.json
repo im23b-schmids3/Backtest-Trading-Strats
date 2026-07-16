@@ -1,0 +1,9 @@
+{
+  "command": [
+    "synthetic-fixture",
+    "strong-stable",
+    "holdout"
+  ],
+  "exit_code": 0,
+  "status": "COMPLETED"
+}

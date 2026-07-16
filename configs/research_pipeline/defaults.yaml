@@ -9,6 +9,17 @@ budgets:
   max_runtime_minutes_per_phase: 180
   max_report_size_mb: 100
   max_holdout_accesses: 1
+prop_budgets:
+  max_scenarios: 20
+  max_accounts_per_scenario: 5
+  max_replay_duration_days: 365
+  max_artifact_size_mb: 100
+  max_policy_variants: 5
+  max_concurrent_evaluations: 5
+prop_rules:
+  max_age_days: 120
+  default_provider: Alpha Futures
+  default_product: Zero 25K
 allowed_timeframes: [1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w]
 allowed_terminal_states: [ACCEPTED, REJECTED, INSUFFICIENT_EVIDENCE, TECHNICAL_FAILURE, MANUAL_REVIEW_REQUIRED]
 logging:

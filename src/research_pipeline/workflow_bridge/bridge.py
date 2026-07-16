@@ -68,6 +68,20 @@ class PhaseBBridge:
             if command == "research-status": return research.status(strategy_id)
             if command == "research-journal": return {"entries": research.journal(strategy_id)}
             raise ValueError(f"unsupported research command: {command}")
+        if command.startswith("prop-"):
+            from ..prop.services import PropResearchService
+            prop = PropResearchService(self.service.registry_path, repository_root=payload.get("repository_root", "."), scenario=payload.get("scenario", "profitable"))
+            strategy_id = str(payload.get("strategy_id", "")); product = str(payload.get("product", "Alpha Futures Zero 25K"))
+            if command == "prop-start": return prop.start(strategy_id, payload.get("run_id"))
+            if command == "prop-verify-rules": return prop.verify_rules(strategy_id, product)
+            if command == "prop-verify-contracts": return prop.verify_contracts(strategy_id)
+            if command == "prop-reconcile": return prop.reconcile(strategy_id)
+            if command == "prop-run-risk": return prop.run_risk(strategy_id, product)
+            if command == "prop-run-scenarios": return prop.run_scenarios(strategy_id, product)
+            if command == "prop-economics" or command == "prop-final-review": return prop.economics(strategy_id).model_dump(mode="json")
+            if command == "prop-status": return prop.status(strategy_id)
+            if command == "prop-journal": return {"entries": prop.journal(strategy_id)}
+            raise ValueError(f"unsupported prop command: {command}")
         if command == "verification-create-manifest":
             from ..verification.services import VerificationService
             if payload.get("manifest_path") and Path(str(payload["manifest_path"])).is_file():
@@ -86,7 +100,7 @@ class PhaseBBridge:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m research_pipeline workflow")
-    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
+    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
     parser.add_argument("--input-json", required=True)
     args = parser.parse_args(argv)
     try:

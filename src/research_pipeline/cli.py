@@ -43,7 +43,7 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("record-decision"); command.add_argument("strategy_id"); command.add_argument("decision_json")
     command = sub.add_parser("history"); command.add_argument("strategy_id")
     workflow = sub.add_parser("workflow", help="typed Smithers bridge commands")
-    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
+    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
     workflow.add_argument("--input-json")
     workflow.add_argument("--repository-root", default=".")
     research = sub.add_parser("research", help="deterministic Phase C research commands")
@@ -64,6 +64,10 @@ def _parser() -> argparse.ArgumentParser:
     research.add_argument("--round-id")
     research.add_argument("--run-id")
     research.add_argument("--registry-path")
+    prop = sub.add_parser("prop", help="deterministic Phase D futures and prop-account research")
+    prop_sub = prop.add_subparsers(dest="prop_command", required=True)
+    for name in ("dry-run", "start", "verify-rules", "verify-contracts", "reconcile", "run-risk", "run-scenarios", "scenario-status", "economics", "final-review", "journal", "status"):
+        command = prop_sub.add_parser(name); command.add_argument("strategy_id"); command.add_argument("--scenario", default="profitable"); command.add_argument("--repository-root", default="."); command.add_argument("--product", default="Alpha Futures Zero 25K")
     verification = sub.add_parser("verification", help="Phase B.5 technical integrity verification")
     verification_sub = verification.add_subparsers(dest="verification_command", required=True)
     command = verification_sub.add_parser("create-manifest"); command.add_argument("strategy_id"); command.add_argument("--diagnostic-dir"); command.add_argument("--output")
@@ -183,6 +187,25 @@ def main(argv: list[str] | None = None) -> int:
             elif command == "journal": result = {"entries": service.journal(args.strategy_id)}
             elif command == "status": result = service.status(args.strategy_id)
             else: raise ValueError(f"unsupported research command: {command}")
+            _print(result.model_dump(mode="json") if hasattr(result, "model_dump") else result)
+        elif args.command == "prop":
+            from .prop.services import PropResearchService
+            if args.prop_command == "dry-run":
+                from .prop.fixtures import run_prop_dry_run
+                _print(run_prop_dry_run(args.registry, args.repository_root, args.strategy_id, args.scenario, args.product))
+                return 0
+            service = PropResearchService(args.registry, repository_root=args.repository_root, scenario=args.scenario)
+            command = args.prop_command
+            if command == "start": result = service.start(args.strategy_id)
+            elif command == "verify-rules": result = service.verify_rules(args.strategy_id, args.product)
+            elif command == "verify-contracts": result = service.verify_contracts(args.strategy_id)
+            elif command == "reconcile": result = service.reconcile(args.strategy_id)
+            elif command == "run-risk": result = service.run_risk(args.strategy_id, args.product)
+            elif command in {"run-scenarios", "scenario-status"}: result = service.run_scenarios(args.strategy_id, args.product) if command == "run-scenarios" else service.status(args.strategy_id).get("scenarios", [])
+            elif command in {"economics", "final-review"}: result = service.economics(args.strategy_id)
+            elif command == "journal": result = {"entries": service.journal(args.strategy_id)}
+            elif command == "status": result = service.status(args.strategy_id)
+            else: raise ValueError(f"unsupported prop command: {command}")
             _print(result.model_dump(mode="json") if hasattr(result, "model_dump") else result)
         elif args.command == "verification":
             from .verification.fixtures import make_fixture

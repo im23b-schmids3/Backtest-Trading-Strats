@@ -1,0 +1,116 @@
+{
+  "causality": {
+    "lookahead_detected": false,
+    "strategy_specific_checks": "PASS"
+  },
+  "data_sources": [
+    {
+      "candle_count": 2,
+      "data_quality_status": "deterministic",
+      "date_range": "2026-01-01/2026-01-01",
+      "native_or_proxy": "native",
+      "provider": "fixture",
+      "source_symbol": "TEST",
+      "synthetic_transformation": "none"
+    }
+  ],
+  "exit_legs": [
+    {
+      "fees": 2,
+      "gross_pnl": 20,
+      "initial_quantity": 1,
+      "leg_number": 1,
+      "leg_quantity": 1,
+      "leg_type": "full",
+      "net_pnl": 18,
+      "price": 110,
+      "remaining_quantity": 0,
+      "trade_id": "T1"
+    }
+  ],
+  "fee_reconciliation": [
+    {
+      "basis": "per_side_fixed",
+      "expected_fees": 2,
+      "fees": 2,
+      "trade_id": "T1"
+    }
+  ],
+  "replay_hashes": [
+    "fixture-replay-hash",
+    "fixture-replay-hash"
+  ],
+  "report_reconciliation": [
+    {
+      "metric": "total_net_pnl",
+      "recomputed_value": 17,
+      "reported_value": 17,
+      "source_report": "summary",
+      "source_rows": 1,
+      "tolerance": 1e-09
+    }
+  ],
+  "scaling_samples": [
+    {
+      "pnl": 10,
+      "quantity": 1
+    },
+    {
+      "pnl": 20,
+      "quantity": 2
+    },
+    {
+      "pnl": 50,
+      "quantity": 5
+    },
+    {
+      "pnl": 100,
+      "quantity": 10
+    }
+  ],
+  "session_boundary": {
+    "dst_documented": true,
+    "expected_session_close_events": 1,
+    "terminal_flatten_cluster": false,
+    "timezone": "UTC"
+  },
+  "trade_counts": {
+    "accepted_entries": 1,
+    "cancelled_entries": 1,
+    "candidate_setups": 1,
+    "filled_entries": 1,
+    "fully_closed_positions": 1,
+    "open_positions": 0,
+    "order_versions": 2,
+    "partially_closed_positions": 0,
+    "session_forced_closures": 0,
+    "submitted_entries": 2,
+    "total_trades": 1,
+    "total_trades_definition": "completed positions"
+  },
+  "trades": [
+    {
+      "contract_multiplier": 2,
+      "data_source": "synthetic-fixture",
+      "direction": "long",
+      "entry_price": 100,
+      "entry_timestamp": "2026-01-01T10:00:00Z",
+      "exit_price": 110,
+      "exit_reason": "target",
+      "exit_timestamp": "2026-01-01T11:00:00Z",
+      "expected_fees": 2,
+      "expected_gross_pnl": 20,
+      "expected_slippage": 1,
+      "fees": 2,
+      "gross_pnl": 20,
+      "market": "TEST",
+      "net_pnl": 17,
+      "quantity": 1,
+      "signal_id": "S1",
+      "slippage": 1,
+      "strategy_id": "phase-d-negative",
+      "timeframe": "1h",
+      "trade_id": "T1"
+    }
+  ]
+}
