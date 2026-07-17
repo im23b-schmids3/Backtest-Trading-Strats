@@ -34,3 +34,39 @@
 {"timestamp": "2026-07-16T17:55:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run-5 old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=BASELINE_BACKTEST"}
 {"timestamp": "2026-07-16T17:56:21+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
 {"timestamp": "2026-07-16T17:56:21+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-dry-run old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=TECHNICAL_REPAIR_REQUIRED"}
+{"timestamp": "2026-07-17T08:24:56+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-e-dry-run-a version=phase-c-1"}
+{"timestamp": "2026-07-17T08:24:56+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=BASELINE_BACKTEST"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=BASELINE_BACKTEST new_state=EDGE_GATE"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=EDGE_GATE new_state=PARAMETER_RESEARCH"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "budget_used strategy_id=phase-e-dry-run-a total_backtests=5"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "budget_used strategy_id=phase-e-dry-run-a total_backtests=10"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=PARAMETER_RESEARCH new_state=CANDIDATE_FREEZE"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=CANDIDATE_FREEZE new_state=WALK_FORWARD"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=WALK_FORWARD new_state=HOLDOUT"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "holdout_access strategy_id=phase-e-dry-run-a"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=HOLDOUT new_state=STRESS_TESTS"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=STRESS_TESTS new_state=THROUGHPUT"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=THROUGHPUT new_state=FINAL_REVIEW"}
+{"timestamp": "2026-07-17T08:24:57+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-a old_state=FINAL_REVIEW new_state=ACCEPTED"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-e-dry-run-b version=phase-c-1"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=BASELINE_BACKTEST"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=BASELINE_BACKTEST new_state=EDGE_GATE"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=EDGE_GATE new_state=PARAMETER_RESEARCH"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "budget_used strategy_id=phase-e-dry-run-b total_backtests=5"}
+{"timestamp": "2026-07-17T08:24:58+0200", "level": "INFO", "event": "budget_used strategy_id=phase-e-dry-run-b total_backtests=10"}
+{"timestamp": "2026-07-17T08:24:59+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=PARAMETER_RESEARCH new_state=CANDIDATE_FREEZE"}
+{"timestamp": "2026-07-17T08:24:59+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=CANDIDATE_FREEZE new_state=WALK_FORWARD"}
+{"timestamp": "2026-07-17T08:24:59+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=WALK_FORWARD new_state=HOLDOUT"}
+{"timestamp": "2026-07-17T08:24:59+0200", "level": "INFO", "event": "holdout_access strategy_id=phase-e-dry-run-b"}
+{"timestamp": "2026-07-17T08:24:59+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=HOLDOUT new_state=STRESS_TESTS"}
+{"timestamp": "2026-07-17T08:24:59+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=STRESS_TESTS new_state=THROUGHPUT"}
+{"timestamp": "2026-07-17T08:24:59+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=THROUGHPUT new_state=FINAL_REVIEW"}
+{"timestamp": "2026-07-17T08:24:59+0200", "level": "INFO", "event": "state_transition strategy_id=phase-e-dry-run-b old_state=FINAL_REVIEW new_state=ACCEPTED"}

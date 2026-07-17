@@ -1,0 +1,17 @@
+account:
+  product: Alpha Futures Zero 25K
+  maximum_total_contracts: 10
+  maximum_simultaneous_positions: 10
+  daily_loss_guard: 500
+  maximum_loss_limit: 1000
+policies:
+  - EQUAL_RISK
+  - FIXED_STRATEGY_RISK_BUDGET
+  - VOLATILITY_WEIGHTED
+  - DRAWDOWN_AWARE
+  - MARGINAL_RISK_CONTRIBUTION
+  - PRIORITY_BASED
+default_policy: EQUAL_RISK
+duplicate_exposure:
+  default: aggregate_quantities_and_cap
+  groups: [crypto_btc, crypto_eth, gold, silver, us_equity_index]

@@ -1,0 +1,8 @@
+scenarios:
+  - {name: fees_x2, seed: 101, fee_multiplier: 2.0}
+  - {name: fees_x3, seed: 102, fee_multiplier: 3.0}
+  - {name: higher_slippage, seed: 103, slippage_multiplier: 2.0}
+  - {name: one_strategy_unavailable, seed: 104, remove_one_member: true}
+  - {name: reduced_contract_capacity, seed: 105, maximum_total_contracts: 5}
+  - {name: best_market_removed, seed: 106, remove_best_market: true}
+  - {name: correlated_loss_shock, seed: 107, correlated_loss_shock: true}

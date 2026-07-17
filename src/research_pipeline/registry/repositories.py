@@ -388,3 +388,80 @@ class Registry:
     def add_prop_journal_entry(self, strategy_id: str, version: str, phase: str, entry: dict, markdown: str) -> None:
         with self.database.transaction() as connection:
             connection.execute("INSERT INTO prop_journal(strategy_id,strategy_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))
+
+    # Phase E portfolio records. Large signal streams are referenced by path
+    # and hash; SQLite stores deterministic summaries and decisions only.
+    def portfolio_run(self, portfolio_id: str, version: str, phase: str, status: str, specification_hash: str, root_path: str) -> dict:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO portfolio_runs(portfolio_id,portfolio_version,current_phase,status,specification_hash,root_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", (portfolio_id, version, phase, status, specification_hash, root_path, timestamp, timestamp))
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM portfolio_runs WHERE portfolio_id=? AND portfolio_version=?", (portfolio_id, version)).fetchone()
+            if not row: raise RegistryError(f"portfolio run not found: {portfolio_id}/{version}")
+            return dict(row)
+
+    def update_portfolio_run(self, portfolio_id: str, version: str, phase: str | None = None, status: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            row = connection.execute("SELECT * FROM portfolio_runs WHERE portfolio_id=? AND portfolio_version=?", (portfolio_id, version)).fetchone()
+            if not row: raise RegistryError(f"portfolio run not found: {portfolio_id}/{version}")
+            connection.execute("UPDATE portfolio_runs SET current_phase=?,status=?,updated_at=? WHERE portfolio_id=? AND portfolio_version=?", (phase or row["current_phase"], status or row["status"], now_iso(), portfolio_id, version))
+
+    def _portfolio_key(self, portfolio_id: str, version: str | None = None) -> tuple[str, str]:
+        with self.database.session() as connection:
+            if version is None:
+                row = connection.execute("SELECT portfolio_version FROM portfolio_runs WHERE portfolio_id=? ORDER BY created_at DESC LIMIT 1", (portfolio_id,)).fetchone()
+                if not row: raise RegistryError(f"portfolio not found: {portfolio_id}")
+                return portfolio_id, row["portfolio_version"]
+        return portfolio_id, version
+
+    def save_portfolio_record(self, table: str, record_key: str, portfolio_id: str, version: str, payload: dict, **fields: Any) -> None:
+        allowed = {"portfolio_specs", "portfolio_members", "portfolio_candidates", "portfolio_signals", "portfolio_overlap_metrics", "portfolio_correlation_metrics", "portfolio_conflict_results", "portfolio_risk_runs", "portfolio_prop_scenarios", "portfolio_ablation_runs", "portfolio_marginal_contributions", "portfolio_stress_results", "portfolio_final_reviews"}
+        if table not in allowed: raise RegistryError(f"unsupported portfolio table: {table}")
+        columns = ["record_key", "portfolio_id", "portfolio_version"] + list(fields) + ["result_json", "created_at"]
+        values = [record_key, portfolio_id, version] + list(fields.values()) + [json.dumps(payload, sort_keys=True), now_iso()]
+        placeholders = ",".join("?" for _ in values)
+        updates = ",".join(f"{column}=excluded.{column}" for column in columns[1:] if column != "created_at")
+        with self.database.transaction() as connection:
+            connection.execute(f"INSERT INTO {table}({','.join(columns)}) VALUES({placeholders}) ON CONFLICT(record_key) DO UPDATE SET {updates}", values)
+
+    def get_portfolio_record(self, table: str, portfolio_id: str, version: str | None = None, record_key: str | None = None) -> dict | None:
+        allowed = {"portfolio_specs", "portfolio_members", "portfolio_candidates", "portfolio_signals", "portfolio_overlap_metrics", "portfolio_correlation_metrics", "portfolio_conflict_results", "portfolio_risk_runs", "portfolio_prop_scenarios", "portfolio_ablation_runs", "portfolio_marginal_contributions", "portfolio_stress_results", "portfolio_final_reviews"}
+        if table not in allowed: raise RegistryError(f"unsupported portfolio table: {table}")
+        pid, ver = self._portfolio_key(portfolio_id, version)
+        with self.database.session() as connection:
+            query = f"SELECT * FROM {table} WHERE portfolio_id=? AND portfolio_version=?"; params: list[Any] = [pid, ver]
+            if record_key: query += " AND record_key=?"; params.append(record_key)
+            query += " ORDER BY created_at DESC LIMIT 1"
+            row = connection.execute(query, params).fetchone()
+            if not row: return None
+            result = dict(row); result["result_json"] = json.loads(result["result_json"]); return result
+
+    def list_portfolio_records(self, table: str, portfolio_id: str, version: str | None = None) -> list[dict]:
+        allowed = {"portfolio_members", "portfolio_candidates", "portfolio_signals", "portfolio_overlap_metrics", "portfolio_correlation_metrics", "portfolio_conflict_results", "portfolio_risk_runs", "portfolio_prop_scenarios", "portfolio_ablation_runs", "portfolio_marginal_contributions", "portfolio_stress_results"}
+        if table not in allowed: raise RegistryError(f"unsupported portfolio table: {table}")
+        pid, ver = self._portfolio_key(portfolio_id, version)
+        with self.database.session() as connection:
+            result = []
+            for row in connection.execute(f"SELECT * FROM {table} WHERE portfolio_id=? AND portfolio_version=? ORDER BY created_at", (pid, ver)).fetchall():
+                item = dict(row); item["result_json"] = json.loads(item["result_json"]); result.append(item)
+            return result
+
+    def save_portfolio_budget(self, portfolio_id: str, version: str, limits: dict, usage: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO portfolio_budgets(portfolio_id,portfolio_version,limits_json,usage_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(portfolio_id,portfolio_version) DO UPDATE SET limits_json=excluded.limits_json,usage_json=excluded.usage_json,updated_at=excluded.updated_at", (portfolio_id, version, json.dumps(limits, sort_keys=True), json.dumps(usage, sort_keys=True), now_iso()))
+
+    def get_portfolio_budget(self, portfolio_id: str, version: str | None = None) -> dict | None:
+        pid, ver = self._portfolio_key(portfolio_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM portfolio_budgets WHERE portfolio_id=? AND portfolio_version=?", (pid, ver)).fetchone()
+            if not row: return None
+            result = dict(row); result["limits_json"] = json.loads(result["limits_json"]); result["usage_json"] = json.loads(result["usage_json"]); return result
+
+    def add_portfolio_journal_entry(self, portfolio_id: str, version: str, phase: str, entry: dict, markdown: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO portfolio_journal(portfolio_id,portfolio_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (portfolio_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))
+
+    def portfolio_journal(self, portfolio_id: str, version: str | None = None) -> list[dict]:
+        pid, ver = self._portfolio_key(portfolio_id, version)
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM portfolio_journal WHERE portfolio_id=? AND portfolio_version=? ORDER BY id", (pid, ver)).fetchall()]

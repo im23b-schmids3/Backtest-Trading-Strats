@@ -1,0 +1,11 @@
+{
+  "dataset_hash": "dataset-phase-c",
+  "experiment_id": "round-phase-e-dry-run-a-1-entry_depth-experiment-3",
+  "parameters": {
+    "entry_depth": 7
+  },
+  "specification_hash": "655de1736fa94d1b244d3978f866523608cfba8362a4f43ec1c2ecf7c21cdf36",
+  "split_hash": "db25061102570583a938f5aee178834874b3d7d964fd96c5d4a96fe03739e8b5",
+  "strategy_id": "phase-e-dry-run-a",
+  "strategy_version": "phase-c-1"
+}

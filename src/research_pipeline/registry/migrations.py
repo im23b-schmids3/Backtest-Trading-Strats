@@ -381,6 +381,145 @@ def apply_migrations(connection) -> None:
             entry_markdown TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS portfolio_runs (
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            current_phase TEXT NOT NULL,
+            status TEXT NOT NULL,
+            specification_hash TEXT NOT NULL,
+            root_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(portfolio_id, portfolio_version)
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_specs (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            specification_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_members (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            candidate_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_candidates (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            candidate_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_signals (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            artifact_path TEXT NOT NULL,
+            artifact_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_overlap_metrics (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_correlation_metrics (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_conflict_results (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_risk_runs (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_prop_scenarios (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_ablation_runs (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            removed_strategy_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_marginal_contributions (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_stress_results (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            scenario TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_final_reviews (
+            record_key TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            classification TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_budgets (
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            limits_json TEXT NOT NULL,
+            usage_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(portfolio_id, portfolio_version)
+        );
+        CREATE TABLE IF NOT EXISTS portfolio_journal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            portfolio_id TEXT NOT NULL,
+            portfolio_version TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            entry_json TEXT NOT NULL,
+            entry_markdown TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         """
     )
     connection.execute("CREATE TABLE IF NOT EXISTS research_schema_version (version INTEGER NOT NULL)")

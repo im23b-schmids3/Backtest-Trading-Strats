@@ -82,6 +82,35 @@ class PhaseBBridge:
             if command == "prop-status": return prop.status(strategy_id)
             if command == "prop-journal": return {"entries": prop.journal(strategy_id)}
             raise ValueError(f"unsupported prop command: {command}")
+        if command.startswith("portfolio-"):
+            from ..portfolio.models import PortfolioSpec
+            from ..portfolio.service import PortfolioService
+            portfolio = PortfolioService(self.service.registry_path, repository_root=payload.get("repository_root", "."), scenario=payload.get("scenario", "complementary"))
+            if command == "portfolio-create":
+                raw = payload.get("spec") or payload.get("portfolio_spec")
+                if raw is None and payload.get("spec_path"):
+                    import yaml
+                    raw = yaml.safe_load(Path(str(payload["spec_path"])).read_text(encoding="utf-8"))
+                if not isinstance(raw, dict): raise ValueError("portfolio-create requires a structured spec object or spec_path")
+                return portfolio.create(PortfolioSpec.model_validate(raw))
+            if command == "portfolio-eligible-strategies": return portfolio.eligible(exploratory_prop=bool(payload.get("exploratory_prop", False)), non_prop=bool(payload.get("non_prop", False)))
+            portfolio_id = str(payload["portfolio_id"])
+            commands = {
+                "portfolio-generate-candidates": portfolio.generate_candidates,
+                "portfolio-merge-signals": portfolio.merge_signals,
+                "portfolio-analyze-overlap": portfolio.analyze_overlap,
+                "portfolio-analyze-correlation": portfolio.analyze_correlation,
+                "portfolio-run-risk": portfolio.run_risk,
+                "portfolio-run-prop": portfolio.run_prop,
+                "portfolio-run-ablation": portfolio.run_ablation,
+                "portfolio-run-stress": portfolio.run_stress,
+                "portfolio-final-review": portfolio.final_review,
+                "portfolio-status": portfolio.status,
+                "portfolio-journal": lambda value: {"entries": portfolio.journal(value)},
+            }
+            if command not in commands: raise ValueError(f"unsupported portfolio command: {command}")
+            result = commands[command](portfolio_id)
+            return result.model_dump(mode="json") if hasattr(result, "model_dump") else result
         if command == "verification-create-manifest":
             from ..verification.services import VerificationService
             if payload.get("manifest_path") and Path(str(payload["manifest_path"])).is_file():
@@ -100,7 +129,7 @@ class PhaseBBridge:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m research_pipeline workflow")
-    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
+    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
     parser.add_argument("--input-json", required=True)
     args = parser.parse_args(argv)
     try:
