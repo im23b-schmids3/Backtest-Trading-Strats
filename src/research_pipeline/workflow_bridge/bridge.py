@@ -111,6 +111,21 @@ class PhaseBBridge:
             if command not in commands: raise ValueError(f"unsupported portfolio command: {command}")
             result = commands[command](portfolio_id)
             return result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+        if command.startswith("master-"):
+            from ..phase_f1.models import MasterRunInput
+            from ..phase_f1.service import MasterPipelineService
+            service = MasterPipelineService(self.service.registry_path, payload.get("repository_root", "."))
+            if command == "master-start":
+                options = MasterRunInput.model_validate(payload)
+                return service.start(options)
+            run_id = str(payload["run_id"])
+            if command == "master-approve": return service.approve(run_id, str(payload.get("decision", "APPROVE")), payload.get("note"))
+            if command == "master-resume": return service.resume(run_id)
+            if command == "master-status": return service.status(run_id)
+            if command == "master-report": return service.report(run_id)
+            if command == "master-artifacts": return service.artifacts(run_id)
+            if command == "master-cancel": return service.cancel(run_id, str(payload.get("reason", "cancelled by operator")))
+            raise ValueError(f"unsupported master command: {command}")
         if command == "verification-create-manifest":
             from ..verification.services import VerificationService
             if payload.get("manifest_path") and Path(str(payload["manifest_path"])).is_file():
@@ -129,7 +144,7 @@ class PhaseBBridge:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m research_pipeline workflow")
-    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
+    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "master-start", "master-approve", "master-resume", "master-status", "master-report", "master-artifacts", "master-cancel", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
     parser.add_argument("--input-json", required=True)
     args = parser.parse_args(argv)
     try:

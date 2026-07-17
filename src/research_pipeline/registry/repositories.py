@@ -465,3 +465,95 @@ class Registry:
         pid, ver = self._portfolio_key(portfolio_id, version)
         with self.database.session() as connection:
             return [dict(row) for row in connection.execute("SELECT * FROM portfolio_journal WHERE portfolio_id=? AND portfolio_version=? ORDER BY id", (pid, ver)).fetchall()]
+
+    # Phase F1 master-run persistence. These are orchestration records only;
+    # phase-specific evidence remains in the existing Phase A-E tables.
+    def save_master_run(self, run_id: str, strategy_id: str, strategy_version: str | None, input_hash: str,
+                        current_step: str, outcome: str, approval_status: str, root_path: str,
+                        resume_state: dict[str, Any]) -> dict:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO master_runs(run_id,strategy_id,strategy_version,input_hash,current_step,outcome,approval_status,root_path,resume_state_json,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET strategy_id=excluded.strategy_id,
+                strategy_version=excluded.strategy_version,input_hash=excluded.input_hash,current_step=excluded.current_step,
+                outcome=excluded.outcome,approval_status=excluded.approval_status,root_path=excluded.root_path,
+                resume_state_json=excluded.resume_state_json,updated_at=excluded.updated_at""",
+                (run_id, strategy_id, strategy_version, input_hash, current_step, outcome, approval_status, root_path,
+                 json.dumps(resume_state, sort_keys=True), timestamp, timestamp))
+        return self.get_master_run(run_id)
+
+    def get_master_run(self, run_id: str) -> dict:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM master_runs WHERE run_id=?", (run_id,)).fetchone()
+            if not row:
+                raise RegistryError(f"master run not found: {run_id}")
+            result = dict(row); result["resume_state_json"] = json.loads(result["resume_state_json"]); return result
+
+    def update_master_run(self, run_id: str, **values: Any) -> dict:
+        current = self.get_master_run(run_id)
+        values["updated_at"] = now_iso()
+        if "resume_state" in values:
+            values["resume_state_json"] = json.dumps(values.pop("resume_state"), sort_keys=True)
+        allowed = {"strategy_id", "strategy_version", "current_step", "outcome", "approval_status", "root_path", "resume_state_json", "updated_at"}
+        values = {key: value for key, value in values.items() if key in allowed}
+        if values:
+            assignments = ",".join(f"{key}=?" for key in values)
+            with self.database.transaction() as connection:
+                connection.execute(f"UPDATE master_runs SET {assignments} WHERE run_id=?", (*values.values(), run_id))
+        return self.get_master_run(run_id)
+
+    def save_master_phase_result(self, run_id: str, phase: str, status: str, result: dict,
+                                 artifact_paths: list[str], result_hash: str, started_at: str,
+                                 ended_at: str, duration_ms: int) -> dict:
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO master_phase_results(run_id,phase,status,result_json,artifact_paths_json,result_hash,started_at,ended_at,duration_ms)
+                VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,phase) DO UPDATE SET status=excluded.status,
+                result_json=excluded.result_json,artifact_paths_json=excluded.artifact_paths_json,result_hash=excluded.result_hash,
+                started_at=excluded.started_at,ended_at=excluded.ended_at,duration_ms=excluded.duration_ms""",
+                (run_id, phase, status, json.dumps(result, sort_keys=True, default=str), json.dumps(artifact_paths, sort_keys=True), result_hash, started_at, ended_at, duration_ms))
+        return self.get_master_phase_result(run_id, phase)
+
+    def get_master_phase_result(self, run_id: str, phase: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM master_phase_results WHERE run_id=? AND phase=?", (run_id, phase)).fetchone()
+            if not row: return None
+            result = dict(row); result["result_json"] = json.loads(result["result_json"]); result["artifact_paths_json"] = json.loads(result["artifact_paths_json"]); return result
+
+    def master_phase_results(self, run_id: str) -> list[dict]:
+        with self.database.session() as connection:
+            rows = connection.execute("SELECT * FROM master_phase_results WHERE run_id=? ORDER BY started_at, phase", (run_id,)).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row); item["result_json"] = json.loads(item["result_json"]); item["artifact_paths_json"] = json.loads(item["artifact_paths_json"]); result.append(item)
+            return result
+
+    def add_master_journal(self, run_id: str, phase: str, event: str, payload: dict[str, Any]) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO master_journal(run_id,phase,event,payload_json,created_at) VALUES(?,?,?,?,?)", (run_id, phase, event, json.dumps(payload, sort_keys=True, default=str), now_iso()))
+
+    def master_journal(self, run_id: str) -> list[dict]:
+        with self.database.session() as connection:
+            rows = connection.execute("SELECT * FROM master_journal WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row); item["payload_json"] = json.loads(item["payload_json"]); result.append(item)
+            return result
+
+    def add_master_artifact(self, run_id: str, phase: str, artifact_path: str, artifact_hash: str, artifact_type: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO master_artifacts(run_id,phase,artifact_path,artifact_hash,artifact_type,created_at) VALUES(?,?,?,?,?,?)", (run_id, phase, artifact_path, artifact_hash, artifact_type, now_iso()))
+
+    def master_artifacts(self, run_id: str) -> list[dict]:
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM master_artifacts WHERE run_id=? ORDER BY created_at, artifact_path", (run_id,)).fetchall()]
+
+    def save_master_report(self, run_id: str, report_path: str, report_hash: str, report: dict) -> dict:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO master_reports(run_id,report_path,report_hash,report_json,created_at) VALUES(?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET report_path=excluded.report_path,report_hash=excluded.report_hash,report_json=excluded.report_json", (run_id, report_path, report_hash, json.dumps(report, sort_keys=True, default=str), now_iso()))
+        return self.master_report(run_id)
+
+    def master_report(self, run_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM master_reports WHERE run_id=?", (run_id,)).fetchone()
+            if not row: return None
+            result = dict(row); result["report_json"] = json.loads(result["report_json"]); return result

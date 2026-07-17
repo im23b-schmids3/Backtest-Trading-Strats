@@ -31,6 +31,12 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("new-strategy"); command.add_argument("path")
     sub.add_parser("list-strategies")
     command = sub.add_parser("status"); command.add_argument("strategy_id")
+    command = sub.add_parser("run", help="Phase F1 end-to-end master pipeline"); command.add_argument("strategy_file"); command.add_argument("--repository-root", default="."); command.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True); command.add_argument("--implementation-enabled", action="store_true"); command.add_argument("--research-scenario", default="strong-stable"); command.add_argument("--prop-scenario", default="profitable"); command.add_argument("--portfolio-scenario", default="complementary"); command.add_argument("--product", default="Alpha Futures Zero 25K")
+    command = sub.add_parser("resume", help="resume a Phase F1 master run"); command.add_argument("run_id"); command.add_argument("--repository-root", default=".")
+    command = sub.add_parser("approve", help="approve or reject a Phase F1 generated specification"); command.add_argument("run_id"); command.add_argument("--decision", choices=["APPROVE", "REJECT"], default="APPROVE"); command.add_argument("--note")
+    command = sub.add_parser("report", help="show a Phase F1 final report"); command.add_argument("run_id")
+    command = sub.add_parser("artifacts", help="list Phase F1 artifacts"); command.add_argument("run_id")
+    command = sub.add_parser("cancel", help="cancel a Phase F1 master run"); command.add_argument("run_id"); command.add_argument("--reason", default="cancelled by operator")
     command = sub.add_parser("validate-spec"); command.add_argument("strategy_id")
     command = sub.add_parser("submit-spec"); command.add_argument("strategy_id")
     command = sub.add_parser("approve-spec"); command.add_argument("strategy_id")
@@ -43,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("record-decision"); command.add_argument("strategy_id"); command.add_argument("decision_json")
     command = sub.add_parser("history"); command.add_argument("strategy_id")
     workflow = sub.add_parser("workflow", help="typed Smithers bridge commands")
-    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
+    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "master-start", "master-approve", "master-resume", "master-status", "master-report", "master-artifacts", "master-cancel", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
     workflow.add_argument("--input-json")
     workflow.add_argument("--repository-root", default=".")
     research = sub.add_parser("research", help="deterministic Phase C research commands")
@@ -120,7 +126,31 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "list-strategies":
             _print(registry.list_strategies())
         elif args.command == "status":
-            _print(controller.status(args.strategy_id))
+            try:
+                _print(controller.status(args.strategy_id))
+            except ResearchPipelineError:
+                from .phase_f1.service import MasterPipelineService
+                _print(MasterPipelineService(args.registry).status(args.strategy_id))
+        elif args.command == "run":
+            from .phase_f1.service import MasterPipelineService
+            service = MasterPipelineService(args.registry, args.repository_root)
+            options = service.input_model(args.strategy_file, args.repository_root, registry_path=args.registry, dry_run=args.dry_run, implementation_enabled=args.implementation_enabled, research_scenario=args.research_scenario, prop_scenario=args.prop_scenario, portfolio_scenario=args.portfolio_scenario, prop_product=args.product)
+            _print(service.start(options))
+        elif args.command == "resume":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry, args.repository_root).resume(args.run_id))
+        elif args.command == "approve":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry).approve(args.run_id, args.decision, args.note))
+        elif args.command == "report":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry).report(args.run_id))
+        elif args.command == "artifacts":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry).artifacts(args.run_id))
+        elif args.command == "cancel":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry).cancel(args.run_id, args.reason))
         elif args.command == "validate-spec":
             _print(controller.validate_specification(args.strategy_id))
         elif args.command == "submit-spec":

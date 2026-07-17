@@ -1,0 +1,8 @@
+# Phase F1 master workflow
+
+The master workflow is a durable orchestration boundary over the deterministic
+Phase A-E Python services. It must preserve the one specification approval,
+never invent trading rules, never run live or broker execution, and never use
+agent prose as evidence. Every phase result is validated and persisted in the
+Python registry with artifact hashes. Resume is safe because completed phase
+records are reused.

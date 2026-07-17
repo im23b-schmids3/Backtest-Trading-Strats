@@ -27,3 +27,4 @@ smithers.db-shm
 smithers.db-wal
 
 node_modules/
+research_runs/*
