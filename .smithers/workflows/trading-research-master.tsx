@@ -1,15 +1,18 @@
 // smithers-source: project-local
 // smithers-metadata-version: 1
-// smithers-display-name: Trading research master Phase F1
-// smithers-description: One durable user-facing workflow from natural-language intake through final archived report.
+// smithers-display-name: Trading research master Phase F2
+// smithers-description: Durable dry-run or real-mode strategy intake, approval, implementation verification, and research handoff.
 /** @jsxImportSource smithers-orchestrator */
 import { Approval, createSmithers, Sequence, Task } from "smithers-orchestrator";
 import { z } from "zod/v4";
-import { approvalDecision, masterStatus, masterSummary, outputs, phaseF1Input } from "../schemas/trading-research/master";
+import { approvalDecision, masterStatus, masterSummary, outputs, phaseF1Input, specificationStatus } from "../schemas/trading-research/master";
 
 const { Workflow, outputs: registeredOutputs, smithers } = createSmithers({
   input: phaseF1Input,
   start: masterStatus,
+  specification: specificationStatus,
+  repair: masterStatus,
+  postValidation: specificationStatus,
   approval: approvalDecision,
   applied: masterStatus,
   implementation: masterStatus,
@@ -42,13 +45,19 @@ async function bridge(command: string, payload: Record<string, unknown>, root: s
 export default smithers((ctx) => {
   const input = ctx.input;
   const start = ctx.outputMaybe(registeredOutputs.start, { nodeId: "master-start" });
+  const specification = ctx.outputMaybe(registeredOutputs.specification, { nodeId: "validate-specification" });
+  const repair = ctx.outputMaybe(registeredOutputs.repair, { nodeId: "repair-specification" });
+  const postValidation = ctx.outputMaybe(registeredOutputs.postValidation, { nodeId: "validate-after-repair" });
   const approval = ctx.outputMaybe(registeredOutputs.approval, { nodeId: "specification-approval" });
   const applied = ctx.outputMaybe(registeredOutputs.applied, { nodeId: "apply-approval" });
   return <Workflow name="trading-research-master"><Sequence>
     <Task id="master-start" output={registeredOutputs.start} retries={2} timeoutMs={15 * 60 * 1000}>{async () => bridge("master-start", input, input.repository_root, input.registry_path)}</Task>
-    {start?.approval_status === "PENDING" ? <Approval id="specification-approval" output={registeredOutputs.approval} onDeny="continue" dependsOn={["master-start"]} request={{ title: `Approve generated strategy specification: ${start.strategy_id}`, summary: `Review the immutable specification artifact and hash in ${start.root_path}.` }} /> : null}
+    {start ? <Task id="validate-specification" output={registeredOutputs.specification} dependsOn={["master-start"]} retries={0}>{async () => bridge("master-specification-status", { run_id: start.source_run_id }, input.repository_root, input.registry_path)}</Task> : null}
+    {specification?.specification.latest_validation_outcome !== "VALID" && specification?.specification.latest_validation_outcome !== "BLOCKED" && !specification?.specification.failure ? <Task id="repair-specification" output={registeredOutputs.repair} dependsOn={["validate-specification"]} retries={0} timeoutMs={15 * 60 * 1000}>{async () => bridge("master-specification-retry", { run_id: start?.source_run_id }, input.repository_root, input.registry_path)}</Task> : null}
+    {specification ? <Task id="validate-after-repair" output={registeredOutputs.postValidation} dependsOn={repair ? ["repair-specification"] : ["validate-specification"]} retries={0}>{async () => bridge("master-specification-status", { run_id: start?.source_run_id }, input.repository_root, input.registry_path)}</Task> : null}
+    {postValidation?.specification.approval_available && start?.approval_status === "PENDING" ? <Approval id="specification-approval" output={registeredOutputs.approval} onDeny="continue" dependsOn={["validate-after-repair"]} request={{ title: `Approve ${input.mode} strategy specification: ${start.strategy_id}`, summary: `Review the immutable specification artifact and hash in ${start.root_path}.` }} /> : null}
     {approval ? <Task id="apply-approval" output={registeredOutputs.applied} dependsOn={["specification-approval"]} retries={0}>{async () => bridge("master-approve", { run_id: start?.source_run_id, decision: approval.approved ? "APPROVE" : "REJECT", note: approval.note ?? null }, input.repository_root, input.registry_path)}</Task> : null}
-    {applied?.approval_status === "APPROVED" ? <Task id="implementation" output={registeredOutputs.implementation} dependsOn={["apply-approval"]} retries={1} timeoutMs={30 * 60 * 1000}>{async () => bridge("master-resume", { run_id: applied.source_run_id, repository_root: input.repository_root }, input.repository_root, input.registry_path)}</Task> : null}
+    {applied?.approval_status === "APPROVED" ? <Task id="implementation" output={registeredOutputs.implementation} dependsOn={["apply-approval"]} retries={1} timeoutMs={30 * 60 * 1000}>{async () => bridge("master-resume", { run_id: applied.source_run_id, repository_root: input.repository_root, mode: input.mode }, input.repository_root, input.registry_path)}</Task> : null}
     {applied?.approval_status === "APPROVED" ? <Task id="verification" output={registeredOutputs.verification} dependsOn={["implementation"]} retries={1} timeoutMs={30 * 60 * 1000}>{async () => bridge("master-status", { run_id: applied.source_run_id, repository_root: input.repository_root }, input.repository_root, input.registry_path)}</Task> : null}
     {applied?.approval_status === "APPROVED" ? <Task id="research" output={registeredOutputs.research} dependsOn={["verification"]} retries={1} timeoutMs={60 * 60 * 1000}>{async () => bridge("master-status", { run_id: applied.source_run_id, repository_root: input.repository_root }, input.repository_root, input.registry_path)}</Task> : null}
     {applied?.approval_status === "APPROVED" ? <Task id="prop" output={registeredOutputs.prop} dependsOn={["research"]} retries={1} timeoutMs={60 * 60 * 1000}>{async () => bridge("master-status", { run_id: applied.source_run_id, repository_root: input.repository_root }, input.repository_root, input.registry_path)}</Task> : null}

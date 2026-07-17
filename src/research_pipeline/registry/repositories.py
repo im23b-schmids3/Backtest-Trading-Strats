@@ -557,3 +557,121 @@ class Registry:
             row = connection.execute("SELECT * FROM master_reports WHERE run_id=?", (run_id,)).fetchone()
             if not row: return None
             result = dict(row); result["report_json"] = json.loads(result["report_json"]); return result
+
+    # Specification-intake persistence. Large Codex output is kept in files;
+    # SQLite stores only paths, hashes, compact errors, and run status.
+    def save_specification_attempt(self, run_id: str, strategy_id: str, attempt: int, *, status: str,
+                                   draft_path: str, validation_path: str | None = None,
+                                   semantic_validation_path: str | None = None, repair_prompt_path: str | None = None,
+                                   codex_invocation_path: str | None = None, draft_hash: str | None = None,
+                                   validation_hash: str | None = None, error_summary: str = "") -> dict:
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO specification_attempts(
+                run_id,strategy_id,attempt,status,draft_path,validation_path,
+                semantic_validation_path,repair_prompt_path,codex_invocation_path,
+                draft_hash,validation_hash,error_summary,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,attempt) DO UPDATE SET
+                status=excluded.status,validation_path=excluded.validation_path,
+                semantic_validation_path=excluded.semantic_validation_path,
+                repair_prompt_path=excluded.repair_prompt_path,
+                codex_invocation_path=excluded.codex_invocation_path,
+                draft_hash=excluded.draft_hash,validation_hash=excluded.validation_hash,
+                error_summary=excluded.error_summary""", (run_id, strategy_id, attempt, status, draft_path,
+                validation_path, semantic_validation_path, repair_prompt_path, codex_invocation_path,
+                draft_hash, validation_hash, error_summary, now_iso()))
+        return self.get_specification_attempt(run_id, attempt)
+
+    def get_specification_attempt(self, run_id: str, attempt: int) -> dict:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM specification_attempts WHERE run_id=? AND attempt=?", (run_id, attempt)).fetchone()
+            if not row: raise RegistryError(f"specification attempt not found: {run_id}@{attempt}")
+            return dict(row)
+
+    def specification_attempts(self, run_id: str) -> list[dict]:
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM specification_attempts WHERE run_id=? ORDER BY attempt", (run_id,)).fetchall()]
+
+    def save_specification_ambiguity(self, run_id: str, strategy_id: str, *, kind: str, field_path: str, message: str, blocking: bool) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO specification_ambiguities(run_id,strategy_id,kind,field_path,message,blocking,created_at) VALUES(?,?,?,?,?,?,?)", (run_id, strategy_id, kind, field_path, message, int(blocking), now_iso()))
+
+    def specification_ambiguities(self, run_id: str) -> list[dict]:
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM specification_ambiguities WHERE run_id=? ORDER BY created_at, field_path", (run_id,)).fetchall()]
+
+    def save_specification_failure(self, run_id: str, strategy_id: str, result: dict, final_reason: str) -> dict:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO specification_failures(run_id,strategy_id,classification,final_reason,result_json,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET classification=excluded.classification,final_reason=excluded.final_reason,result_json=excluded.result_json", (run_id, strategy_id, "SPECIFICATION_GENERATION_FAILURE", final_reason, json.dumps(result, sort_keys=True, default=str), now_iso()))
+        return self.specification_failure(run_id)
+
+    def clear_specification_failure(self, run_id: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("DELETE FROM specification_failures WHERE run_id=?", (run_id,))
+
+    def specification_failure(self, run_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM specification_failures WHERE run_id=?", (run_id,)).fetchone()
+            if not row: return None
+            result = dict(row); result["result_json"] = json.loads(result["result_json"]); return result
+
+    # Phase F2 adapter and real-artifact persistence. These methods store
+    # references and compact summaries; trade rows remain in hashed artifacts.
+    def save_strategy_adapter(self, identity: dict, capabilities: dict, health: dict) -> None:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO strategy_adapters(strategy_id,strategy_version,adapter_version,schema_version,implementation_module,entry_point,specification_hash,code_commit,worktree_path,capabilities_json,health_json,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(strategy_id,strategy_version) DO UPDATE SET adapter_version=excluded.adapter_version,schema_version=excluded.schema_version,implementation_module=excluded.implementation_module,entry_point=excluded.entry_point,specification_hash=excluded.specification_hash,code_commit=excluded.code_commit,worktree_path=excluded.worktree_path,capabilities_json=excluded.capabilities_json,health_json=excluded.health_json,updated_at=excluded.updated_at""",
+                (identity["strategy_id"], identity["strategy_version"], identity["adapter_version"], identity["schema_version"], identity["implementation_module"], identity["entry_point"], identity["specification_hash"], identity.get("code_commit"), identity.get("worktree_path"), json.dumps(capabilities, sort_keys=True), json.dumps(health, sort_keys=True), timestamp, timestamp))
+
+    def get_strategy_adapter(self, strategy_id: str, version: str | None = None) -> dict | None:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM strategy_adapters WHERE strategy_id=? AND strategy_version=?", (strategy["strategy_id"], strategy["version"])).fetchone()
+            if not row: return None
+            result = dict(row); result["capabilities_json"] = json.loads(result["capabilities_json"]); result["health_json"] = json.loads(result["health_json"]); return result
+
+    def save_implementation_manifest(self, master_run_id: str, manifest_path: str, manifest_hash: str, manifest: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO implementation_manifests(master_run_id,strategy_id,strategy_version,manifest_path,manifest_hash,manifest_json,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(master_run_id) DO UPDATE SET manifest_path=excluded.manifest_path,manifest_hash=excluded.manifest_hash,manifest_json=excluded.manifest_json", (master_run_id, manifest["strategy_id"], manifest["strategy_version"], manifest_path, manifest_hash, json.dumps(manifest, sort_keys=True), now_iso()))
+
+    def get_implementation_manifest(self, master_run_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM implementation_manifests WHERE master_run_id=?", (master_run_id,)).fetchone()
+            if not row: return None
+            result = dict(row); result["manifest_json"] = json.loads(result["manifest_json"]); return result
+
+    def save_worktree_metadata(self, master_run_id: str, values: dict) -> None:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO worktree_metadata(master_run_id,strategy_id,strategy_version,base_commit,implementation_commit,branch,worktree_path,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(master_run_id) DO UPDATE SET implementation_commit=excluded.implementation_commit,status=excluded.status,updated_at=excluded.updated_at", (master_run_id, values["strategy_id"], values["strategy_version"], values["base_commit"], values.get("implementation_commit"), values["branch"], values["worktree_path"], values["status"], values.get("created_at", timestamp), timestamp))
+
+    def get_worktree_metadata(self, master_run_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM worktree_metadata WHERE master_run_id=?", (master_run_id,)).fetchone()
+            return dict(row) if row else None
+
+    def save_backtest_run(self, result: dict, master_run_id: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO normalized_backtest_runs(run_id,master_run_id,strategy_id,strategy_version,phase,candidate_hash,dataset_hashes_json,configuration_hash,artifact_paths_json,artifact_hashes_json,result_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET result_json=excluded.result_json,artifact_paths_json=excluded.artifact_paths_json,artifact_hashes_json=excluded.artifact_hashes_json", (result["run_id"], master_run_id, result["strategy_id"], result["strategy_version"], result["phase"], result["candidate_hash"], json.dumps(result["dataset_hashes"], sort_keys=True), result["configuration_hash"], json.dumps(result["artifact_paths"], sort_keys=True), json.dumps(result["artifact_hashes"], sort_keys=True), json.dumps(result, sort_keys=True), now_iso()))
+
+    def get_backtest_run(self, run_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM normalized_backtest_runs WHERE run_id=?", (run_id,)).fetchone()
+            if not row: return None
+            result = dict(row); result["result_json"] = json.loads(result["result_json"]); return result
+
+    def save_trade_artifact(self, run_id: str, path: str, artifact_hash: str, row_count: int, schema_version: str = "1") -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO trade_artifact_references(run_id,artifact_path,artifact_hash,row_count,schema_version,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET artifact_path=excluded.artifact_path,artifact_hash=excluded.artifact_hash,row_count=excluded.row_count", (run_id, path, artifact_hash, row_count, schema_version, now_iso()))
+
+    def save_phase_d_export(self, master_run_id: str, result: dict, path: str, artifact_hash: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO phase_d_export_manifests(master_run_id,strategy_id,strategy_version,candidate_hash,artifact_path,artifact_hash,result_json,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(master_run_id) DO UPDATE SET artifact_path=excluded.artifact_path,artifact_hash=excluded.artifact_hash,result_json=excluded.result_json", (master_run_id, result["strategy_id"], result["strategy_version"], result["candidate_hash"], path, artifact_hash, json.dumps(result, sort_keys=True), now_iso()))
+
+    def save_phase_e_eligibility(self, master_run_id: str, result: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO phase_e_eligibility_records(master_run_id,strategy_id,strategy_version,candidate_hash,outcome,result_json,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(master_run_id) DO UPDATE SET outcome=excluded.outcome,result_json=excluded.result_json", (master_run_id, result["strategy_id"], result["strategy_version"], result["candidate_hash"], result["outcome"], json.dumps(result, sort_keys=True), now_iso()))
+
+    def record_artifact_integrity(self, master_run_id: str, path: str, expected_hash: str, observed_hash: str | None, status: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO artifact_integrity_checks(master_run_id,artifact_path,expected_hash,observed_hash,status,checked_at) VALUES(?,?,?,?,?,?) ON CONFLICT(master_run_id,artifact_path) DO UPDATE SET observed_hash=excluded.observed_hash,status=excluded.status,checked_at=excluded.checked_at", (master_run_id, path, expected_hash, observed_hash, status, now_iso()))

@@ -7,6 +7,7 @@ from pydantic import Field, field_validator
 
 from ..enums import PipelineState
 from ..schemas.strategy_spec import StrictModel
+from ..validation.specification_semantics import SpecificationProvenance, SpecificationValidationIssue, SpecificationValidationReport
 
 
 class WorkflowInput(StrictModel):
@@ -19,6 +20,13 @@ class WorkflowInput(StrictModel):
     registry_path: str | None = None
     dry_run: bool = True
     implementation_enabled: bool = False
+    confirmed_facts: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    missing_information: list[str] = Field(default_factory=list)
+    ambiguities: list[str] = Field(default_factory=list)
+    run_id: str | None = None
+    max_generation_attempts: int = Field(default=3, ge=1, le=3)
+    max_repair_attempts: int = Field(default=2, ge=0, le=2)
 
     @field_validator("strategy_name")
     @classmethod
@@ -45,6 +53,10 @@ class GeneratedStrategySpec(StrictModel):
     fields_requiring_confirmation: list[str]
     manual_review_required: bool
     approval_summary: str
+    provenance: SpecificationProvenance = Field(default_factory=SpecificationProvenance)
+    validation_report_path: str | None = None
+    semantic_validation_report_path: str | None = None
+    attempt: int = Field(default=1, ge=1)
 
 
 class SpecificationValidationResult(StrictModel):
@@ -55,6 +67,24 @@ class SpecificationValidationResult(StrictModel):
     specification_hash: str
     errors: list[str]
     manual_review_required: bool = False
+    structured_errors: list[SpecificationValidationIssue] = Field(default_factory=list)
+    semantic_report: SpecificationValidationReport | None = None
+    canonical_path: str | None = None
+    approval_ready: bool = False
+    provenance: SpecificationProvenance = Field(default_factory=SpecificationProvenance)
+
+
+class SpecificationGenerationFailure(StrictModel):
+    classification: str = "SPECIFICATION_GENERATION_FAILURE"
+    strategy_id: str
+    run_id: str
+    attempts: int
+    repair_attempts: int
+    final_reason: str
+    validation_report_paths: list[str] = Field(default_factory=list)
+    draft_paths: list[str] = Field(default_factory=list)
+    repair_prompt_paths: list[str] = Field(default_factory=list)
+    codex_invocation_paths: list[str] = Field(default_factory=list)
 
 
 class RegistrationResult(StrictModel):

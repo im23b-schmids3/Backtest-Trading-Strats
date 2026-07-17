@@ -26,6 +26,7 @@ def load_pipeline_config(path: str | Path | None = None, strategy_id: str | None
         "budgets": ResearchBudget.model_validate(budget_values),
         "gates": GateSet.model_validate(gates_raw),
         "report_size_limit_mb": raw.get("report_size_limit_mb", DEFAULT_BUDGETS.max_report_size_mb),
+        "specification_generation": raw.get("specification_generation", {"max_generation_attempts": 3, "max_repair_attempts": 2}),
         "allowed_timeframes": raw.get("allowed_timeframes", ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]),
         "allowed_terminal_states": raw.get("allowed_terminal_states", ["ACCEPTED", "REJECTED", "INSUFFICIENT_EVIDENCE", "TECHNICAL_FAILURE", "MANUAL_REVIEW_REQUIRED"]),
         "logging": raw.get("logging", {"path": "research_registry/research_pipeline.log", "level": "INFO"}),

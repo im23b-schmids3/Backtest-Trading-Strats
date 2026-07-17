@@ -1,0 +1,2 @@
+{"timestamp": "2026-07-17T20:52:44+0200", "level": "INFO", "event": "strategy_registered strategy_id=RandomOpenTest version=phase-b-1"}
+{"timestamp": "2026-07-17T20:52:44+0200", "level": "INFO", "event": "state_transition strategy_id=RandomOpenTest old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}

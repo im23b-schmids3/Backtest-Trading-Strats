@@ -29,6 +29,14 @@ class PhaseBBridge:
             return self.service.generate_spec(WorkflowInput.model_validate(user_input)).model_dump(mode="json")
         if command == "validate-spec":
             return self.service.validate_spec(GeneratedStrategySpec.model_validate(payload)).model_dump(mode="json")
+        if command == "specification-status":
+            return self.service.specification_status(str(payload["run_id"]))
+        if command == "specification-attempts":
+            return self.service.specification_attempts(str(payload["run_id"]))
+        if command == "specification-errors":
+            return self.service.specification_errors(str(payload["run_id"]))
+        if command == "specification-latest":
+            return self.service.specification_latest(str(payload["run_id"])) or {}
         if command == "register-generated-spec":
             return self.service.register_generated(SpecificationValidationResult.model_validate(payload)).model_dump(mode="json")
         if command == "approve":
@@ -118,10 +126,21 @@ class PhaseBBridge:
             if command == "master-start":
                 options = MasterRunInput.model_validate(payload)
                 return service.start(options)
+            if command == "master-specification-status":
+                status = service.status(run_id := str(payload["run_id"]))
+                from ..phase_b.services import PhaseBService
+                specification = PhaseBService(service.registry_path).specification_status(run_id)
+                specification["source_run_id"] = specification.pop("run_id", run_id)
+                return {"source_run_id": run_id, "master_status": status, "specification": specification}
+            if command == "master-specification-retry":
+                return service.retry_specification(str(payload["run_id"]))
             run_id = str(payload["run_id"])
             if command == "master-approve": return service.approve(run_id, str(payload.get("decision", "APPROVE")), payload.get("note"))
             if command == "master-resume": return service.resume(run_id)
             if command == "master-status": return service.status(run_id)
+            if command == "master-implementation": return service.implementation(run_id)
+            if command == "master-worktree": return service.worktree(run_id)
+            if command == "master-verify-data": return service.verify_data(run_id)
             if command == "master-report": return service.report(run_id)
             if command == "master-artifacts": return service.artifacts(run_id)
             if command == "master-cancel": return service.cancel(run_id, str(payload.get("reason", "cancelled by operator")))
@@ -144,7 +163,7 @@ class PhaseBBridge:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m research_pipeline workflow")
-    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "master-start", "master-approve", "master-resume", "master-status", "master-report", "master-artifacts", "master-cancel", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
+    parser.add_argument("command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "master-start", "master-approve", "master-resume", "master-status", "master-implementation", "master-worktree", "master-verify-data", "master-report", "master-artifacts", "master-cancel", "technical-verification", "final-status", "verification-create-manifest", "verification-run"])
     parser.add_argument("--input-json", required=True)
     args = parser.parse_args(argv)
     try:

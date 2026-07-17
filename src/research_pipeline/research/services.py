@@ -99,6 +99,8 @@ class PhaseCService:
         existing = self.registry.get_baseline(strategy_id, strategy["version"])
         if existing:
             artifact = ResearchArtifact.model_validate(existing["artifact_json"])
+            if strategy["current_phase"] == PipelineState.BASELINE_BACKTEST.value:
+                self.controller.transition(strategy_id, PipelineState.EDGE_GATE, "reuse verified baseline artifact")
             return BaselineResult(artifact=artifact, verification_outcome=existing["verification_outcome"], gate_outcomes=existing["gate_outcomes_json"])
         spec, split = self._spec_split(strategy_id)
         artifact = self.adapter.run_baseline(spec, split, self._root(strategy_id, "baseline"))

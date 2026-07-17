@@ -10,13 +10,18 @@ export const phaseF1Input = z.object({
   prop_scenario: z.string().default("profitable"),
   portfolio_scenario: z.string().default("complementary"),
   prop_product: z.enum(["Alpha Futures Zero 25K", "Alpha Futures Zero 50K"]).default("Alpha Futures Zero 25K"),
+  mode: z.enum(["dry_run", "real_run"]).default("dry_run"),
+  allow_proxy_data: z.boolean().default(false),
+  prebuilt_spec_path: z.string().nullable().optional(),
+  max_generation_attempts: z.number().int().min(1).max(3).default(3),
+  max_repair_attempts: z.number().int().min(0).max(2).default(2),
 }).strict();
 
 export const masterStatus = z.object({
   source_run_id: z.string(), strategy_id: z.string(), strategy_version: z.string().nullable(),
   current_step: z.string(), outcome: z.string(), approval_status: z.string(), root_path: z.string(),
   phase_results: z.array(z.any()), journal_entries: z.number().int().nonnegative(),
-  artifacts: z.array(z.any()), report: z.any().nullable(),
+  artifacts: z.array(z.any()), report: z.any().nullable(), mode: z.enum(["dry_run", "real_run"]).default("dry_run"),
 }).strict();
 
 export const approvalDecision = z.object({
@@ -28,4 +33,19 @@ export const masterSummary = z.object({
   report_path: z.string().nullable(), classification: z.string().nullable(), artifacts: z.number().int().nonnegative(),
 }).strict();
 
-export const outputs = { start: masterStatus, approval: approvalDecision, applied: masterStatus, resume: masterStatus, report: masterSummary };
+export const specificationStatus = z.object({
+  source_run_id: z.string(),
+  master_status: masterStatus,
+  specification: z.object({
+    source_run_id: z.string(),
+    attempt_count: z.number().int().nonnegative(),
+    repair_attempt_count: z.number().int().nonnegative(),
+    latest_attempt: z.any().nullable(),
+    latest_validation_outcome: z.string(),
+    blocking_ambiguities: z.array(z.any()),
+    approval_available: z.boolean(),
+    failure: z.any().nullable(),
+  }).strict(),
+}).strict();
+
+export const outputs = { start: masterStatus, specification: specificationStatus, repair: masterStatus, postValidation: specificationStatus, approval: approvalDecision, applied: masterStatus, resume: masterStatus, report: masterSummary };

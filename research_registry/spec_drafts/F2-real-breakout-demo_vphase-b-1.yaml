@@ -1,0 +1,55 @@
+strategy_id: F2-real-breakout-demo
+version: phase-b-1
+name: F2 real breakout demonstration
+description: >-
+  A deterministic breakout demonstration strategy for Phase F2 integration
+  validation. It is a local-data engineering demonstration and makes no claim
+  of economic value.
+hypothesis: >-
+  A bounded breakout rule can exercise the real adapter, diagnostics, and
+  chronological research contracts without changing historical strategies.
+strategy_family: f2_native_demo
+markets: [SPX]
+timeframes: [1h]
+long_rules:
+  - A completed candle closes above the prior lookback high.
+short_rules:
+  - A completed candle closes below the prior lookback low.
+entry_logic: Enter on the next bar open after a confirmed breakout.
+initial_stop_logic: Fixed percentage stop from entry.
+exit_logic: Fixed target, stop, maximum holding period, or terminal flatten.
+session_assumptions:
+  - Chronological UTC timestamps.
+  - SPX is explicitly represented by the approved SPY local proxy.
+baseline_parameters:
+  lookback: 12
+  stop_fraction: 0.01
+  target_fraction: 0.05
+  max_hold_bars: 24
+  fee_rate: 0.0001
+  slippage_rate: 0.00005
+parameter_families:
+  - name: lookback
+    description: Breakout lookback in completed candles.
+    baseline_value: 12
+    value_type: integer
+    allowed_min: 12
+    allowed_max: 12
+    allowed_values: [12]
+    optimization_order: 1
+    maximum_rounds: 0
+    mutable: false
+    hypothesis_relevance: Structural demo invariant.
+invariants:
+  - Signals may use only completed candles before entry.
+  - The SPX to SPY proxy substitution must remain declared.
+  - This demonstration must not alter existing Fibonacci behavior.
+required_data:
+  - Local SPY 1h parquet approved as an explicit SPX proxy.
+known_limitations:
+  - Proxy data is not native SPX futures validation.
+  - Demonstration only; no economic or live-market claim.
+status: DRAFT
+created_at: 2026-01-01T00:00:00Z
+approved_at: null
+specification_hash: 491b9bde9a0a96767632b7dbbdfb53eb1597e42b6f12fe3fad5a227739d64a9e
