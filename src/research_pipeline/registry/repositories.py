@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -599,9 +600,9 @@ class Registry:
         with self.database.session() as connection:
             return [dict(row) for row in connection.execute("SELECT * FROM specification_ambiguities WHERE run_id=? ORDER BY created_at, field_path", (run_id,)).fetchall()]
 
-    def save_specification_failure(self, run_id: str, strategy_id: str, result: dict, final_reason: str) -> dict:
+    def save_specification_failure(self, run_id: str, strategy_id: str, result: dict, final_reason: str, classification: str = "SPECIFICATION_GENERATION_FAILURE") -> dict:
         with self.database.transaction() as connection:
-            connection.execute("INSERT INTO specification_failures(run_id,strategy_id,classification,final_reason,result_json,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET classification=excluded.classification,final_reason=excluded.final_reason,result_json=excluded.result_json", (run_id, strategy_id, "SPECIFICATION_GENERATION_FAILURE", final_reason, json.dumps(result, sort_keys=True, default=str), now_iso()))
+            connection.execute("INSERT INTO specification_failures(run_id,strategy_id,classification,final_reason,result_json,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET classification=excluded.classification,final_reason=excluded.final_reason,result_json=excluded.result_json", (run_id, strategy_id, classification, final_reason, json.dumps(result, sort_keys=True, default=str), now_iso()))
         return self.specification_failure(run_id)
 
     def clear_specification_failure(self, run_id: str) -> None:
@@ -613,6 +614,87 @@ class Registry:
             row = connection.execute("SELECT * FROM specification_failures WHERE run_id=?", (run_id,)).fetchone()
             if not row: return None
             result = dict(row); result["result_json"] = json.loads(result["result_json"]); return result
+
+    # External specification-generation jobs. Raw prompts and drafts remain
+    # filesystem artifacts; SQLite stores identity, lifecycle, and hashes.
+    def save_specification_job(self, request: dict, job_path: str, status: str,
+                               *, result_path: str | None = None, result_hash: str | None = None,
+                               error: str | None = None) -> dict:
+        request_hash = hashlib.sha256(json.dumps(request, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO specification_jobs(
+                run_id,job_id,strategy_id,strategy_version,attempt,job_type,status,job_path,
+                request_hash,result_path,result_hash,error,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(run_id,job_id) DO UPDATE SET status=excluded.status,
+                result_path=COALESCE(excluded.result_path,specification_jobs.result_path),
+                result_hash=COALESCE(excluded.result_hash,specification_jobs.result_hash),
+                error=excluded.error,updated_at=excluded.updated_at""",
+                (request["run_id"], request["job_id"], request["strategy_id"], request["strategy_version"],
+                 request["attempt"], request["job_type"], status, job_path, request_hash,
+                 result_path, result_hash, error, timestamp, timestamp))
+        return self.get_specification_job(request["run_id"], request["job_id"]) or {}
+
+    def get_specification_job(self, run_id: str, job_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM specification_jobs WHERE run_id=? AND job_id=?", (run_id, job_id)).fetchone()
+            return dict(row) if row else None
+
+    def get_latest_specification_job(self, run_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM specification_jobs WHERE run_id=? ORDER BY attempt DESC", (run_id,)).fetchone()
+            return dict(row) if row else None
+
+    def specification_jobs(self, run_id: str) -> list[dict]:
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM specification_jobs WHERE run_id=? ORDER BY attempt", (run_id,)).fetchall()]
+
+    def save_specification_job_attempt(self, run_id: str, job_id: str, attempt: int, candidate_status: str,
+                                       *, draft_path: str | None = None, draft_hash: str | None = None,
+                                       validation_path: str | None = None, validation_hash: str | None = None,
+                                       semantic_validation_path: str | None = None,
+                                       semantic_validation_hash: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO specification_job_attempts(
+                run_id,job_id,attempt,candidate_status,draft_path,draft_hash,validation_path,
+                validation_hash,semantic_validation_path,semantic_validation_hash,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,job_id) DO UPDATE SET
+                candidate_status=excluded.candidate_status,draft_path=excluded.draft_path,
+                draft_hash=excluded.draft_hash,validation_path=excluded.validation_path,
+                validation_hash=excluded.validation_hash,semantic_validation_path=excluded.semantic_validation_path,
+                semantic_validation_hash=excluded.semantic_validation_hash""",
+                (run_id, job_id, attempt, candidate_status, draft_path, draft_hash, validation_path,
+                 validation_hash, semantic_validation_path, semantic_validation_hash, now_iso()))
+
+    def save_specification_invocation(self, run_id: str, job_id: str, path: str, artifact_hash: str,
+                                      exit_code: int | None, status: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO specification_external_invocations(
+                run_id,job_id,invocation_path,invocation_hash,exit_code,status,created_at)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(run_id,job_id) DO UPDATE SET
+                invocation_path=excluded.invocation_path,invocation_hash=excluded.invocation_hash,
+                exit_code=excluded.exit_code,status=excluded.status""",
+                (run_id, job_id, path, artifact_hash, exit_code, status, now_iso()))
+
+    def save_specification_result_manifest(self, run_id: str, job_id: str, path: str, artifact_hash: str,
+                                           extraction_path: str | None, extraction_hash: str | None) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO specification_result_manifests(
+                run_id,job_id,manifest_path,manifest_hash,extraction_path,extraction_hash,created_at)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(run_id,job_id) DO UPDATE SET
+                manifest_path=excluded.manifest_path,manifest_hash=excluded.manifest_hash,
+                extraction_path=excluded.extraction_path,extraction_hash=excluded.extraction_hash""",
+                (run_id, job_id, path, artifact_hash, extraction_path, extraction_hash, now_iso()))
+
+    def save_specification_pause_signal(self, run_id: str, job_id: str, smithers_run_id: str | None,
+                                        event_name: str, correlation_id: str | None, status: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO specification_pause_signals(
+                run_id,job_id,smithers_run_id,event_name,correlation_id,status,created_at)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(run_id,job_id,event_name) DO UPDATE SET
+                smithers_run_id=excluded.smithers_run_id,correlation_id=excluded.correlation_id,status=excluded.status""",
+                (run_id, job_id, smithers_run_id, event_name, correlation_id, status, now_iso()))
 
     # Phase F2 adapter and real-artifact persistence. These methods store
     # references and compact summaries; trade rows remain in hashed artifacts.
@@ -648,6 +730,32 @@ class Registry:
     def get_worktree_metadata(self, master_run_id: str) -> dict | None:
         with self.database.session() as connection:
             row = connection.execute("SELECT * FROM worktree_metadata WHERE master_run_id=?", (master_run_id,)).fetchone()
+            return dict(row) if row else None
+
+    # External Codex execution handoff. The durable job files are authoritative
+    # for large payloads; SQLite stores identity, hashes, and lifecycle state.
+    def save_implementation_job(self, run_id: str, request: dict, job_path: str, status: str,
+                                *, result_path: str | None = None, result_hash: str | None = None,
+                                error: str | None = None) -> dict:
+        request_hash = hashlib.sha256(json.dumps(request, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT INTO implementation_jobs(
+                run_id,job_id,strategy_id,strategy_version,specification_hash,job_path,status,
+                request_hash,result_path,result_hash,error,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(run_id) DO UPDATE SET status=excluded.status,
+                result_path=COALESCE(excluded.result_path,implementation_jobs.result_path),
+                result_hash=COALESCE(excluded.result_hash,implementation_jobs.result_hash),
+                error=excluded.error,updated_at=excluded.updated_at""",
+                (run_id, request["job_id"], request["strategy_id"], request["strategy_version"],
+                 request["specification_hash"], job_path, status, request_hash, result_path,
+                 result_hash, error, timestamp, timestamp))
+        return self.get_implementation_job(run_id) or {}
+
+    def get_implementation_job(self, run_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM implementation_jobs WHERE run_id=?", (run_id,)).fetchone()
             return dict(row) if row else None
 
     def save_backtest_run(self, result: dict, master_run_id: str | None = None) -> None:

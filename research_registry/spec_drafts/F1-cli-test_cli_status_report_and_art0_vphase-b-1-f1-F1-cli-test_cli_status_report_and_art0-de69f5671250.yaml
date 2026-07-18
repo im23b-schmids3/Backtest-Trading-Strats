@@ -1,0 +1,52 @@
+strategy_id: F1-cli-test_cli_status_report_and_art0
+version: phase-b-1
+name: F1 cli test_cli_status_report_and_art0
+description: 'A deterministic fictional strategy for the Phase F1 orchestration fixture.
+  Confirmed facts: This is a fixture. Entry logic: Use the described fictional trend
+  condition. Exit logic: Exit at the fictional target or stop. Filters: Chronological
+  timestamps only. Assumptions: Synthetic adapters provide evidence. Risk model: Fixed
+  synthetic risk. Position sizing: One synthetic unit.'
+hypothesis: 'A deterministic fictional strategy for the Phase F1 orchestration fixture.
+  Confirmed facts: This is a fixture. Entry logic: Use the described fictional trend
+  condition. Exit logic: Exit at the fictional target or stop. Filters: Chronological
+  timestamps only. Assumptions: Synthetic adapters provide evidence. Risk model: Fixed
+  synthetic risk. Position sizing: One synthetic unit.'
+strategy_family: phase_b_fictional
+markets:
+- BTCUSDT
+timeframes:
+- 1h
+long_rules:
+- Use the described long condition.
+short_rules:
+- Use the described short condition.
+entry_logic: Use the described entry condition.
+initial_stop_logic: Use a fixed initial stop described by the specification.
+exit_logic: Use the described exit condition.
+session_assumptions:
+- Chronological timestamps.
+baseline_parameters:
+  fictional_baseline: 1
+parameter_families:
+- name: fictional_baseline
+  description: Immutable dry-run baseline.
+  baseline_value: 1
+  value_type: integer
+  allowed_min: 1
+  allowed_max: 1
+  allowed_values:
+  - 1
+  optimization_order: 0
+  maximum_rounds: 0
+  mutable: false
+  hypothesis_relevance: Fixture only.
+invariants:
+- This fictional dry run must not alter existing trading behavior.
+required_data:
+- OHLCV candles
+known_limitations:
+- Phase B dry-run fixture; no trading research.
+status: DRAFT
+created_at: '2026-07-18T10:13:48.121490Z'
+approved_at: null
+specification_hash: b46808a8624c608084668f68f93d97a3a61bcdcf82a64c39ffb3674784f153be

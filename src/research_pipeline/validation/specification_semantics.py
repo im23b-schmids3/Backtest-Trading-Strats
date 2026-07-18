@@ -172,7 +172,7 @@ def semantic_validate(raw: dict[str, Any], *, provenance: SpecificationProvenanc
     if "spy" in {str(item).lower() for item in markets} and not ("proxy" in lower and ("mapping" in lower or "phase d" in lower)):
         errors.append(SpecificationValidationIssue(error_code="PROXY_DISCLOSURE_MISSING", field_path="known_limitations", received_value=data.get("known_limitations"),
             expected_constraint="explicit SPY proxy and unsupported Phase D mapping disclosure", explanation="SPY must remain an approval-visible repository proxy and cannot imply an invented futures mapping.", repair_hint="State the proxy substitution and that existing Phase D futures mappings do not support SPY."))
-    claims_exact_subhour = ("10-minute" in lower or "10 minutes" in lower or "600 seconds" in lower) and not any(token in lower for token in ("not exact 10-minute", "not an exact 10-minute", "no exact 10-minute", "not exact 10 minutes", "no exact 10 minutes"))
+    claims_exact_subhour = ("10-minute" in lower or "10 minutes" in lower or "600 seconds" in lower) and not any(token in lower for token in ("not exact 10-minute", "not an exact 10-minute", "no exact 10-minute", "not exact 10 minutes", "no exact 10 minutes", "does not claim", "cannot establish", "not claim or approximate", "not claimed", "not approximated"))
     if claims_exact_subhour and any(str(item).lower() in {"1h", "4h", "1d", "1w"} for item in timeframes):
         errors.append(SpecificationValidationIssue(error_code="INCOMPATIBLE_HOLDING_PERIOD_DATA", field_path="exit_logic", received_value=data.get("exit_logic"),
             expected_constraint="hourly data cannot claim an exact 10-minute exit", explanation="The requested holding period is finer than the declared dataset timeframe.", repair_hint="Use compatible minute data or explicitly label a same-hour repository-compatible variant."))
@@ -189,7 +189,9 @@ def semantic_validate(raw: dict[str, Any], *, provenance: SpecificationProvenanc
     if "5%" in lower or "5 percent" in lower:
         if "current equity" in lower or "equity" in lower:
             fraction = params.get("equity_fraction", params.get("allocation_fraction"))
-            if fraction != 0.05 or any(token in lower for token in ("risk per trade", "risk-per-trade")):
+            risk_language = any(token in lower for token in ("risk per trade", "risk-per-trade"))
+            explicitly_not_risk = any(token in lower for token in ("not risk per trade", "not risk-per-trade", "not a risk per trade", "not a risk-per-trade"))
+            if fraction != 0.05 or (risk_language and not explicitly_not_risk):
                 errors.append(SpecificationValidationIssue(error_code="EQUITY_ALLOCATION_MISREPRESENTED", field_path="baseline_parameters.equity_fraction", received_value=fraction,
                     expected_constraint="5% of current equity represented as an allocation fraction", explanation="Equity allocation must not be silently converted into risk-per-trade sizing.", repair_hint="Set equity_fraction to 0.05 and describe allocation from current equity."))
     if "no stop" in lower and any(token in lower for token in ("default stop", "stop loss", "stop_distance")):

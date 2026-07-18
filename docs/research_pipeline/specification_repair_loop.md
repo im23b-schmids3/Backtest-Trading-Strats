@@ -1,7 +1,18 @@
 # Specification repair loop
 
-Repairs are deterministic retries, not an open-ended agent loop. The first invalid output is retained unchanged. Subsequent prompts contain the original intake, the invalid draft, and only the structured validation failures. The prompt explicitly prohibits invented defaults, prose, multiple candidates, implementation, backtesting, optimization, and silent ambiguity resolution.
+Specification generation has a bounded candidate loop: one generation attempt
+followed by no more than two repairs. Each repair receives the exact prior
+invalid draft and its structured validation reports. The prompt requires one
+complete `StrategySpec` mapping and prohibits invented rules, prose, code,
+backtests, and optimization.
 
-The Python service enforces `max_generation_attempts <= 3` and `max_repair_attempts <= 2`. Every attempt is upserted into SQLite and has file-backed draft, invocation, validation, and optional repair-prompt artifacts. A process interruption can resume from the next missing attempt. A completed canonical attempt is idempotently reused.
+For a tenant-compatible external run, the controller creates a new durable
+repair job and pauses again. The operator runs the executor for that job and
+resumes the same Smithers run. A valid candidate proceeds to the single human
+approval gate. If the repair budget is exhausted, the controller records
+`SPECIFICATION_GENERATION_FAILURE`; it does not guess or approve the last
+invalid output. Material ambiguity remains `MANUAL_REVIEW_REQUIRED`.
 
-Exhaustion produces `SPECIFICATION_GENERATION_FAILURE`, a final failure JSON artifact, a registry failure row, and a nonzero CLI result. No approval node is created for that outcome. A later explicit retry may continue an interrupted run; it cannot bypass the same structural and semantic gates.
+The attempt count is stored in both SQLite and the artifact tree. Repeating a
+completed executor job is idempotent and does not invoke Codex again; repeating
+a pending job does not create a duplicate job for the same run and attempt.

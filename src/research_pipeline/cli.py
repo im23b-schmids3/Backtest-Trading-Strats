@@ -28,6 +28,26 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--registry", default=os.environ.get("RESEARCH_PIPELINE_REGISTRY", "research_registry/research_pipeline.sqlite3"))
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init")
+    repository = sub.add_parser("repository", help="repository safety checks")
+    repository_sub = repository.add_subparsers(dest="repository_command", required=True)
+    command = repository_sub.add_parser("worktree-preflight")
+    command.add_argument("--repository-root", default=".")
+    command.add_argument("--max-path-length", type=int, default=240)
+    command.add_argument("--probe", action="store_true")
+    command.add_argument("--format", choices=["json", "text"], default="json")
+    implementation = sub.add_parser("implementation", help="durable external implementation jobs")
+    implementation_sub = implementation.add_subparsers(dest="implementation_command", required=True)
+    for name in ("job", "status", "ingest"):
+        command = implementation_sub.add_parser(name); command.add_argument("run_id")
+    executor = sub.add_parser("codex-executor", help="run an approved implementation job outside Smithers")
+    executor_sub = executor.add_subparsers(dest="executor_command", required=True)
+    for name in ("run", "status", "resume"):
+        command = executor_sub.add_parser(name); command.add_argument("run_id")
+    specification_executor = sub.add_parser("specification-executor", help="run an external read-only specification job")
+    specification_executor_sub = specification_executor.add_subparsers(dest="specification_executor_command", required=True)
+    for name in ("run", "status", "resume", "inspect"):
+        command = specification_executor_sub.add_parser(name); command.add_argument("run_id")
+    command = specification_executor_sub.add_parser("run-job"); command.add_argument("run_id"); command.add_argument("job_id")
     command = sub.add_parser("new-strategy"); command.add_argument("path")
     sub.add_parser("list-strategies")
     command = sub.add_parser("status"); command.add_argument("strategy_id")
@@ -37,7 +57,6 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("report", help="show a Phase F1 final report"); command.add_argument("run_id")
     command = sub.add_parser("artifacts", help="list Phase F1 artifacts"); command.add_argument("run_id")
     command = sub.add_parser("cancel", help="cancel a Phase F1 master run"); command.add_argument("run_id"); command.add_argument("--reason", default="cancelled by operator")
-    command = sub.add_parser("implementation", help="show a persisted implementation manifest"); command.add_argument("run_id")
     command = sub.add_parser("worktree", help="show persisted worktree metadata"); command.add_argument("run_id")
     command = sub.add_parser("verify-data", help="check real-mode data availability"); command.add_argument("run_id")
     adapters = sub.add_parser("adapters", help="inspect registered real strategy adapters")
@@ -61,7 +80,7 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("status", "attempts", "validate", "errors", "latest"):
         command = specification_sub.add_parser(name); command.add_argument("run_id")
     workflow = sub.add_parser("workflow", help="typed Smithers bridge commands")
-    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "specification-status", "specification-attempts", "specification-errors", "specification-latest", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "master-start", "master-approve", "master-resume", "master-status", "master-implementation", "master-worktree", "master-verify-data", "master-report", "master-artifacts", "master-cancel", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
+    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "specification-status", "specification-attempts", "specification-errors", "specification-latest", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "master-start", "master-specification-status", "master-specification-retry", "master-approve", "master-resume", "master-status", "master-implementation", "master-worktree", "master-verify-data", "master-report", "master-artifacts", "master-cancel", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
     workflow.add_argument("--input-json")
     workflow.add_argument("--repository-root", default=".")
     research = sub.add_parser("research", help="deterministic Phase C research commands")
@@ -131,6 +150,16 @@ def main(argv: list[str] | None = None) -> int:
         registry = controller.registry
         if args.command == "init":
             print(f"initialized registry: {Path(args.registry)}")
+        elif args.command == "repository":
+            from .repository.worktree_preflight import run_worktree_preflight
+            report = run_worktree_preflight(args.repository_root, max_path_length=args.max_path_length, probe=args.probe)
+            if args.format == "text":
+                print(f"safe_for_isolated_worktree={report.safe_for_isolated_worktree} tracked_paths={report.tracked_path_count} issues={len(report.issues)} probe={report.probe_status}")
+                for issue in report.issues:
+                    print(f"{issue.error_code}: {issue.tracked_path} - {issue.explanation}")
+            else:
+                _print(report.model_dump(mode="json"))
+            return 0 if report.safe_for_isolated_worktree else 3
         elif args.command == "new-strategy":
             spec = load_strategy_spec(args.path)
             config = load_pipeline_config(Path("configs/research_pipeline/defaults.yaml"), strategy_id=spec.strategy_id)
@@ -166,8 +195,30 @@ def main(argv: list[str] | None = None) -> int:
             from .phase_f1.service import MasterPipelineService
             _print(MasterPipelineService(args.registry).cancel(args.run_id, args.reason))
         elif args.command == "implementation":
-            from .phase_f1.service import MasterPipelineService
-            _print(MasterPipelineService(args.registry).implementation(args.run_id))
+            from .implementation.jobs import ImplementationJobService
+            jobs = ImplementationJobService(args.registry)
+            if args.implementation_command == "job": _print(jobs.create(args.run_id))
+            elif args.implementation_command == "status": _print(jobs.status(args.run_id))
+            elif args.implementation_command == "ingest": _print(jobs.ingest(args.run_id))
+        elif args.command == "codex-executor":
+            from .implementation.executor import ExternalCodexExecutor
+            service = ExternalCodexExecutor(args.registry)
+            if args.executor_command == "status": _print(service.status(args.run_id))
+            else:
+                result = service.run(args.run_id)
+                _print(result)
+                if result.get("status") != "SUCCEEDED": return 3
+        elif args.command == "specification-executor":
+            from .specification_executor.executor import ExternalSpecificationExecutor
+            from .specification_executor.jobs import SpecificationJobService
+            if args.specification_executor_command in {"status", "inspect"}:
+                service = SpecificationJobService(args.registry)
+                _print(service.status(args.run_id) if args.specification_executor_command == "status" else service.inspect(args.run_id))
+            else:
+                service = ExternalSpecificationExecutor(args.registry)
+                result = service.run(args.run_id, args.job_id if args.specification_executor_command == "run-job" else None)
+                _print(result)
+                if result.get("status") != "SUCCEEDED": return 3
         elif args.command == "worktree":
             from .phase_f1.service import MasterPipelineService
             _print(MasterPipelineService(args.registry).worktree(args.run_id))

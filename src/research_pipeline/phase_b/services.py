@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from ..controller.pipeline_controller import PipelineController
 from ..enums import ApprovalStatus, PipelineState
-from ..errors import ImmutableSpecificationError, InvalidTransitionError, RegistryError
+from ..errors import ExternalSpecificationRequired, ImmutableSpecificationError, InvalidTransitionError, RegistryError
 from ..registry.database import Database
 from ..registry.repositories import Registry
 from ..schemas.strategy_spec import ParameterFamily, StrategySpec, calculate_specification_hash, save_strategy_spec
@@ -22,7 +22,7 @@ from ..validation.specification_semantics import (
     SpecificationProvenance, SpecificationValidationIssue, SpecificationValidationReport,
     semantic_validate,
 )
-from ..runners.codex_runner import CodexRunner
+from ..runners.codex_runner import CodexRunner, is_restricted_execution_failure
 from ..runners.test_runner import DeterministicTestRunner
 from ..runners.worktree_manager import WorktreeManager
 from .models import (
@@ -31,6 +31,8 @@ from .models import (
     WorkflowInput,
 )
 from .prompt_builder import build_implementation_prompt, build_spec_agent_prompt
+from ..specification_executor.jobs import SpecificationJobService
+from ..specification_executor.models import SpecificationCompletion, SpecificationCompletionStatus, SpecificationJobType
 
 
 class PhaseBService:
@@ -184,6 +186,10 @@ Return exactly one YAML or JSON mapping matching StrategySpec. Do not emit prose
 multiple candidates, Markdown commentary, code, backtests, optimization, or
 invented defaults. Preserve confirmed user intent. Preserve unresolved material
 ambiguity instead of guessing; such ambiguity must stop before approval.
+For RandomOpenTest, use strategy_family "f2_random_open_test", include
+equity_fraction: 0.05 and initial_cash: 10000 in baseline_parameters, describe
+allocation from current equity rather than risk-per-trade sizing, and retain
+the repository-compatible 1-hour same-bar exit.
 """
 
     def generate_spec(self, workflow: WorkflowInput) -> GeneratedStrategySpec:
@@ -220,7 +226,23 @@ ambiguity instead of guessing; such ambiguity must stop before approval.
                     break
                 prompt = self._repair_prompt(workflow, last_raw, last_report)
             invocation: dict[str, Any]
-            if workflow.dry_run:
+            external_candidate = False
+            external_job = self.registry.get_latest_specification_job(run_id)
+            if external_job and int(external_job["attempt"]) == attempt:
+                from ..specification_executor.executor import ExternalSpecificationExecutor
+                completion_path = Path(external_job["job_path"]) / "result" / "completion.json"
+                if not completion_path.exists():
+                    raise self.registry_external_required(run_id, external_job["job_id"])
+                completion, _, _ = ExternalSpecificationExecutor(self.registry_path).load_completion(run_id, external_job["job_id"])
+                if completion.status in {SpecificationCompletionStatus.SUCCEEDED, SpecificationCompletionStatus.FAILED_OUTPUT_EXTRACTION}:
+                    if not completion.raw_output_path:
+                        raise self.registry_external_required(run_id, external_job["job_id"])
+                    raw_output = Path(completion.raw_output_path).read_text(encoding="utf-8")
+                    invocation = {"external_job_id": external_job["job_id"], "status": completion.status.value, "completion_path": str(Path(external_job["job_path"]) / "result" / "completion.json")}
+                    external_candidate = True
+                else:
+                    raise self.registry_external_required(run_id, external_job["job_id"])
+            elif workflow.dry_run:
                 spec = self._dry_spec(workflow, strategy_id, version, [*self._ambiguities(workflow), *workflow.ambiguities])
                 raw_output = yaml.safe_dump(spec.model_dump(mode="json"), sort_keys=False)
                 invocation = {"executed": False, "mode": "dry_run", "attempt": attempt, "source": "deterministic dry-run generator"}
@@ -229,6 +251,13 @@ ambiguity instead of guessing; such ambiguity must stop before approval.
                 invocation = result.model_dump(mode="json")
                 raw_output = result.stdout or result.stderr or ""
                 if not result.success:
+                    if is_restricted_execution_failure(result):
+                        jobs = SpecificationJobService(self.registry_path)
+                        created = jobs.create(workflow, strategy_id=strategy_id, strategy_version=version, run_id=run_id, attempt=attempt, job_type=SpecificationJobType.GENERATE_SPECIFICATION if attempt == 1 else SpecificationJobType.REPAIR_SPECIFICATION, prompt=prompt,
+                                              prior_invalid_draft_path=str(root / "attempts" / f"attempt-{attempt - 1:03d}" / "draft.yaml") if attempt > 1 else None,
+                                              validation_report_path=str(root / "attempts" / f"attempt-{attempt - 1:03d}" / "validation.json") if attempt > 1 else None,
+                                              semantic_validation_path=str(root / "attempts" / f"attempt-{attempt - 1:03d}" / "semantic_validation.json") if attempt > 1 else None)
+                        raise jobs.require_external(created)
                     report = SpecificationValidationReport(valid=False, pydantic_valid=False, semantic_valid=False, errors=[SpecificationValidationIssue(error_code="CODEX_EXECUTION_FAILURE", field_path="codex", received_value=result.exit_code, expected_constraint="successful Codex invocation", explanation=result.stderr or result.stdout or "Codex invocation failed", repair_hint="Retry with the structured output contract and preserve the original intake." )])
                     self._persist_attempt(root, run_id, strategy_id, attempt, raw_output=raw_output, report=report, provenance=provenance, invocation=invocation, prompt=prompt if attempt > 1 else None, status="CODEX_FAILED")
                     last_raw, last_report = raw_output, report
@@ -255,6 +284,16 @@ ambiguity instead of guessing; such ambiguity must stop before approval.
                 # failure row would incorrectly suppress approval on resume.
                 self.registry.clear_specification_failure(run_id)
                 return self._generated_metadata(spec, approval_path, workflow, provenance=provenance, attempt=attempt, root=root)
+            if external_candidate:
+                if attempt >= max_attempts:
+                    break
+                jobs = SpecificationJobService(self.registry_path)
+                created = jobs.create(workflow, strategy_id=strategy_id, strategy_version=version, run_id=run_id, attempt=attempt + 1, job_type=SpecificationJobType.REPAIR_SPECIFICATION,
+                                      prompt=self._repair_prompt(workflow, raw_output, report),
+                                      prior_invalid_draft_path=str(root / "attempts" / f"attempt-{attempt:03d}" / "draft.yaml"),
+                                      validation_report_path=str(root / "attempts" / f"attempt-{attempt:03d}" / "validation.json"),
+                                      semantic_validation_path=str(root / "attempts" / f"attempt-{attempt:03d}" / "semantic_validation.json"))
+                raise jobs.require_external(created)
             attempts = self.registry.specification_attempts(run_id)
         failure = {"classification": "SPECIFICATION_GENERATION_FAILURE", "strategy_id": strategy_id, "run_id": run_id,
                    "attempts": len(self.registry.specification_attempts(run_id)), "repair_attempts": max(0, len(self.registry.specification_attempts(run_id)) - 1),
@@ -263,6 +302,9 @@ ambiguity instead of guessing; such ambiguity must stop before approval.
         self._write_json(failure_path, failure)
         self.registry.save_specification_failure(run_id, strategy_id, failure, failure["final_reason"])
         raise RuntimeError(f"SPECIFICATION_GENERATION_FAILURE: {failure['final_reason']}")
+
+    def registry_external_required(self, run_id: str, job_id: str) -> ExternalSpecificationRequired:
+        return SpecificationJobService(self.registry_path).require_existing(run_id, job_id)
 
     @staticmethod
     def _load_spec(path: Path) -> StrategySpec:
@@ -273,10 +315,15 @@ ambiguity instead of guessing; such ambiguity must stop before approval.
         latest = attempts[-1] if attempts else None
         failure = self.registry.specification_failure(run_id)
         approval_available = bool(latest and latest["status"] == "VALID" and not failure)
-        return {"run_id": run_id, "attempt_count": len(attempts), "repair_attempt_count": max(0, len(attempts) - 1),
+        job = self.registry.get_latest_specification_job(run_id)
+        return {"run_id": run_id, "attempt_count": len(attempts), "candidate_attempt_count": len(attempts), "repair_attempt_count": max(0, len(attempts) - 1),
                 "latest_attempt": latest, "latest_validation_outcome": latest["status"] if latest else "NOT_STARTED",
+                "latest_schema_validation_outcome": "VALID" if latest and latest.get("validation_path") and Path(latest["validation_path"]).is_file() and not latest.get("error_summary") else ("INVALID" if latest else "NOT_STARTED"),
+                "latest_semantic_validation_outcome": "VALID" if latest and latest.get("semantic_validation_path") and Path(latest["semantic_validation_path"]).is_file() and not latest.get("error_summary") else ("INVALID" if latest else "NOT_STARTED"),
                 "blocking_ambiguities": self.registry.specification_ambiguities(run_id), "approval_available": approval_available,
-                "failure": failure}
+                "failure": failure, "current_specification_job": job, "specification_jobs": self.registry.specification_jobs(run_id),
+                "repair_budget_remaining": max(0, 2 - max(0, len(attempts) - 1)),
+                "next_command": f"py -m research_pipeline specification-executor run {run_id}" if job and job["status"].startswith("WAITING_EXTERNAL") else None}
 
     def specification_attempts(self, run_id: str) -> list[dict[str, Any]]:
         return self.registry.specification_attempts(run_id)
@@ -443,7 +490,7 @@ ambiguity instead of guessing; such ambiguity must stop before approval.
             immutable_verified = True
         return ApprovalResult(decision=decision, approved=True, note=note, strategy_id=strategy_id, version=current["version"], current_phase=PipelineState(current["current_phase"]), immutable_verified=immutable_verified)
 
-    def implementation_plan(self, strategy_id: str, repository_root: str, *, dry_run: bool = True) -> ImplementationPlan:
+    def implementation_plan(self, strategy_id: str, repository_root: str, *, dry_run: bool = True, worktree_suffix: str | None = None) -> ImplementationPlan:
         current = self.registry.get_strategy(strategy_id)
         if current["current_phase"] != PipelineState.IMPLEMENTATION.value:
             raise InvalidTransitionError(
@@ -451,7 +498,7 @@ ambiguity instead of guessing; such ambiguity must stop before approval.
             )
         spec = self.registry.get_specification(strategy_id)
         manager = WorktreeManager(repository_root)
-        plan = manager.plan(spec.strategy_id, spec.version, dry_run=dry_run)
+        plan = manager.plan(spec.strategy_id, spec.version, dry_run=dry_run, worktree_suffix=worktree_suffix)
         return plan.model_copy(update={"invariants": spec.invariants, "required_tests":[
             ["python", "-m", "pytest", "-q", "tests/research_pipeline"],
             ["python", "-m", "pytest", "-q", "tests/test_no_lookahead.py", "tests/test_replay.py"],

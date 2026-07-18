@@ -28,3 +28,8 @@ smithers.db-wal
 
 node_modules/
 research_runs/*
+
+# Research-pipeline runtime safety probes and preflight reports
+.research_pipeline/worktree-probes/
+.research_worktrees/
+research_registry/worktree_preflight/

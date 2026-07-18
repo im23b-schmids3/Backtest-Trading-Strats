@@ -711,6 +711,89 @@ def apply_migrations(connection) -> None:
             result_json TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS implementation_jobs (
+            run_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            specification_hash TEXT NOT NULL,
+            job_path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            result_path TEXT,
+            result_hash TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(run_id) REFERENCES master_runs(run_id)
+        );
+        CREATE TABLE IF NOT EXISTS specification_jobs (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            job_path TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            result_path TEXT,
+            result_hash TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS specification_jobs_run_attempt
+            ON specification_jobs(run_id, attempt);
+        CREATE TABLE IF NOT EXISTS specification_job_attempts (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            candidate_status TEXT NOT NULL,
+            draft_path TEXT,
+            draft_hash TEXT,
+            validation_path TEXT,
+            validation_hash TEXT,
+            semantic_validation_path TEXT,
+            semantic_validation_hash TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id),
+            FOREIGN KEY(run_id, job_id) REFERENCES specification_jobs(run_id, job_id)
+        );
+        CREATE TABLE IF NOT EXISTS specification_external_invocations (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            invocation_path TEXT NOT NULL,
+            invocation_hash TEXT NOT NULL,
+            exit_code INTEGER,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id),
+            FOREIGN KEY(run_id, job_id) REFERENCES specification_jobs(run_id, job_id)
+        );
+        CREATE TABLE IF NOT EXISTS specification_result_manifests (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            manifest_path TEXT NOT NULL,
+            manifest_hash TEXT NOT NULL,
+            extraction_path TEXT,
+            extraction_hash TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id),
+            FOREIGN KEY(run_id, job_id) REFERENCES specification_jobs(run_id, job_id)
+        );
+        CREATE TABLE IF NOT EXISTS specification_pause_signals (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            smithers_run_id TEXT,
+            event_name TEXT NOT NULL,
+            correlation_id TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id, event_name),
+            FOREIGN KEY(run_id, job_id) REFERENCES specification_jobs(run_id, job_id)
+        );
         """
     )
     connection.execute("CREATE TABLE IF NOT EXISTS research_schema_version (version INTEGER NOT NULL)")

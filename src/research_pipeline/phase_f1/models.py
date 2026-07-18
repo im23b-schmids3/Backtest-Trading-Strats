@@ -21,6 +21,14 @@ class MasterRunStatus(StrEnum):
     ABORTED = "ABORTED"
     FAILED = "FAILED"
     SPECIFICATION_GENERATION_FAILURE = "SPECIFICATION_GENERATION_FAILURE"
+    WAITING_EXTERNAL_SPECIFICATION_GENERATION = "WAITING_EXTERNAL_SPECIFICATION_GENERATION"
+    WAITING_EXTERNAL_SPECIFICATION_REPAIR = "WAITING_EXTERNAL_SPECIFICATION_REPAIR"
+    WAITING_SPECIFICATION_APPROVAL = "WAITING_SPECIFICATION_APPROVAL"
+    WAITING_EXTERNAL_IMPLEMENTATION = "WAITING_EXTERNAL_IMPLEMENTATION"
+    WAITING_EXTERNAL_CODEX = "WAITING_EXTERNAL_CODEX"
+    ORCHESTRATOR_COMPLETED = "ORCHESTRATOR_COMPLETED"
+    PIPELINE_COMPLETED = "PIPELINE_COMPLETED"
+    RESEARCH_COMPLETED = "RESEARCH_COMPLETED"
 
 
 MasterRunOutcome = MasterRunStatus
@@ -175,3 +183,11 @@ class MasterStatus(StrictModel):
     artifacts: list[ArtifactReference]
     report: dict[str, Any] | None = None
     mode: Literal["dry_run", "real_run"] = "dry_run"
+    pipeline_status: str = "ORCHESTRATOR_COMPLETED"
+    implementation_job_id: str | None = None
+    external_executor_required: bool = False
+    worktree_preflight: dict[str, Any] = Field(default_factory=dict)
+    codex_execution_status: str | None = None
+    implementation_test_status: str | None = None
+    b5_available: bool = False
+    next_command: str | None = None
