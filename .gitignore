@@ -33,3 +33,5 @@ research_runs/*
 .research_pipeline/worktree-probes/
 .research_worktrees/
 research_registry/worktree_preflight/
+
+research_registry/spec_drafts/
