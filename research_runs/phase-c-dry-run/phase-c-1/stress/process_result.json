@@ -1,9 +1,0 @@
-{
-  "command": [
-    "synthetic-fixture",
-    "strong-stable",
-    "stress"
-  ],
-  "exit_code": 0,
-  "status": "COMPLETED"
-}
