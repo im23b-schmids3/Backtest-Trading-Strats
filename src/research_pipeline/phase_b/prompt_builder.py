@@ -34,6 +34,11 @@ Python validator calculates and verifies the canonical hash. Do not calculate
 or guess the SHA-256 value yourself.
 If SPY is requested, explicitly state that it is the repository proxy and that
 existing Phase D futures mappings do not support SPY; do not invent a mapping.
+For ValueAreaTrap, use strategy_family exactly "value_area_trap_reference",
+market BTCUSDT and timeframe 5m. Require public Binance USD-M perpetual
+aggregate trades rather than substituting OHLCV. State that this is a
+US_CASH_WINDOW_PROXY research session, not CME RTH, and that all parameter
+families are immutable and not optimized.
 For the legacy one-hour same-bar RandomOpenTest compatibility description, use
 strategy_family exactly "f2_random_open_test". If the description explicitly
 requests fixed quantity, initial stop ticks, profit target ticks, or shared

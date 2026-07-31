@@ -1,0 +1,4 @@
+aggregate_trade_id,price,quantity,first_trade_id,last_trade_id,transact_time,is_buyer_maker,is_best_match
+1,100.00,0.100,1,1,1735831800000,false,true
+2,100.10,0.200,2,2,1735831860000,true,true
+3,100.20,0.150,3,3,1735831920000,false,true

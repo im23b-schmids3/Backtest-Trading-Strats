@@ -401,6 +401,26 @@ the repository-compatible 1-hour same-bar exit.
         return attempts[-1] if attempts else None
 
     def _dry_spec(self, workflow: WorkflowInput, strategy_id: str, version: str, ambiguities: list[str]) -> StrategySpec:
+        if strategy_id == "ValueAreaTrap":
+            raw_value_area: dict[str, Any] = {
+                "strategy_id": strategy_id, "version": version, "name": "ValueAreaTrap",
+                "description": "Research-only deterministic BTCUSDT aggregate-trade value-area trap baseline.",
+                "hypothesis": "Previous US cash-window value-area context plus a significant stop run, confirmed CVD divergence, and completed-bar return may identify a mean-reversion setup; no profitability claim is made.",
+                "strategy_family": "value_area_trap_reference", "markets": ["BTCUSDT"], "timeframes": ["5m"],
+                "long_rules": ["Confirm a stop run below prior VAL, bullish CVD divergence between delayed confirmed swing lows, then a completed close back inside value."],
+                "short_rules": ["Confirm a stop run above prior VAH, bearish CVD divergence between delayed confirmed swing highs, then a completed close back inside value."],
+                "entry_logic": "Propose a market entry only at the next available 5m bar open after the completed return bar; shared compliance evaluation may block it.",
+                "initial_stop_logic": "Use the full fakeout extreme plus or minus one configured profile bucket.",
+                "exit_logic": "Target prior-session POC; use versioned stop-first ambiguity handling and force flat at the US_CASH_WINDOW_PROXY boundary.",
+                "session_assumptions": ["Binance runs continuously; the research session label is US_CASH_WINDOW_PROXY, not CME RTH.", "America/New_York IANA time rules define 09:30-16:00 including daylight saving time.", "Previous valid-session profile levels remain fixed for the current session."],
+                "baseline_parameters": {"symbol": "BTCUSDT", "timeframe": "5m", "session_timezone": "America/New_York", "session_open": "09:30", "session_close": "16:00", "value_area_fraction": 0.70, "price_bucket_size": 10, "breakout_volume_multiplier": 1.5, "breakout_volume_lookback_bars": 10, "minimum_breakout_buckets": 1, "swing_left_bars": 2, "swing_right_bars": 2, "stop_buffer_buckets": 1, "target": "previous_session_poc", "maximum_trades_per_day": 1, "entry_execution": "next_bar_open", "same_bar_stop_target_policy": "stop_first", "quantity": "0.001", "minimum_quantity": "0.001", "quantity_step": "0.001", "price_tick": "0.10"},
+                "parameter_families": [{"name": "deterministic_baseline", "description": "All ValueAreaTrap baseline values are fixed research rules and cannot be optimized.", "baseline_value": "fixed", "value_type": "string", "allowed_min": None, "allowed_max": None, "allowed_values": ["fixed"], "optimization_order": 0, "maximum_rounds": 0, "mutable": False, "hypothesis_relevance": "Protects the non-optimized reference baseline."}],
+                "invariants": ["Previous-session profile levels are frozen intraday.", "No same-bar entry occurs at trigger close.", "Swings are confirmed only after two right bars close.", "CVD uses aggregate-trade aggressor classification.", "POC is the target and fakeout extreme plus/minus one bucket is the stop.", "All execution costs apply exactly once.", "No live orders or authenticated Binance access.", "Binance BTCUSDT results do not validate CME transferability.", "Alpha scenario output does not establish firm-rule compliance."],
+                "required_data": ["Manifest-backed Binance USD-M Futures BTCUSDT perpetual aggregate-trade parquet dataset; OHLCV substitution is prohibited."],
+                "known_limitations": ["Research-only BTCUSDT proxy study; no MES, MNQ, ES, or NQ claim.", "Alpha Zero 25K simulator is a configurable scenario model, not a broker or firm emulator.", *ambiguities],
+                "status": ApprovalStatus.DRAFT, "created_at": datetime.now(timezone.utc), "approved_at": None,
+            }
+            return self._validated_with_hash(raw_value_area)
         if strategy_id == "RandomOpenTest":
             reference_variant = any(term in f"{workflow.natural_language_description} {workflow.optional_notes or ''}".lower() for term in ("profit target", "fixed target", "fixed quantity", "stop in ticks", "initial stop"))
             if reference_variant:
@@ -596,14 +616,14 @@ the repository-compatible 1-hour same-bar exit.
             immutable_verified = True
         return ApprovalResult(decision=decision, approved=True, note=note, strategy_id=strategy_id, version=current["version"], current_phase=PipelineState(current["current_phase"]), immutable_verified=immutable_verified)
 
-    def implementation_plan(self, strategy_id: str, repository_root: str, *, dry_run: bool = True, worktree_suffix: str | None = None) -> ImplementationPlan:
+    def implementation_plan(self, strategy_id: str, repository_root: str, *, dry_run: bool = True, worktree_suffix: str | None = None, worktree_parent: str | Path | None = None) -> ImplementationPlan:
         current = self.registry.get_strategy(strategy_id)
         if current["current_phase"] != PipelineState.IMPLEMENTATION.value:
             raise InvalidTransitionError(
                 f"implementation planning requires IMPLEMENTATION, got {current['current_phase']}"
             )
         spec = self.registry.get_specification(strategy_id)
-        manager = WorktreeManager(repository_root)
+        manager = WorktreeManager(repository_root, worktree_parent)
         plan = manager.plan(spec.strategy_id, spec.version, dry_run=dry_run, worktree_suffix=worktree_suffix)
         return plan.model_copy(update={"invariants": spec.invariants, "required_tests":[
             ["python", "-m", "pytest", "-q", "tests/research_pipeline"],
