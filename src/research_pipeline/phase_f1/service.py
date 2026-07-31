@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import shutil
 import sys
 import time
@@ -45,6 +46,37 @@ class MasterPipelineService:
         self.repository_root = Path(repository_root).resolve()
 
     @staticmethod
+    def discover_registry_path(run_id: str, repository_root: str | Path = ".") -> Path | None:
+        """Find the durable registry recorded for a run when no override is supplied."""
+
+        root = Path(repository_root).expanduser().resolve()
+        candidates: list[Path] = []
+        for marker in sorted((root / "research_runs").glob("*/*/run/registry.json")):
+            try:
+                payload = json.loads(marker.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if payload.get("run_id") == run_id and payload.get("registry_path"):
+                candidates.append(Path(payload["registry_path"]).expanduser().resolve())
+        candidates.extend((root / ".tmp").glob("*.sqlite3"))
+        candidates.extend((root / "research_registry").glob("*.sqlite3"))
+        seen: set[Path] = set()
+        for candidate in candidates:
+            candidate = candidate.resolve()
+            if candidate in seen or not candidate.is_file():
+                continue
+            seen.add(candidate)
+            try:
+                uri = f"file:{candidate.as_posix()}?mode=ro"
+                with sqlite3.connect(uri, uri=True) as connection:
+                    row = connection.execute("SELECT 1 FROM master_runs WHERE run_id=? LIMIT 1", (run_id,)).fetchone()
+                if row:
+                    return candidate
+            except (OSError, sqlite3.Error):
+                continue
+        return None
+
+    @staticmethod
     def load_intake(path: str | Path) -> IntakeSpec:
         source = Path(path)
         raw = json.loads(source.read_text(encoding="utf-8")) if source.suffix.lower() == ".json" else yaml.safe_load(source.read_text(encoding="utf-8"))
@@ -56,9 +88,10 @@ class MasterPipelineService:
     def input_model(intake_path: str | Path, repository_root: str | Path, *, registry_path: str | Path | None = None,
                     dry_run: bool = True, implementation_enabled: bool = False, research_scenario: str = "strong-stable",
                     prop_scenario: str = "profitable", portfolio_scenario: str = "complementary",
-                    prop_product: str = "Alpha Futures Zero 25K", mode: str | None = None, allow_proxy_data: bool = False) -> MasterRunInput:
+                    prop_product: str = "Alpha Futures Zero 25K", mode: str | None = None, allow_proxy_data: bool = False,
+                    data_manifest_path: str | Path | None = None, worktree_parent: str | Path | None = None) -> MasterRunInput:
         selected_mode = mode or ("dry_run" if dry_run else "real_run")
-        return MasterRunInput(intake_path=str(Path(intake_path).resolve()), repository_root=str(Path(repository_root).resolve()), registry_path=str(Path(registry_path).resolve()) if registry_path else None, dry_run=selected_mode == "dry_run", implementation_enabled=implementation_enabled, research_scenario=research_scenario, prop_scenario=prop_scenario, portfolio_scenario=portfolio_scenario, prop_product=prop_product, mode=selected_mode, allow_proxy_data=allow_proxy_data)
+        return MasterRunInput(intake_path=str(Path(intake_path).resolve()), repository_root=str(Path(repository_root).resolve()), registry_path=str(Path(registry_path).resolve()) if registry_path else None, dry_run=selected_mode == "dry_run", implementation_enabled=implementation_enabled, research_scenario=research_scenario, prop_scenario=prop_scenario, portfolio_scenario=portfolio_scenario, prop_product=prop_product, mode=selected_mode, allow_proxy_data=allow_proxy_data, data_manifest_path=str(Path(data_manifest_path).resolve()) if data_manifest_path else None, worktree_parent=str(Path(worktree_parent).resolve()) if worktree_parent else None)
 
     def _input_hash(self, intake: IntakeSpec, options: MasterRunInput) -> str:
         return stable_hash({"intake": intake.model_dump(mode="json"), "options": options.model_dump(mode="json", exclude={"intake_path"})})
@@ -97,7 +130,10 @@ class MasterPipelineService:
         run = self.registry.get_master_run(run_id); state = run["resume_state_json"]; spec = self.registry.get_specification(state["strategy_id"])
         options = MasterRunInput.model_validate(state["options"] | {"intake_path": state["intake_path"]})
         root = Path(repository_root).resolve() if repository_root else self.repository_root
-        adapter = default_adapter_registry().resolve(spec, root)
+        adapter_kwargs = {}
+        if spec.strategy_family == "value_area_trap_reference":
+            adapter_kwargs["manifest_path"] = options.data_manifest_path
+        adapter = default_adapter_registry().resolve(spec, root, **adapter_kwargs)
         health = adapter.health(spec)
         self.registry.save_strategy_adapter(adapter.identity.model_dump(mode="json"), adapter.capabilities.model_dump(mode="json"), health.model_dump(mode="json"))
         if not health.healthy: raise RealAdapterRequired("REAL_ADAPTER_REQUIRED: adapter health check failed")
@@ -145,6 +181,10 @@ class MasterPipelineService:
             pass
         intake_path = root / "run" / "intake.json"
         self._write_json(intake_path, intake.model_dump(mode="json"))
+        self._write_json(root / "run" / "registry.json", {
+            "run_id": run_id,
+            "registry_path": str(self.registry_path.resolve()),
+        })
         self.registry.save_master_run(run_id, strategy_id, None, input_hash, MasterStep.SPECIFICATION.value, MasterRunStatus.WAITING_FOR_APPROVAL.value, "PENDING" if not intake.ambiguities and not intake.missing_information else "MANUAL_REVIEW_REQUIRED", str(root), {"options": options.model_dump(mode="json"), "intake_path": str(intake_path), "intake": intake.model_dump(mode="json")})
         self.registry.add_master_journal(run_id, MasterStep.INTAKE.value, "INTAKE_ACCEPTED", {"input_hash": input_hash, "intake_artifact": str(intake_path.resolve()), "manual_review_required": bool(intake.ambiguities or intake.missing_information)})
         if intake.ambiguities or intake.missing_information:
@@ -398,9 +438,18 @@ class MasterPipelineService:
         if run["current_step"] == MasterStep.COMPLETED.value: return self.status(run_id)
         options = MasterRunInput.model_validate(run["resume_state_json"]["options"] | {"intake_path": run["resume_state_json"]["intake_path"]})
         try:
+            step_before_implementation = run["current_step"]
             self._implementation(run_id, options)
             current = self.registry.get_master_run(run_id)
             if current["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value:
+                return self.status(run_id)
+            # External Codex completion is an auditable boundary.  Persist the
+            # implementation artifacts and stop here; the next resume runs
+            # implementation verification and only then may enter B.5.
+            if (options.mode == "real_run"
+                    and step_before_implementation == MasterStep.IMPLEMENTATION.value
+                    and current["current_step"] == MasterStep.IMPLEMENTATION_VERIFICATION.value
+                    and current["outcome"] == MasterRunStatus.IMPLEMENTATION_VERIFICATION_REQUIRED.value):
                 return self.status(run_id)
             self._technical_verification(run_id, options)
             self._research(run_id, options)
@@ -486,8 +535,9 @@ class MasterPipelineService:
             self.registry.save_worktree_metadata(run_id, {"strategy_id": spec.strategy_id, "strategy_version": spec.version, "base_commit": manifest.base_commit,
                                                            "implementation_commit": manifest.implementation_commit, "branch": manifest.branch, "worktree_path": manifest.worktree_path, "status": "EXTERNAL_VALIDATED"})
             self._record_phase(run_id, MasterStep.IMPLEMENTATION, {"mode": "external_codex", "adapter": adapter.identity.model_dump(mode="json"), "manifest": manifest.model_dump(mode="json"), "completion": completion}, root / "implementation" / "result.json")
-            self._set_step(run_id, MasterStep.IMPLEMENTATION_VERIFICATION, MasterRunStatus.WAITING_FOR_APPROVAL,
-                           implementation_job_id=self.registry.get_implementation_job(run_id)["job_id"], external_executor_required=False)
+            self._set_step(run_id, MasterStep.IMPLEMENTATION_VERIFICATION, MasterRunStatus.IMPLEMENTATION_VERIFICATION_REQUIRED,
+                           implementation_job_id=self.registry.get_implementation_job(run_id)["job_id"], external_executor_required=False,
+                           next_command=f"py -m research_pipeline resume {run_id}")
             return
         plan = phase_b.implementation_plan(strategy_id, str(self.repository_root), dry_run=options.dry_run)
         prompt = phase_b.build_implementation_prompt(strategy_id, plan)
@@ -510,7 +560,7 @@ class MasterPipelineService:
             artifact = adapter.run_baseline(spec, self._real_split(adapter, spec), root / "technical_verification" / "baseline")
             verification = VerificationService(self.registry_path).run(strategy_id, artifact.diagnostic_manifest_path or "")
             self._record_phase(run_id, MasterStep.IMPLEMENTATION_VERIFICATION, {"tests": test.model_dump(mode="json"), "adapter": adapter.identity.model_dump(mode="json"), "artifact": artifact.model_dump(mode="json")}, root / "verification" / "implementation.json")
-            verification = {**verification, "data": [item.model_dump(mode="json") for item in adapter.data_availability(spec)], "adapter": adapter.identity.model_dump(mode="json")}
+            verification = {**verification, "execution_mode": "REAL_DATA", "data": [item.model_dump(mode="json") for item in adapter.data_availability(spec)], "adapter": adapter.identity.model_dump(mode="json")}
             self._record_phase(run_id, MasterStep.TECHNICAL_VERIFICATION, verification, root / "verification" / "technical.json")
             if verification.get("outcome") != "VERIFIED": raise SpecificationValidationError(f"real B.5 verification failed: {verification.get('outcome')}")
             self.registry.save_baseline(strategy_id, spec.version, artifact.experiment_id, artifact.model_dump(mode="json"), verification["outcome"], [])
@@ -553,6 +603,7 @@ class MasterPipelineService:
             else:
                 raise SpecificationValidationError("non-dry F1 runs require an approved chronological split")
         service.start(strategy_id, f"master-{run_id}"); result = self._drive_research(service, strategy_id)
+        result = {**result, "execution_mode": "REAL_DATA" if options.mode == "real_run" else "FIXTURE"}
         self._record_phase(run_id, MasterStep.RESEARCH, result, root / "research" / "result.json")
         state = self.registry.get_strategy(strategy_id)["current_phase"]
         if state not in {PipelineState.ACCEPTED.value, PipelineState.INSUFFICIENT_EVIDENCE.value, PipelineState.REJECTED.value}: raise SpecificationValidationError(f"research did not reach a terminal classification: {state}")
@@ -601,7 +652,7 @@ class MasterPipelineService:
         service.start(strategy_id, f"master-prop-{run_id}"); rules = service.verify_rules(strategy_id, options.prop_product); contracts = service.verify_contracts(strategy_id)
         if rules.get("status") != "VERIFIED" or contracts.get("errors"): raise SpecificationValidationError("prop entry verification failed")
         service.reconcile(strategy_id); service.run_risk(strategy_id, options.prop_product); service.run_scenarios(strategy_id, options.prop_product); review = service.economics(strategy_id)
-        result_payload = {"review": review.model_dump(mode="json"), "status": service.status(strategy_id)}
+        result_payload = {"execution_mode": "REAL_DATA" if options.mode == "real_run" else "FIXTURE", "review": review.model_dump(mode="json"), "status": service.status(strategy_id)}
         if options.mode == "real_run" and real_adapter is not None:
             candidate = self.registry.get_candidate(strategy_id); spec = self.registry.get_specification(strategy_id); candidate_hash = candidate["candidate_hash"]
             events = [item.model_dump(mode="json") for item in real_adapter.phase_d_export(spec, candidate_hash)]
@@ -616,7 +667,7 @@ class MasterPipelineService:
         if self._success_phase(run_id, MasterStep.PORTFOLIO): return
         run = self.registry.get_master_run(run_id); strategy_id = run["resume_state_json"]["strategy_id"]; root = Path(run["root_path"])
         if self.registry.get_strategy(strategy_id)["current_phase"] != PipelineState.ACCEPTED.value:
-            result = {"classification": "NOT_ELIGIBLE", "eligible_strategy_ids": [], "reason": "Phase C did not produce an accepted candidate; portfolio evaluation was not attempted.", "scenario": options.portfolio_scenario}
+            result = {"execution_mode": "REAL_DATA" if options.mode == "real_run" else "FIXTURE", "classification": "NOT_ELIGIBLE", "eligible_strategy_ids": [], "reason": "Phase C did not produce an accepted candidate; portfolio evaluation was not attempted.", "scenario": options.portfolio_scenario}
             self._record_phase(run_id, MasterStep.PORTFOLIO, result, root / "portfolio" / "result.json")
             self._set_step(run_id, MasterStep.FINAL_REPORT, MasterRunStatus.WAITING_FOR_APPROVAL)
             return
@@ -646,7 +697,14 @@ class MasterPipelineService:
         classification = FinalClassification.REJECTED if strategy["current_phase"] == PipelineState.REJECTED.value else self._classification(research.get("classification"), prop_classification, portfolio.get("classification"), real_mode=options.mode == "real_run")
         artifacts = [ArtifactReference(phase=item["phase"], path=item["artifact_path"], artifact_type=item["artifact_type"], sha256=item["artifact_hash"]) for item in self.registry.master_artifacts(run_id)]
         research_phase = phase_results.get(MasterStep.RESEARCH.value, {}) or {}
-        report = FinalReport(run_id=run_id, strategy_id=strategy_id, strategy_version=strategy["version"], classification=classification, specification={"specification": spec.model_dump(mode="json"), "source": state.get("specification_path")}, implementation_summary=phase_results.get(MasterStep.IMPLEMENTATION.value, {}) or {}, verification_summary={"implementation": phase_results.get(MasterStep.IMPLEMENTATION_VERIFICATION.value, {}) or {}, "technical": phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value, {}) or {}}, research_summary=research_phase, prop_summary=phase_results.get(MasterStep.PROP.value, {}) or {}, portfolio_summary=portfolio or {}, final_recommendation=self._recommendation(classification), known_limitations=spec.known_limitations + (["Phase F1 portfolio evaluation requires two independently eligible strategies."] if options.dry_run else []), implementation_variant="1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else None, confidence="SYNTHETIC_FIXTURE" if options.dry_run else "REAL_LOCAL_DATA_DEMONSTRATION", artifacts=artifacts, hashes={"specification_hash": spec.specification_hash, "input_hash": run["input_hash"]}, phase_timings=[PhaseTiming(phase=item["phase"], status=item["status"], started_at=item["started_at"], ended_at=item["ended_at"], duration_ms=item["duration_ms"], result_hash=item["result_hash"], artifact_paths=item["artifact_paths_json"]) for item in self.registry.master_phase_results(run_id)], generated_at=datetime.now(timezone.utc), mode=options.mode, intake_summary=state.get("intake", {}), adapter_validation=phase_results.get(MasterStep.IMPLEMENTATION.value, {}).get("adapter", {}) if phase_results.get(MasterStep.IMPLEMENTATION.value) else {}, data_availability=phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value, {}).get("data", []) if phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value) else [], baseline_summary=research_phase.get("baseline", {}) or {}, parameter_research_summary=research_phase, frozen_candidate_summary=research_phase.get("candidate", {}) or {}, walk_forward_summary=research_phase.get("walk_forward", {}) or {}, holdout_summary=research_phase.get("holdout", {}) or {}, stress_summary=research_phase.get("stress", {}) or {}, throughput_summary=research_phase.get("throughput", {}) or {}, futures_prop_summary=phase_results.get(MasterStep.PROP.value, {}) or {}, portfolio_eligibility=portfolio or {}, git_review=self.registry.get_worktree_metadata(run_id) or {})
+        report_hashes = {"specification_hash": spec.specification_hash, "input_hash": run["input_hash"]}
+        baseline_artifact = (research_phase.get("baseline") or {}).get("artifact_json") or {}
+        baseline_metrics = baseline_artifact.get("metrics") or {}
+        for key in ("policy_hash", "compliance_policy_hash", "execution_cost_configuration_hash"):
+            if baseline_metrics.get(key):
+                report_hashes[key] = baseline_metrics[key]
+        implementation_variant = "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else "RandomOpenTest deterministic fixed-quantity reference adapter" if spec.strategy_family == "f2_random_open_reference" else None
+        report = FinalReport(run_id=run_id, strategy_id=strategy_id, strategy_version=strategy["version"], classification=classification, specification={"specification": spec.model_dump(mode="json"), "source": state.get("specification_path")}, implementation_summary=phase_results.get(MasterStep.IMPLEMENTATION.value, {}) or {}, verification_summary={"implementation": phase_results.get(MasterStep.IMPLEMENTATION_VERIFICATION.value, {}) or {}, "technical": phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value, {}) or {}}, research_summary=research_phase, prop_summary=phase_results.get(MasterStep.PROP.value, {}) or {}, portfolio_summary=portfolio or {}, final_recommendation=self._recommendation(classification), known_limitations=spec.known_limitations + (["Phase F1 portfolio evaluation requires two independently eligible strategies."] if options.dry_run else []), implementation_variant=implementation_variant, confidence="SYNTHETIC_FIXTURE" if options.dry_run else "REAL_LOCAL_DATA_DEMONSTRATION", artifacts=artifacts, hashes=report_hashes, phase_timings=[PhaseTiming(phase=item["phase"], status=item["status"], started_at=item["started_at"], ended_at=item["ended_at"], duration_ms=item["duration_ms"], result_hash=item["result_hash"], artifact_paths=item["artifact_paths_json"]) for item in self.registry.master_phase_results(run_id)], generated_at=datetime.now(timezone.utc), mode=options.mode, intake_summary=state.get("intake", {}), adapter_validation=phase_results.get(MasterStep.IMPLEMENTATION.value, {}).get("adapter", {}) if phase_results.get(MasterStep.IMPLEMENTATION.value) else {}, data_availability=phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value, {}).get("data", []) if phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value) else [], baseline_summary=research_phase.get("baseline", {}) or {}, parameter_research_summary=research_phase, frozen_candidate_summary=research_phase.get("candidate", {}) or {}, walk_forward_summary=research_phase.get("walk_forward", {}) or {}, holdout_summary=research_phase.get("holdout", {}) or {}, stress_summary=research_phase.get("stress", {}) or {}, throughput_summary=research_phase.get("throughput", {}) or {}, futures_prop_summary=phase_results.get(MasterStep.PROP.value, {}) or {}, portfolio_eligibility=portfolio or {}, git_review=self.registry.get_worktree_metadata(run_id) or {})
         report_path = root / "report" / "final_report.json"; report_hash = self._write_json(report_path, report.model_dump(mode="json")); self.registry.save_master_report(run_id, str(report_path.resolve()), report_hash, report.model_dump(mode="json")); self._record_artifact(run_id, MasterStep.FINAL_REPORT, report_path, "final-report")
         archive_manifest = root / "archive" / "manifest.json"; self._write_json(archive_manifest, {"run_id": run_id, "report_path": str(report_path.resolve()), "report_hash": report_hash, "artifact_count": len(artifacts)}); self._record_phase(run_id, MasterStep.ARCHIVE, {"report_path": str(report_path.resolve()), "report_hash": report_hash, "archive_manifest": str(archive_manifest.resolve())}, root / "archive" / "result.json")
 
@@ -681,7 +739,7 @@ class MasterPipelineService:
         state = run["resume_state_json"]
         job_status = job["status"] if job else None
         waiting_spec = run["outcome"] in {MasterRunStatus.WAITING_EXTERNAL_SPECIFICATION_GENERATION.value, MasterRunStatus.WAITING_EXTERNAL_SPECIFICATION_REPAIR.value}
-        pipeline_status = "PIPELINE_COMPLETED" if run["current_step"] == MasterStep.COMPLETED.value and run["outcome"] == MasterRunStatus.SUCCESS.value else (run["outcome"] if waiting_spec else ("WAITING_EXTERNAL_CODEX" if run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value else ("IMPLEMENTATION_FAILED" if run["outcome"] == MasterRunStatus.IMPLEMENTATION_FAILURE.value else "ORCHESTRATOR_COMPLETED")))
+        pipeline_status = "PIPELINE_COMPLETED" if run["current_step"] == MasterStep.COMPLETED.value and run["outcome"] == MasterRunStatus.SUCCESS.value else (run["outcome"] if waiting_spec else ("WAITING_EXTERNAL_CODEX" if run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value else ("IMPLEMENTATION_VERIFICATION_REQUIRED" if run["outcome"] == MasterRunStatus.IMPLEMENTATION_VERIFICATION_REQUIRED.value else ("IMPLEMENTATION_FAILED" if run["outcome"] == MasterRunStatus.IMPLEMENTATION_FAILURE.value else "ORCHESTRATOR_COMPLETED"))))
         return MasterStatus(run_id=run_id, strategy_id=run["strategy_id"], strategy_version=run["strategy_version"], current_step=MasterStep(run["current_step"]), outcome=MasterRunStatus(run["outcome"]), approval_status=run["approval_status"], root_path=run["root_path"], phase_results=self.registry.master_phase_results(run_id), journal_entries=len(self.registry.master_journal(run_id)), artifacts=artifacts, report=self.registry.master_report(run_id), mode=mode, pipeline_status=pipeline_status, implementation_job_id=job["job_id"] if job else state.get("implementation_job_id"), external_executor_required=waiting_spec or run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value, worktree_preflight=state.get("worktree_preflight", {}), codex_execution_status=job_status, implementation_test_status=job_status if job_status in {"INGESTED", "FAILED_REQUIRED_TESTS"} else None, b5_available=bool(self.registry.get_master_phase_result(run_id, MasterStep.TECHNICAL_VERIFICATION.value)), next_command=state.get("next_command") or (f"py -m research_pipeline specification-executor run {run_id}" if waiting_spec else (f"py -m research_pipeline codex-executor run {run_id}" if run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value else None))).model_dump(mode="json")
 
     def report(self, run_id: str) -> dict:

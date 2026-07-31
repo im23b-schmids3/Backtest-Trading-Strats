@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,13 @@ from ..registry.database import Database
 from ..registry.repositories import Registry
 from ..repository.worktree_preflight import run_worktree_preflight
 from ..runners.codex_runner import CodexRunner
+from ..runners.isolated_environment import (
+    IsolationError,
+    build_isolated_environment,
+    import_origin_preflight,
+    prepare_required_fixtures,
+    sanitized_environment_report,
+)
 from ..runners.test_runner import DeterministicTestRunner
 from ..runners.worktree_manager import WorktreeError, WorktreeManager
 from .jobs import ImplementationJobService
@@ -55,6 +63,9 @@ class ExternalCodexExecutor:
             "scope_validation": result / "scope_validation.json",
             "test_results": result / "test_results.json",
             "codex_invocation": result / "codex_invocation.json",
+            "environment_preflight": result / "environment_preflight.json",
+            "import_origin": result / "import_origin.json",
+            "fixture_preflight": result / "fixture_preflight.json",
             "output_hash_manifest": result / "output_hash_manifest.json",
             "completion": result / "completion.json",
         }
@@ -71,7 +82,8 @@ class ExternalCodexExecutor:
             raise ValueError("approved worktree root is missing")
         repository = Path(request.repository_root).resolve()
         worktree = Path(request.approved_worktree_root).resolve()
-        expected_parent = (repository.parent / ".research_worktrees").resolve()
+        configured_parent = request.provenance.get("worktree_parent")
+        expected_parent = Path(configured_parent).resolve() if configured_parent else (repository.parent / ".research_worktrees").resolve()
         if worktree.parent != expected_parent or repository == worktree or expected_parent == repository:
             raise ValueError("unsafe isolated worktree path")
 
@@ -144,9 +156,39 @@ class ExternalCodexExecutor:
         except WorktreeError as exc:
             completion = self._finish(request, job_dir, CodexCompletionStatus.FAILED_WORKTREE_CREATION, stderr_summary=redact_secrets(str(exc)))
             return completion.model_dump(mode="json")
+        try:
+            environment, environment_report = build_isolated_environment(
+                plan.worktree_path,
+                repository_root=request.repository_root,
+            )
+            _write(self._paths(job_dir)["environment_preflight"], sanitized_environment_report(environment_report))
+            fixture_report = prepare_required_fixtures(request.repository_root, plan.worktree_path)
+            _write(self._paths(job_dir)["fixture_preflight"], fixture_report)
+            origin_report = import_origin_preflight(plan.worktree_path, environment=environment)
+            _write(self._paths(job_dir)["import_origin"], origin_report)
+        except (IsolationError, OSError, ValueError) as exc:
+            completion = self._finish(
+                request,
+                job_dir,
+                CodexCompletionStatus.FAILED_WORKTREE_PREFLIGHT,
+                stderr_summary=redact_secrets(str(exc)),
+                worktree_path=plan.worktree_path,
+                base_commit=request.base_commit,
+                resulting_commit=manager.current_commit(plan.worktree_path),
+                artifact_paths={key: str(path) for key, path in self._paths(job_dir).items() if key in {"environment_preflight", "fixture_preflight", "import_origin"} and path.is_file()},
+            )
+            return completion.model_dump(mode="json")
         started = time.monotonic()
         prompt = (job_dir / "prompt.md").read_text(encoding="utf-8")
-        codex = self.codex.run(prompt, plan.worktree_path, sandbox="workspace-write", timeout_seconds=request.timeout_seconds, dry_run=False)
+        codex = self.codex.run(
+            prompt,
+            plan.worktree_path,
+            sandbox="workspace-write",
+            timeout_seconds=request.timeout_seconds,
+            dry_run=False,
+            environment=environment,
+            source_repository_root=request.repository_root,
+        )
         invocation_path = self._paths(job_dir)["codex_invocation"]
         _write(invocation_path, codex.model_dump(mode="json"))
         if not codex.success:
@@ -167,7 +209,21 @@ class ExternalCodexExecutor:
             return completion.model_dump(mode="json")
         test_results = []
         for index, command in enumerate(request.required_tests):
-            test = self.tests.run(plan.worktree_path, command, dry_run=False, report_path=job_dir / "result" / f"test-{index}.txt")
+            # Keep pytest's temporary Git fixtures outside the long immutable
+            # research-run path.  On Windows, nested temporary repositories
+            # can otherwise make Git reject the synthetic test repo with
+            # '$GIT_DIR' too big even though the worktree itself is valid.
+            run_token = hashlib.sha256(request.run_id.encode("utf-8")).hexdigest()[:12]
+            basetemp = Path(tempfile.gettempdir()) / "research_pipeline_external" / f"{run_token}-{request.job_id}" / f"test-{index}"
+            test = self.tests.run(
+                plan.worktree_path,
+                command,
+                dry_run=False,
+                report_path=job_dir / "result" / f"test-{index}.txt",
+                source_repository_root=request.repository_root,
+                environment=environment,
+                basetemp=basetemp,
+            )
             test_results.append(test.model_dump(mode="json"))
         _write(self._paths(job_dir)["test_results"], test_results)
         passed = all(item["passed"] for item in test_results)

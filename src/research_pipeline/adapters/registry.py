@@ -65,5 +65,6 @@ def default_adapter_registry() -> AdapterRegistry:
     registry = AdapterRegistry()
     registry.register_family("f2_native_demo", lambda spec, root: NativeRepositoryAdapter(spec, root, source_symbols={"SPX": "SPY"}))
     registry.register_family("f2_random_open_test", lambda spec, root: NativeRepositoryAdapter(spec, root, source_symbols={"SPY": "SPY"}))
+    registry.register_family("f2_random_open_reference", lambda spec, root: NativeRepositoryAdapter(spec, root, source_symbols={"SPY": "SPY"}))
     registry.register_family("f2_native", lambda spec, root: NativeRepositoryAdapter(spec, root))
     return registry

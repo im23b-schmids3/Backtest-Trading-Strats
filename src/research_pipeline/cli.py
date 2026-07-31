@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+import pyarrow.parquet as pq
 from pydantic import ValidationError
 
 from .config.loader import load_pipeline_config
@@ -28,6 +29,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--registry", default=os.environ.get("RESEARCH_PIPELINE_REGISTRY", "research_registry/research_pipeline.sqlite3"))
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init")
+    value_area = sub.add_parser("value-area-trap", help="public BTCUSDT aggregate-trade research data utilities")
+    value_area_sub = value_area.add_subparsers(dest="value_area_command", required=True)
+    command = value_area_sub.add_parser("download"); command.add_argument("month", help="YYYY-MM"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--allow-network", action="store_true")
+    command = value_area_sub.add_parser("import-archive"); command.add_argument("archive"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap")
+    command = value_area_sub.add_parser("import-calendar"); command.add_argument("source"); command.add_argument("output")
+    command = value_area_sub.add_parser("validate-data"); command.add_argument("parquet")
     repository = sub.add_parser("repository", help="repository safety checks")
     repository_sub = repository.add_subparsers(dest="repository_command", required=True)
     command = repository_sub.add_parser("worktree-preflight")
@@ -51,7 +58,7 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("new-strategy"); command.add_argument("path")
     sub.add_parser("list-strategies")
     command = sub.add_parser("status"); command.add_argument("strategy_id")
-    command = sub.add_parser("run", help="Phase F1/F2 end-to-end master pipeline"); command.add_argument("strategy_file"); command.add_argument("--repository-root", default="."); command.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True); command.add_argument("--mode", choices=["dry_run", "real_run"]); command.add_argument("--prebuilt-spec"); command.add_argument("--implementation-enabled", action="store_true"); command.add_argument("--allow-proxy-data", action="store_true"); command.add_argument("--research-scenario", default="strong-stable"); command.add_argument("--prop-scenario", default="profitable"); command.add_argument("--portfolio-scenario", default="complementary"); command.add_argument("--product", default="Alpha Futures Zero 25K")
+    command = sub.add_parser("run", help="Phase F1/F2 end-to-end master pipeline"); command.add_argument("strategy_file"); command.add_argument("--repository-root", default="."); command.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True); command.add_argument("--mode", choices=["dry_run", "real_run"]); command.add_argument("--prebuilt-spec"); command.add_argument("--implementation-enabled", action="store_true"); command.add_argument("--allow-proxy-data", action="store_true"); command.add_argument("--data-manifest", dest="data_manifest_path"); command.add_argument("--worktree-parent", dest="worktree_parent"); command.add_argument("--research-scenario", default="strong-stable"); command.add_argument("--prop-scenario", default="profitable"); command.add_argument("--portfolio-scenario", default="complementary"); command.add_argument("--product", default="Alpha Futures Zero 25K")
     command = sub.add_parser("resume", help="resume a Phase F1 master run"); command.add_argument("run_id"); command.add_argument("--repository-root", default=".")
     command = sub.add_parser("approve", help="approve or reject a Phase F1 generated specification"); command.add_argument("run_id"); command.add_argument("--decision", choices=["APPROVE", "REJECT"], default="APPROVE"); command.add_argument("--note")
     command = sub.add_parser("report", help="show a Phase F1 final report"); command.add_argument("run_id")
@@ -150,6 +157,52 @@ def main(argv: list[str] | None = None) -> int:
         registry = controller.registry
         if args.command == "init":
             print(f"initialized registry: {Path(args.registry)}")
+        elif args.command == "value-area-trap":
+            if args.value_area_command == "download":
+                from .value_area_trap.data import AggregateTradeImporter
+                importer = AggregateTradeImporter(args.cache_root)
+                path = importer.download_month(args.symbol, args.month, allow_network=args.allow_network)
+                _print({"archive": str(path.resolve()), "source": "Binance USD-M Futures public historical archive", "network_used": True})
+            elif args.value_area_command == "import-archive":
+                from .value_area_trap.data import AggregateTradeImporter
+                importer = AggregateTradeImporter(args.cache_root)
+                records = importer.records_from_archive(args.archive)
+                parquet, manifest = importer.ingest_records(records, symbol=args.symbol, source_files=[str(Path(args.archive).resolve())])
+                _print({"parquet": str(parquet.resolve()), "manifest": manifest.model_dump(mode="json")})
+            elif args.value_area_command == "import-calendar":
+                from .value_area_trap.alpha_zero import import_usd_calendar
+                _print(import_usd_calendar(args.source, args.output).model_dump(mode="json"))
+            else:
+                from .value_area_trap.data import AggregateTradeManifest, PARQUET_SCHEMA
+                parquet = Path(args.parquet).resolve(); manifest_path = parquet.with_name("manifest.json")
+                report = {"path": str(parquet), "valid": False, "row_count": None, "dataset_hash": None, "schema_version": None, "errors": [], "warnings": []}
+                try:
+                    if not parquet.is_file():
+                        raise ValueError(f"aggregate-trade parquet does not exist: {parquet}")
+                    if not manifest_path.is_file():
+                        raise ValueError(f"adjacent aggregate-trade manifest does not exist: {manifest_path}")
+                    manifest = AggregateTradeManifest.model_validate(json.loads(manifest_path.read_text(encoding="utf-8")))
+                    report.update({"row_count": manifest.row_count, "dataset_hash": manifest.normalized_dataset_hash, "schema_version": manifest.schema_version})
+                    parquet_file = pq.ParquetFile(parquet)
+                    actual_schema = parquet_file.schema_arrow
+                    if actual_schema.names != list(PARQUET_SCHEMA.names):
+                        raise ValueError(f"malformed aggregate-trade schema: expected columns {list(PARQUET_SCHEMA.names)}, detected {actual_schema.names}")
+                    actual_rows = parquet_file.metadata.num_rows
+                    if actual_rows != manifest.row_count:
+                        raise ValueError(f"row count mismatch: manifest={manifest.row_count}, parquet={actual_rows}")
+                    report["valid"] = True
+                except (OSError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+                    if isinstance(exc, ValidationError):
+                        details = "; ".join(
+                            f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
+                            for item in exc.errors()
+                        )
+                        report["errors"] = [f"manifest validation error: {details}"]
+                    else:
+                        report["errors"] = [str(exc)]
+                    _print(report)
+                    return 2
+                _print(report)
         elif args.command == "repository":
             from .repository.worktree_preflight import run_worktree_preflight
             report = run_worktree_preflight(args.repository_root, max_path_length=args.max_path_length, probe=args.probe)
@@ -171,12 +224,16 @@ def main(argv: list[str] | None = None) -> int:
                 _print(controller.status(args.strategy_id))
             except ResearchPipelineError:
                 from .phase_f1.service import MasterPipelineService
-                _print(MasterPipelineService(args.registry).status(args.strategy_id))
+                registry_path = args.registry
+                default_registry = os.environ.get("RESEARCH_PIPELINE_REGISTRY", "research_registry/research_pipeline.sqlite3")
+                if Path(registry_path).resolve() == Path(default_registry).resolve():
+                    registry_path = MasterPipelineService.discover_registry_path(args.strategy_id) or registry_path
+                _print(MasterPipelineService(registry_path).status(args.strategy_id))
         elif args.command == "run":
             from .phase_f1.service import MasterPipelineService
             service = MasterPipelineService(args.registry, args.repository_root)
             selected_mode = args.mode or ("dry_run" if args.dry_run else "real_run")
-            options = service.input_model(args.strategy_file, args.repository_root, registry_path=args.registry, dry_run=selected_mode == "dry_run", mode=selected_mode, allow_proxy_data=args.allow_proxy_data, implementation_enabled=args.implementation_enabled, research_scenario=args.research_scenario, prop_scenario=args.prop_scenario, portfolio_scenario=args.portfolio_scenario, prop_product=args.product)
+            options = service.input_model(args.strategy_file, args.repository_root, registry_path=args.registry, dry_run=selected_mode == "dry_run", mode=selected_mode, allow_proxy_data=args.allow_proxy_data, data_manifest_path=args.data_manifest_path, worktree_parent=args.worktree_parent, implementation_enabled=args.implementation_enabled, research_scenario=args.research_scenario, prop_scenario=args.prop_scenario, portfolio_scenario=args.portfolio_scenario, prop_product=args.product)
             if args.prebuilt_spec: options = options.model_copy(update={"prebuilt_spec_path": str(Path(args.prebuilt_spec).resolve())})
             _print(service.start(options))
         elif args.command == "resume":

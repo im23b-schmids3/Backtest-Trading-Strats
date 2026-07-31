@@ -1,0 +1,7 @@
+{
+  "strategy_name": "RandomOpenTest",
+  "description": "RandomOpenTest uses fixed quantity, initial stop ticks, fixed profit target ticks, and shared session forced-flat behavior as a deterministic integration test. It is not expected to be profitable.",
+  "markets": ["SPY"],
+  "timeframes": ["1h"],
+  "optional_notes": "Use the existing repository-compatible SPY proxy. Research-only; never submit live broker orders."
+}

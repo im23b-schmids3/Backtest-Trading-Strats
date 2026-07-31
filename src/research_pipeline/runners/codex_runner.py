@@ -10,6 +10,7 @@ from typing import Callable
 
 from ..phase_b.models import CodexExecutionResult
 from ..phase_b.redaction import redact_secrets
+from .isolated_environment import build_isolated_environment
 
 
 class CodexRunner:
@@ -20,10 +21,17 @@ class CodexRunner:
         self.run_process = run_process or subprocess.run
 
     def run(self, prompt: str, cwd: str | Path, *, sandbox: str = "read-only", timeout_seconds: int = 900,
-            dry_run: bool = True, output_last_message: str | Path | None = None) -> CodexExecutionResult:
+            dry_run: bool = True, output_last_message: str | Path | None = None,
+            environment: dict[str, str] | None = None,
+            source_repository_root: str | Path | None = None) -> CodexExecutionResult:
         if sandbox not in {"read-only", "workspace-write"}:
             raise ValueError("Phase B Codex sandbox must be read-only or workspace-write")
         root = Path(cwd).resolve()
+        process_environment, _ = build_isolated_environment(
+            root,
+            repository_root=source_repository_root or root,
+            base_environment=environment,
+        )
         command = [self.executable or "codex", "exec", "--sandbox", sandbox, "--cd", str(root)]
         if output_last_message:
             command.extend(["--output-last-message", str(Path(output_last_message).resolve())])
@@ -37,7 +45,8 @@ class CodexRunner:
         started = time.monotonic()
         try:
             process_options = dict(cwd=str(root), input=prompt, capture_output=True, text=True,
-                                    encoding="utf-8", errors="replace", timeout=timeout_seconds, shell=False)
+                                    encoding="utf-8", errors="replace", timeout=timeout_seconds, shell=False,
+                                    env=process_environment)
             # Avoid opening a console window for the external executor on
             # Windows.  Test doubles often expose a narrower signature, so
             # only pass the platform-specific option to subprocess.run itself.

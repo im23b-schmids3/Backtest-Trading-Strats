@@ -402,6 +402,27 @@ the repository-compatible 1-hour same-bar exit.
 
     def _dry_spec(self, workflow: WorkflowInput, strategy_id: str, version: str, ambiguities: list[str]) -> StrategySpec:
         if strategy_id == "RandomOpenTest":
+            reference_variant = any(term in f"{workflow.natural_language_description} {workflow.optional_notes or ''}".lower() for term in ("profit target", "fixed target", "fixed quantity", "stop in ticks", "initial stop"))
+            if reference_variant:
+                raw_reference: dict[str, Any] = {
+                    "strategy_id": strategy_id, "version": version, "name": "RandomOpenTest",
+                    "description": "Deterministic RandomOpenTest reference adapter for complete pipeline integration.",
+                    "hypothesis": "This intentionally meaningless strategy is an integration test and is not expected to be profitable.",
+                    "strategy_family": "f2_random_open_reference", "markets": ["SPY"], "timeframes": ["1h"],
+                    "long_rules": ["At the first eligible session bar, deterministic seeded direction may select LONG."],
+                    "short_rules": ["At the first eligible session bar, deterministic seeded direction may select SHORT."],
+                    "entry_logic": "Select the first eligible bar after the configured America/New_York session open and submit one deterministic direction proposal.",
+                    "initial_stop_logic": "Fixed initial stop distance in configured ticks.",
+                    "exit_logic": "Exit at stop, target, or the shared session forced-flat boundary; no scaling or re-entry.",
+                    "session_assumptions": ["Session timestamps use IANA America/New_York rules, including daylight saving time.", "Existing SPY proxy data is used only as the repository fixture."],
+                    "baseline_parameters": {"initial_cash": 10000, "quantity": 1, "seed": "RandomOpenTest", "session_timezone": "America/New_York", "session_open_local": "09:30", "forced_flat_local": "16:00", "initial_stop_ticks": 4, "profit_target_ticks": 8, "tick_size": 0.01, "test_start_date": "2025-01-01", "test_end_date": "2026-01-01"},
+                    "parameter_families": [{"name": "reference_execution", "description": "Fixed integration-test execution parameters; never optimized.", "baseline_value": "fixed", "value_type": "string", "allowed_min": None, "allowed_max": None, "allowed_values": ["fixed"], "optimization_order": 0, "maximum_rounds": 0, "mutable": False, "hypothesis_relevance": "Defines the deterministic reference fixture."}],
+                    "invariants": ["Exactly one proposal per eligible trading day.", "Direction is derived only from seed, instrument, and local trading date using SHA-256.", "No re-entry, pyramiding, scaling, filters, optimization, or live broker orders.", "Entries are evaluated by the shared compliance evaluator.", "Open positions are closed by the shared forced-flat rule."],
+                    "required_data": ["Existing data/v11_5_proxy_raw/SPY_1h.parquet"],
+                    "known_limitations": ["Integration fixture only; profitability is not a pass condition.", "SPY is a repository proxy and not a verified futures mapping.", *ambiguities],
+                    "status": ApprovalStatus.DRAFT, "created_at": datetime.now(timezone.utc), "approved_at": None,
+                }
+                return self._validated_with_hash(raw_reference)
             raw: dict[str, Any] = {
                 "strategy_id": strategy_id, "version": version, "name": "RandomOpenTest",
                 "description": "Deterministic one-hour repository-compatible pipeline integration test.",
@@ -497,7 +518,7 @@ the repository-compatible 1-hour same-bar exit.
             "mutable_parameter_families": [item.name for item in spec.parameter_families if item.mutable],
             "invariants": spec.invariants, "assumptions": spec.session_assumptions, "ambiguities": ambiguities,
             "provenance": (provenance or SpecificationProvenance()).model_dump(mode="json"),
-            "implementation_variant": "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else None,
+            "implementation_variant": "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else "RandomOpenTest deterministic fixed-quantity reference adapter" if spec.strategy_family == "f2_random_open_reference" else None,
             "specification_path": str(path), "specification_hash": spec.specification_hash}, indent=2, sort_keys=True)
         return GeneratedStrategySpec(strategy_id=spec.strategy_id, version=spec.version, specification_path=str(path), specification_hash=spec.specification_hash,
             assumptions=list(spec.session_assumptions), ambiguities=ambiguities, fields_requiring_confirmation=["entry_logic"] if ambiguities else [], manual_review_required=bool(ambiguities), approval_summary=summary,

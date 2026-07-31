@@ -15,6 +15,7 @@ from ..phase_b.services import PhaseBService
 from ..phase_b.redaction import redact_secrets
 from ..phase_f1.models import MasterRunInput, MasterRunStatus, MasterStep
 from ..repository.worktree_preflight import run_worktree_preflight
+from ..runners.isolated_environment import validate_required_fixture_sources
 from ..registry.database import Database
 from ..registry.repositories import Registry
 from .models import CodexCompletionStatus, ImplementationCompletion, ImplementationJobRequest, ImplementationJobStatus
@@ -69,6 +70,7 @@ class ImplementationJobService:
         spec = context["spec"]
         options: MasterRunInput = context["options"]
         repository_root = Path(options.repository_root).resolve()
+        fixture_preflight = validate_required_fixture_sources(repository_root)
         preflight = run_worktree_preflight(repository_root, probe=probe, persist=True)
         root.mkdir(parents=True, exist_ok=True)
         (root / "implementation" / "preflight.json").write_text(preflight.model_dump_json(indent=2), encoding="utf-8")
@@ -77,7 +79,7 @@ class ImplementationJobService:
             self.registry.add_master_journal(run_id, MasterStep.IMPLEMENTATION.value, "WORKTREE_PREFLIGHT_FAILED", {"report_path": preflight.report_path, "error_code": "WORKTREE_PREFLIGHT_FAILED"})
             raise SpecificationValidationError("WORKTREE_PREFLIGHT_FAILED: isolated implementation worktree is unsafe")
         phase_b = PhaseBService(self.registry_path)
-        plan = phase_b.implementation_plan(spec.strategy_id, str(repository_root), dry_run=True, worktree_suffix=run_id)
+        plan = phase_b.implementation_plan(spec.strategy_id, str(repository_root), dry_run=True, worktree_suffix=run_id, worktree_parent=options.worktree_parent)
         job_dir = self._job_dir(run)
         job_dir.mkdir(parents=True, exist_ok=False)
         spec_path = Path(state.get("draft_copy") or state.get("specification_path") or "")
@@ -105,7 +107,7 @@ class ImplementationJobService:
             allowed_paths=plan.allowed_files, forbidden_paths=manifest_payload["forbidden_paths"], required_tests=plan.required_tests,
             expected_output_contract="implementation_manifest.json, changed_files.json, scope_validation.json, test_results.json, codex_invocation.json, output_hash_manifest.json, completion.json",
             timeout_seconds=900, max_repair_attempts=plan.max_repair_attempts, codex_model=os.environ.get("CODEX_MODEL"), codex_config_requirements={"sandbox": "workspace-write", "prompt_transport": "stdin"},
-            provenance={"base_commit": plan.base_commit, "preflight_report": preflight.report_path, "repository_root": str(repository_root), "smithers_run_id": os.environ.get("SMITHERS_RUN_ID")},
+            provenance={"base_commit": plan.base_commit, "preflight_report": preflight.report_path, "fixture_preflight": fixture_preflight, "repository_root": str(repository_root), "worktree_parent": str(Path(plan.worktree_path).parent), "smithers_run_id": os.environ.get("SMITHERS_RUN_ID")},
             input_hash_manifest=input_hashes, created_at=datetime.now(timezone.utc),
         )
         (job_dir / "request.json").write_text(request.model_dump_json(indent=2), encoding="utf-8")

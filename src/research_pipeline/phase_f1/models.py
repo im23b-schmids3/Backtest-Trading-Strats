@@ -12,6 +12,7 @@ from ..schemas.strategy_spec import StrictModel
 class MasterRunStatus(StrEnum):
     SUCCESS = "SUCCESS"
     WAITING_FOR_APPROVAL = "WAITING_FOR_APPROVAL"
+    IMPLEMENTATION_VERIFICATION_REQUIRED = "IMPLEMENTATION_VERIFICATION_REQUIRED"
     TECHNICAL_FAILURE = "TECHNICAL_FAILURE"
     IMPLEMENTATION_FAILURE = "IMPLEMENTATION_FAILURE"
     RESEARCH_FAILURE = "RESEARCH_FAILURE"
@@ -106,6 +107,8 @@ class MasterRunInput(StrictModel):
     prop_product: str = "Alpha Futures Zero 25K"
     mode: Literal["dry_run", "real_run"] = "dry_run"
     allow_proxy_data: bool = False
+    data_manifest_path: str | None = None
+    worktree_parent: str | None = None
     prebuilt_spec_path: str | None = None
     max_generation_attempts: int = Field(default=3, ge=1, le=3)
     max_repair_attempts: int = Field(default=2, ge=0, le=2)
