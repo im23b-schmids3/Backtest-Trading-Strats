@@ -390,6 +390,56 @@ class Registry:
         with self.database.transaction() as connection:
             connection.execute("INSERT INTO prop_journal(strategy_id,strategy_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))
 
+    # Compliance records are intentionally separate from the existing
+    # Alpha-specific Phase D tables.  They are generic and keyed by strategy
+    # version so policy and execution evidence can be reproduced together.
+    def save_compliance_policy(self, strategy_id: str, version: str, policy: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO compliance_policies(strategy_id,strategy_version,policy_id,policy_hash,policy_json,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(strategy_id,strategy_version,policy_id) DO UPDATE SET policy_hash=excluded.policy_hash,policy_json=excluded.policy_json,created_at=excluded.created_at",
+                (strategy_id, version, policy["policy_id"], policy["policy_hash"], json.dumps(policy, sort_keys=True), now_iso()),
+            )
+
+    def get_compliance_policy(self, strategy_id: str, version: str | None = None, policy_id: str = "unconfigured") -> dict | None:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM compliance_policies WHERE strategy_id=? AND strategy_version=? AND policy_id=?", (strategy["strategy_id"], strategy["version"], policy_id)).fetchone()
+            if not row:
+                return None
+            result = dict(row); result["policy_json"] = json.loads(result["policy_json"]); return result
+
+    def save_compliance_decision(self, strategy_id: str, version: str, decision: dict) -> int:
+        with self.database.transaction() as connection:
+            existing = connection.execute("SELECT decision_id FROM compliance_decisions WHERE decision_hash=?", (decision["decision_hash"],)).fetchone()
+            if existing:
+                return int(existing[0])
+            cursor = connection.execute("INSERT INTO compliance_decisions(strategy_id,strategy_version,decision_hash,decision_json,created_at) VALUES(?,?,?,?,?)", (strategy_id, version, decision["decision_hash"], json.dumps(decision, sort_keys=True), now_iso()))
+            return int(cursor.lastrowid)
+
+    def list_compliance_decisions(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            return [{**dict(row), "decision_json": json.loads(row["decision_json"])} for row in connection.execute("SELECT * FROM compliance_decisions WHERE strategy_id=? AND strategy_version=? ORDER BY decision_id", (strategy["strategy_id"], strategy["version"]))]
+
+    def save_compliance_artifact(self, strategy_id: str, version: str, artifact_key: str, artifact_type: str, artifact_hash: str, result: dict, artifact_path: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO compliance_artifacts(artifact_key,strategy_id,strategy_version,artifact_type,artifact_path,artifact_hash,result_json,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(artifact_key) DO UPDATE SET artifact_path=excluded.artifact_path,artifact_hash=excluded.artifact_hash,result_json=excluded.result_json,created_at=excluded.created_at", (artifact_key, strategy_id, version, artifact_type, artifact_path, artifact_hash, json.dumps(result, sort_keys=True), now_iso()))
+
+    def add_compliance_event(self, strategy_id: str, version: str, event_type: str, event_timestamp: str, result: dict) -> int:
+        with self.database.transaction() as connection:
+            cursor = connection.execute("INSERT INTO compliance_events(strategy_id,strategy_version,event_type,event_timestamp,result_json,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, event_type, event_timestamp, json.dumps(result, sort_keys=True), now_iso()))
+            return int(cursor.lastrowid)
+
+    def list_compliance_artifacts(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            return [{**dict(row), "result_json": json.loads(row["result_json"])} for row in connection.execute("SELECT * FROM compliance_artifacts WHERE strategy_id=? AND strategy_version=? ORDER BY created_at", (strategy["strategy_id"], strategy["version"]))]
+
+    def list_compliance_events(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            return [{**dict(row), "result_json": json.loads(row["result_json"])} for row in connection.execute("SELECT * FROM compliance_events WHERE strategy_id=? AND strategy_version=? ORDER BY event_id", (strategy["strategy_id"], strategy["version"]))]
+
     # Phase E portfolio records. Large signal streams are referenced by path
     # and hash; SQLite stores deterministic summaries and decisions only.
     def portfolio_run(self, portfolio_id: str, version: str, phase: str, status: str, specification_hash: str, root_path: str) -> dict:

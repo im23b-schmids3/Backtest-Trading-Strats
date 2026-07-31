@@ -819,4 +819,49 @@ def apply_migrations(connection) -> None:
         connection.execute("INSERT INTO specification_schema_version(version) VALUES (1)")
     elif row[0] < 1:
         connection.execute("UPDATE specification_schema_version SET version=1")
+    # Provider-independent compliance artifacts.  These tables are additive;
+    # existing Phase A-D records and their semantics are unchanged.
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS compliance_policies (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            policy_id TEXT NOT NULL,
+            policy_hash TEXT NOT NULL,
+            policy_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version, policy_id)
+        );
+        CREATE TABLE IF NOT EXISTS compliance_decisions (
+            decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            decision_hash TEXT NOT NULL UNIQUE,
+            decision_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS compliance_artifacts (
+            artifact_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            artifact_type TEXT NOT NULL,
+            artifact_path TEXT,
+            artifact_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS compliance_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_timestamp TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS compliance_schema_version (version INTEGER NOT NULL);
+        """
+    )
+    if connection.execute("SELECT version FROM compliance_schema_version LIMIT 1").fetchone() is None:
+        connection.execute("INSERT INTO compliance_schema_version(version) VALUES (1)")
     connection.commit()

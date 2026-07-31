@@ -15,6 +15,9 @@ from fib_backtester.backtest.metrics import calculate_metrics
 from fib_backtester.config import AssetConfig, RunConfig
 
 from ..prop.models import TradeSignal
+from ..compliance import ComplianceEvaluator, PropFirmPolicy
+from ..compliance.costs import ExecutionCostConfig
+from ..compliance.diagnostics import calculate_activity_diagnostics
 from ..research.models import ResearchArtifact
 from ..schemas.splits import SplitDefinition
 from ..schemas.strategy_spec import StrategySpec
@@ -35,10 +38,15 @@ class NativeRepositoryAdapter:
     a library and none of its implementation or historical outputs are changed.
     """
 
-    def __init__(self, specification: StrategySpec, repository_root: str | Path = ".", source_symbols: dict[str, str] | None = None):
+    def __init__(self, specification: StrategySpec, repository_root: str | Path = ".", source_symbols: dict[str, str] | None = None,
+                 compliance_evaluator: ComplianceEvaluator | None = None, compliance_policy: PropFirmPolicy | None = None,
+                 execution_cost_config: ExecutionCostConfig | None = None):
         self.specification = specification
         self.root = Path(repository_root).resolve()
         self.source_symbols = source_symbols or {}
+        self.compliance_evaluator = compliance_evaluator
+        self.compliance_policy = compliance_policy
+        self.execution_cost_config = execution_cost_config
         self.gate = DataAvailabilityGate(self.root)
         self.identity = AdapterIdentity(strategy_id=specification.strategy_id, strategy_version=specification.version,
                                          implementation_module=__name__, entry_point=f"{__name__}:NativeRepositoryAdapter",
@@ -130,6 +138,11 @@ class NativeRepositoryAdapter:
         normalized = [self._normalize_trade(row, spec, availability) for row in trades_frame.to_dict(orient="records")]
         candidate_hash = stable_hash({"specification_hash": spec.specification_hash, "parameters": self._parameters(parameters), "split_hash": split.split_hash})
         metrics = self._metrics(metrics_raw, normalized, start, end)
+        metrics["activity_diagnostics"] = calculate_activity_diagnostics(normalized).model_dump(mode="json")
+        if self.compliance_policy is not None:
+            metrics["compliance_policy_hash"] = self.compliance_policy.policy_hash
+        if self.execution_cost_config is not None:
+            metrics["execution_cost_configuration_hash"] = self.execution_cost_config.configuration_hash
         if spec.strategy_family == "f2_random_open_test":
             metrics["implementation_variant"] = "1-hour repository-compatible test variant"
         input_path = output_dir / "input.json"; metrics_path = output_dir / "metrics.json"
@@ -323,6 +336,17 @@ class NativeRepositoryAdapter:
     def generate_diagnostics(self, spec, split, parameters, output_dir): return {"adapter": self.identity.model_dump(mode="json")}
     def collect_metrics(self, artifact): return artifact.metrics
     def normalized_last_run(self) -> BacktestRun | None: return self._last_run
+
+    def evaluate_compliance(self, **kwargs: Any):
+        """Optional backtest-side access to the shared compliance evaluator.
+
+        It is intentionally not implicit in the legacy engine: callers must
+        provide a policy and evaluator, so historical execution semantics do
+        not change merely by upgrading the package.
+        """
+        if self.compliance_evaluator is None or self.compliance_policy is None:
+            raise RuntimeError("no compliance policy/evaluator configured")
+        return self.compliance_evaluator.evaluate_backtest(policy=self.compliance_policy, **kwargs)
 
     def _load_last_run(self) -> BacktestRun | None:
         if self._last_run is not None: return self._last_run
