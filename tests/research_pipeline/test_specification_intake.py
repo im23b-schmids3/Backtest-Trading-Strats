@@ -63,6 +63,71 @@ def test_valid_first_attempt_is_canonical_and_duplicate_call_is_cached(tmp_path:
     assert service.specification_status(run_id)["attempt_count"] == 1
 
 
+@pytest.mark.parametrize("supplied_hash", ["pending", "stale-generated-hash"])
+def test_intake_replaces_placeholder_or_stale_generated_hash(tmp_path: Path, supplied_hash: str) -> None:
+    payload = valid_payload(tmp_path)
+    payload["specification_hash"] = supplied_hash
+    service = PhaseBService(tmp_path / f"registry-{supplied_hash}.sqlite3", codex_runner=SequenceCodex([payload_text(payload)]))
+
+    generated = service.generate_spec(workflow(tmp_path))
+    persisted = service._load_spec(Path(generated.specification_path))
+
+    assert generated.specification_hash == persisted.specification_hash
+    assert generated.specification_hash != supplied_hash
+    assert service.validate_spec(generated).valid
+
+
+def test_canonical_persisted_specification_passes_validation(tmp_path: Path) -> None:
+    service = PhaseBService(tmp_path / "registry.sqlite3")
+    generated = service.generate_spec(workflow(tmp_path, dry_run=True))
+
+    validation = service.validate_spec(generated)
+
+    assert validation.valid
+    assert validation.specification_hash == generated.specification_hash
+
+
+def test_tampered_persisted_specification_fails_validation(tmp_path: Path) -> None:
+    service = PhaseBService(tmp_path / "registry.sqlite3")
+    generated = service.generate_spec(workflow(tmp_path, dry_run=True))
+    path = Path(generated.specification_path)
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    payload["description"] = "tampered after canonicalization"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    validation = service.validate_spec(generated)
+
+    assert not validation.valid
+    assert validation.structured_errors
+
+
+def test_metadata_hash_mismatch_fails_validation(tmp_path: Path) -> None:
+    service = PhaseBService(tmp_path / "registry.sqlite3")
+    generated = service.generate_spec(workflow(tmp_path, dry_run=True))
+    tampered_metadata = generated.model_copy(update={"specification_hash": "0" * 64})
+
+    validation = service.validate_spec(tampered_metadata)
+
+    assert not validation.valid
+    assert any(item.error_code == "METADATA_HASH_MISMATCH" for item in validation.structured_errors)
+
+
+def test_enum_datetime_and_nested_family_normalization_has_stable_hash(tmp_path: Path) -> None:
+    first = valid_payload(tmp_path)
+    second = json.loads(json.dumps(first))
+    second["description"] = "  " + first["description"].replace("\n", "   ") + "  "
+    second["status"] = "DRAFT"
+    second["created_at"] = first["created_at"]
+    second["parameter_families"] = [dict(first["parameter_families"][0])]
+
+    first_service = PhaseBService(tmp_path / "first.sqlite3", codex_runner=SequenceCodex([payload_text(first)]))
+    second_service = PhaseBService(tmp_path / "second.sqlite3", codex_runner=SequenceCodex([payload_text(second)]))
+    first_generated = first_service.generate_spec(workflow(tmp_path, run_id="first"))
+    second_generated = second_service.generate_spec(workflow(tmp_path, run_id="second"))
+
+    assert first_generated.specification_hash == second_generated.specification_hash
+
+
 @pytest.mark.parametrize("output", ["plain prose", "```yaml\na: 1\n```\n```yaml\nb: 2\n```", "a: ["])
 def test_malformed_or_competing_structured_output_is_persisted_and_never_registered(tmp_path: Path, output: str) -> None:
     service = PhaseBService(tmp_path / "registry.sqlite3", codex_runner=SequenceCodex([output, output, output]))

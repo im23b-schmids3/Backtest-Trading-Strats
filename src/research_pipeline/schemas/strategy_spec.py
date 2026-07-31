@@ -7,7 +7,14 @@ from datetime import datetime
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from ..enums import ApprovalStatus
 
@@ -71,21 +78,36 @@ class StrategySpec(StrictModel):
     @classmethod
     def safe_strategy_id(cls, value: str) -> str:
         if not SAFE_ID.fullmatch(value):
-            raise ValueError("strategy_id must be filesystem-safe (letters, numbers, _, -, . only)")
+            raise ValueError(
+                "strategy_id must be filesystem-safe "
+                "(letters, numbers, _, -, . only)"
+            )
         return value
 
     @model_validator(mode="after")
-    def validate_specification(self) -> "StrategySpec":
+    def validate_specification(
+        self,
+        info: ValidationInfo,
+    ) -> "StrategySpec":
         names = [family.name for family in self.parameter_families]
         if len(names) != len(set(names)):
             raise ValueError("parameter family names must be unique")
+
         if self.status == ApprovalStatus.APPROVED and self.approved_at is None:
             raise ValueError("approved specifications require approved_at")
+
         if self.status != ApprovalStatus.APPROVED and self.approved_at is not None:
             raise ValueError("only approved specifications may have approved_at")
+
+        if (info.context or {}).get("skip_specification_hash_validation"):
+            return self
+
         expected = calculate_specification_hash(self)
         if self.specification_hash != expected:
-            raise ValueError("specification_hash does not match the canonical specification")
+            raise ValueError(
+                "specification_hash does not match the canonical specification"
+            )
+
         return self
 
     def canonical_payload(self) -> dict[str, Any]:
@@ -97,29 +119,60 @@ class StrategySpec(StrictModel):
         return payload
 
     def approved_copy(self, when: datetime) -> "StrategySpec":
-        return self.model_copy(update={"status": ApprovalStatus.APPROVED, "approved_at": when})
+        return self.model_copy(
+            update={
+                "status": ApprovalStatus.APPROVED,
+                "approved_at": when,
+            }
+        )
 
 
-def calculate_specification_hash(specification: StrategySpec | dict[str, Any]) -> str:
+def calculate_specification_hash(
+    specification: StrategySpec | dict[str, Any],
+) -> str:
     if isinstance(specification, StrategySpec):
-        payload = specification.model_dump(mode="json")
+        normalized = specification
     else:
-        payload = dict(specification)
+        data = dict(specification)
+        data["specification_hash"] = str(data.get("specification_hash") or "pending")
+        normalized = StrategySpec.model_validate(
+            data,
+            context={"skip_specification_hash_validation": True},
+        )
+
+    payload = normalized.model_dump(mode="json")
+
     payload.pop("specification_hash", None)
     payload.pop("approved_at", None)
     payload.pop("status", None)
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode()
+
     return hashlib.sha256(encoded).hexdigest()
 
 
 def load_strategy_spec(path: str) -> StrategySpec:
     with open(path, "r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
+
     if not isinstance(raw, dict):
         raise ValueError("strategy YAML must contain a mapping")
+
     return StrategySpec.model_validate(raw)
 
 
-def save_strategy_spec(specification: StrategySpec, path: str) -> None:
+def save_strategy_spec(
+    specification: StrategySpec,
+    path: str,
+) -> None:
     with open(path, "w", encoding="utf-8") as handle:
-        yaml.safe_dump(specification.model_dump(mode="json"), handle, sort_keys=False)
+        yaml.safe_dump(
+            specification.model_dump(mode="json"),
+            handle,
+            sort_keys=False,
+        )

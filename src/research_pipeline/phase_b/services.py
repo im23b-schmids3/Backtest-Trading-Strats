@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import json
 import hashlib
 import os
@@ -11,6 +12,7 @@ from typing import Any
 
 import yaml
 from pydantic import ValidationError
+
 
 from ..controller.pipeline_controller import PipelineController
 from ..enums import ApprovalStatus, PipelineState
@@ -106,31 +108,87 @@ class PhaseBService:
             received_value=error.get("input"), expected_constraint=str(error.get("type", "valid value")), explanation=error.get("msg", "schema validation failed"),
             repair_hint="Return one complete specification matching the canonical StrategySpec fields and types.") for error in exc.errors()]
 
-    def _validate_payload(self, raw: dict[str, Any], workflow: WorkflowInput, provenance: SpecificationProvenance) -> tuple[StrategySpec | None, SpecificationValidationReport, SpecificationProvenance, dict[str, Any]]:
-        normalized, semantic, provenance = semantic_validate(raw, provenance=provenance)
+    def _validate_payload(
+        self,
+        raw: dict[str, Any],
+        workflow: WorkflowInput,
+        provenance: SpecificationProvenance,
+    ) -> tuple[
+        StrategySpec | None,
+        SpecificationValidationReport,
+        SpecificationProvenance,
+        dict[str, Any],
+    ]:
+        normalized, semantic, provenance = semantic_validate(
+            raw,
+            provenance=provenance,
+        )
         issues = list(semantic.errors)
         spec: StrategySpec | None = None
-        supplied_hash = normalized.get("specification_hash")
         try:
             data = dict(normalized)
             data["specification_hash"] = "pending"
-            candidate = StrategySpec.model_construct(**data)
+
+            # Validate and normalize all field types before calculating the
+            # canonical hash.
+            candidate = StrategySpec.model_validate(
+                data,
+                context={"skip_specification_hash_validation": True},
+            )
+
             expected_hash = calculate_specification_hash(candidate)
-            data["specification_hash"] = expected_hash
-            spec = StrategySpec.model_validate(data)
-            if supplied_hash not in {expected_hash, "pending"}:
-                issues.append(SpecificationValidationIssue(error_code="SPECIFICATION_HASH_MISMATCH", field_path="specification_hash", received_value=supplied_hash,
-                    expected_constraint="canonical hash of normalized material fields", explanation="The supplied hash does not match the canonical specification.", repair_hint="Set specification_hash to the canonical hash generated from the normalized fields."))
+
+            # Use the normalized representation for final validation.
+            validated_data = candidate.model_dump(mode="python")
+            validated_data["specification_hash"] = expected_hash
+
+            spec = StrategySpec.model_validate(validated_data)
+
         except ValidationError as exc:
             issues.extend(self._pydantic_issue(exc))
+
         except (TypeError, ValueError, KeyError) as exc:
-            issues.append(SpecificationValidationIssue(error_code="SPECIFICATION_PAYLOAD_INVALID", field_path="specification", received_value=raw,
-                expected_constraint="one complete StrategySpec mapping", explanation=str(exc), repair_hint="Return all required fields with valid values."))
-        report = SpecificationValidationReport(valid=not issues, pydantic_valid=spec is not None and not any(item.error_code.startswith("PYDANTIC") for item in issues),
-            semantic_valid=not semantic.errors, errors=issues, blocking_ambiguities=provenance.blocking_ambiguities,
-            normalized_payload_hash=semantic.normalized_payload_hash)
-        approval_blocked_only = bool(spec) and bool(issues) and all(item.error_code == "BLOCKING_AMBIGUITY" for item in issues)
-        return (spec if (not issues or approval_blocked_only) else None), report, provenance, normalized
+            issues.append(
+                SpecificationValidationIssue(
+                    error_code="SPECIFICATION_PAYLOAD_INVALID",
+                    field_path="specification",
+                    received_value=raw,
+                    expected_constraint="one complete StrategySpec mapping",
+                    explanation=str(exc),
+                    repair_hint="Return all required fields with valid values.",
+                )
+            )
+
+        report = SpecificationValidationReport(
+            valid=not issues,
+            pydantic_valid=(
+                spec is not None
+                and not any(
+                    item.error_code.startswith("PYDANTIC")
+                    for item in issues
+                )
+            ),
+            semantic_valid=not semantic.errors,
+            errors=issues,
+            blocking_ambiguities=provenance.blocking_ambiguities,
+            normalized_payload_hash=semantic.normalized_payload_hash,
+        )
+
+        approval_blocked_only = (
+            bool(spec)
+            and bool(issues)
+            and all(
+                item.error_code == "BLOCKING_AMBIGUITY"
+                for item in issues
+            )
+        )
+
+        return (
+            spec if (not issues or approval_blocked_only) else None,
+            report,
+            provenance,
+            normalized,
+        )
 
     def _approval_path(self, workflow: WorkflowInput, strategy_id: str, version: str, run_id: str) -> Path:
         draft_dir = Path(workflow.repository_root).resolve() / "research_registry" / "spec_drafts"
@@ -392,16 +450,37 @@ the repository-compatible 1-hour same-bar exit.
         return self._validated_with_hash(raw)
 
     @staticmethod
-    def _validated_with_hash(raw: dict[str, Any]) -> StrategySpec:
+    def _validated_with_hash(
+        raw: dict[str, Any],
+    ) -> StrategySpec:
         data = dict(raw)
-        data["parameter_families"] = [ParameterFamily.model_validate(item) for item in data["parameter_families"]]
-        data["status"] = ApprovalStatus(data.get("status", ApprovalStatus.DRAFT))
-        if isinstance(data.get("created_at"), str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
-        data["specification_hash"] = "pending"
-        candidate = StrategySpec.model_construct(**data)
-        data["specification_hash"] = calculate_specification_hash(candidate)
-        return StrategySpec.model_validate(data)
+
+        # StrategySpec benötigt das Feld bereits bei der ersten Validierung.
+        # Der Wert darf hier vorläufig sein, da die Hashprüfung per Context
+        # übersprungen wird.
+        data["specification_hash"] = str(
+            data.get("specification_hash") or "pending"
+        )
+
+        # Erst das komplette Modell validieren und alle verschachtelten Werte
+        # in ihre kanonischen Pydantic-Typen überführen.
+        candidate = StrategySpec.model_validate(
+            data,
+            context={
+                "skip_specification_hash_validation": True,
+            },
+        )
+
+        # Den Hash aus dem vollständig validierten Modell berechnen.
+        expected_hash = calculate_specification_hash(candidate)
+
+        # Nicht candidate.specification_hash direkt ändern:
+        # validate_assignment=True würde dabei sofort erneut validieren.
+        validated_data = candidate.model_dump(mode="python")
+        validated_data["specification_hash"] = expected_hash
+
+        # Abschließende normale Validierung einschließlich Hashprüfung.
+        return StrategySpec.model_validate(validated_data)
 
     @staticmethod
     def _ambiguities(workflow: WorkflowInput) -> list[str]:
@@ -434,10 +513,16 @@ the repository-compatible 1-hour same-bar exit.
             if not isinstance(raw, dict):
                 raise ValueError("specification YAML must contain one mapping")
             normalized, semantic_report, provenance = semantic_validate(raw, provenance=generated.provenance)
-            spec = StrategySpec.model_validate(raw)
-            expected_hash = calculate_specification_hash(StrategySpec.model_construct(**{**normalized, "specification_hash": "pending"}))
-            if expected_hash != spec.specification_hash:
-                structured.append(SpecificationValidationIssue(error_code="CANONICAL_NORMALIZATION_MISMATCH", field_path="specification_hash", received_value=spec.specification_hash,
+            candidate = StrategySpec.model_validate(
+                {**normalized, "specification_hash": "pending"},
+                context={"skip_specification_hash_validation": True},
+            )
+            expected_hash = calculate_specification_hash(candidate)
+            validated_data = candidate.model_dump(mode="python")
+            validated_data["specification_hash"] = expected_hash
+            spec = StrategySpec.model_validate(validated_data)
+            if raw.get("specification_hash") != expected_hash:
+                structured.append(SpecificationValidationIssue(error_code="CANONICAL_NORMALIZATION_MISMATCH", field_path="specification_hash", received_value=raw.get("specification_hash"),
                     expected_constraint="hash must be calculated after canonical normalization", explanation="The persisted specification hash does not represent the normalized payload.", repair_hint="Regenerate the canonical specification through the intake validator."))
             structured.extend(semantic_report.errors)
             if spec.specification_hash != generated.specification_hash:

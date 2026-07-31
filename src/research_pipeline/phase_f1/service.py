@@ -180,32 +180,173 @@ class MasterPipelineService:
         self._set_step(run_id, MasterStep.SPECIFICATION, exc.classification, specification_job_id=exc.job_id, external_executor_required=True, next_command=exc.command, specification_pause_reason=exc.classification)
         return self.status(run_id)
 
-    def _generate_and_register(self, run_id: str, options: MasterRunInput, intake: IntakeSpec, root: Path) -> dict:
+    def _generate_and_register(
+        self,
+        run_id: str,
+        options: MasterRunInput,
+        intake: IntakeSpec,
+        root: Path,
+    ) -> dict:
         generation_name = intake.strategy_name
         phase_b = PhaseBService(self.registry_path)
+
         if options.prebuilt_spec_path:
             prebuilt = Path(options.prebuilt_spec_path).resolve()
             spec = yaml.safe_load(prebuilt.read_text(encoding="utf-8"))
             validated = phase_b._validated_with_hash(spec)
-            generated = GeneratedStrategySpec(strategy_id=validated.strategy_id, version=validated.version, specification_path=str(prebuilt), specification_hash=validated.specification_hash,
-                                              assumptions=list(validated.session_assumptions), ambiguities=[], fields_requiring_confirmation=[], manual_review_required=False,
-                                              approval_summary=json.dumps({"strategy_id": validated.strategy_id, "version": validated.version, "specification_hash": validated.specification_hash}, sort_keys=True))
+
+            generated = GeneratedStrategySpec(
+                strategy_id=validated.strategy_id,
+                version=validated.version,
+                specification_path=str(prebuilt),
+                specification_hash=validated.specification_hash,
+                assumptions=list(validated.session_assumptions),
+                ambiguities=[],
+                fields_requiring_confirmation=[],
+                manual_review_required=False,
+                approval_summary=json.dumps(
+                    {
+                        "strategy_id": validated.strategy_id,
+                        "version": validated.version,
+                        "specification_hash": validated.specification_hash,
+                    },
+                    sort_keys=True,
+                ),
+            )
         else:
-            workflow = WorkflowInput(strategy_name=generation_name, natural_language_description=self._description(intake), requested_markets=intake.markets, requested_timeframes=intake.timeframes, optional_notes=intake.optional_notes, repository_root=str(self.repository_root), registry_path=str(self.registry_path), dry_run=options.dry_run, implementation_enabled=options.implementation_enabled, run_id=run_id, confirmed_facts=intake.confirmed_facts, assumptions=intake.assumptions, missing_information=intake.missing_information, ambiguities=intake.ambiguities)
+            workflow = WorkflowInput(
+                strategy_name=generation_name,
+                natural_language_description=self._description(intake),
+                requested_markets=intake.markets,
+                requested_timeframes=intake.timeframes,
+                optional_notes=intake.optional_notes,
+                repository_root=str(self.repository_root),
+                registry_path=str(self.registry_path),
+                dry_run=options.dry_run,
+                implementation_enabled=options.implementation_enabled,
+                run_id=run_id,
+                confirmed_facts=intake.confirmed_facts,
+                assumptions=intake.assumptions,
+                missing_information=intake.missing_information,
+                ambiguities=intake.ambiguities,
+            )
             generated = phase_b.generate_spec(workflow)
-        draft_copy = root / "specification" / Path(generated.specification_path).name
-        draft_copy.write_text(Path(generated.specification_path).read_text(encoding="utf-8"), encoding="utf-8")
+
+        draft_copy = (
+            root
+            / "specification"
+            / Path(generated.specification_path).name
+        )
+
+        draft_copy.write_text(
+            Path(generated.specification_path).read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
+        )
+
         validation = phase_b.validate_spec(generated)
-        if not validation.valid and not (generated.manual_review_required or validation.manual_review_required):
-            details = " | ".join(validation.errors) or "canonical specification failed validation"
-            raise RuntimeError(f"SPECIFICATION_GENERATION_FAILURE: {details}")
-        registration = phase_b.register_generated(validation) if validation.valid else None
-        payload = {"generated": generated.model_dump(mode="json"), "validation": validation.model_dump(mode="json"), "registration": registration.model_dump(mode="json") if registration else None, "draft_copy": str(draft_copy.resolve()), "manual_review_required": bool(generated.manual_review_required or validation.manual_review_required)}
-        self._record_phase(run_id, MasterStep.SPECIFICATION, payload, root / "specification" / "result.json")
-        self.registry.update_master_run(run_id, strategy_id=generated.strategy_id)
+
+        if (
+            not validation.valid
+            and not (
+                generated.manual_review_required
+                or validation.manual_review_required
+            )
+        ):
+            details = (
+                " | ".join(validation.errors)
+                or "canonical specification failed validation"
+            )
+            raise RuntimeError(
+                f"SPECIFICATION_GENERATION_FAILURE: {details}"
+            )
+
+        registration = (
+            phase_b.register_generated(validation)
+            if validation.valid
+            else None
+        )
+
+        registered_strategy_id = (
+            registration.strategy_id
+            if registration is not None
+            else generated.strategy_id
+        )
+
+        registered_version = (
+            registration.version
+            if registration is not None
+            else generated.version
+        )
+
+        registered_hash = (
+            registration.specification_hash
+            if registration is not None
+            else generated.specification_hash
+        )
+
+        payload = {
+            "generated": generated.model_dump(mode="json"),
+            "validation": validation.model_dump(mode="json"),
+            "registration": (
+                registration.model_dump(mode="json")
+                if registration is not None
+                else None
+            ),
+            "draft_copy": str(draft_copy.resolve()),
+            "manual_review_required": bool(
+                generated.manual_review_required
+                or validation.manual_review_required
+            ),
+        }
+
+        self._record_phase(
+            run_id,
+            MasterStep.SPECIFICATION,
+            payload,
+            root / "specification" / "result.json",
+        )
+
+        self.registry.update_master_run(
+            run_id,
+            strategy_id=registered_strategy_id,
+        )
+
         current = self.registry.get_master_run(run_id)
-        self.registry.update_master_run(run_id, strategy_version=generated.version, current_step=MasterStep.APPROVAL.value, outcome=MasterRunStatus.WAITING_FOR_APPROVAL.value, approval_status="MANUAL_REVIEW_REQUIRED" if payload["manual_review_required"] else "PENDING", resume_state={**current["resume_state_json"], "strategy_id": generated.strategy_id, "version": generated.version, "specification_path": generated.specification_path, "draft_copy": str(draft_copy.resolve())})
-        self.registry.add_master_journal(run_id, MasterStep.APPROVAL.value, "APPROVAL_REQUIRED", {"strategy_id": generated.strategy_id, "version": generated.version, "specification_hash": generated.specification_hash, "manual_review_required": payload["manual_review_required"]})
+
+        self.registry.update_master_run(
+            run_id,
+            strategy_version=registered_version,
+            current_step=MasterStep.APPROVAL.value,
+            outcome=MasterRunStatus.WAITING_FOR_APPROVAL.value,
+            approval_status=(
+                "MANUAL_REVIEW_REQUIRED"
+                if payload["manual_review_required"]
+                else "PENDING"
+            ),
+            resume_state={
+                **current["resume_state_json"],
+                "strategy_id": registered_strategy_id,
+                "version": registered_version,
+                "specification_path": generated.specification_path,
+                "draft_copy": str(draft_copy.resolve()),
+            },
+        )
+
+        self.registry.add_master_journal(
+            run_id,
+            MasterStep.APPROVAL.value,
+            "APPROVAL_REQUIRED",
+            {
+                "strategy_id": registered_strategy_id,
+                "version": registered_version,
+                "specification_hash": registered_hash,
+                "manual_review_required": (
+                    payload["manual_review_required"]
+                ),
+            },
+        )
         return self.status(run_id)
 
     @staticmethod
@@ -221,17 +362,19 @@ class MasterPipelineService:
         run = self.registry.get_master_run(run_id); state = run["resume_state_json"]
         if run["approval_status"] == "MANUAL_REVIEW_REQUIRED":
             raise SpecificationValidationError("material intake ambiguity requires a clarified intake and a new run")
-        if run["current_step"] not in {MasterStep.APPROVAL.value, MasterStep.SPECIFICATION.value}:
+        if run["current_step"] != MasterStep.APPROVAL.value:
             return self.status(run_id)
         strategy_id = state.get("strategy_id") or run["strategy_id"]
+
+        phase_b = PhaseBService(self.registry_path)
         if decision == "REJECT":
-            phase_b = PhaseBService(self.registry_path); result = phase_b.approve(strategy_id, "REJECT", note)
+            result = phase_b.approve(strategy_id, "REJECT", note)
             self.registry.add_master_journal(run_id, MasterStep.APPROVAL.value, "APPROVAL_REJECTED", {"note": note, "result": result.model_dump(mode="json")})
             self.registry.update_master_run(run_id, approval_status="REJECTED")
             self._set_step(run_id, MasterStep.COMPLETED, MasterRunStatus.ABORTED, approval="REJECTED")
             return self.status(run_id)
         if decision != "APPROVE": raise ValueError("approval decision must be APPROVE or REJECT")
-        phase_b = PhaseBService(self.registry_path); result = phase_b.approve(strategy_id, "APPROVE", note)
+        result = phase_b.approve(strategy_id, "APPROVE", note)
         self.registry.add_master_journal(run_id, MasterStep.APPROVAL.value, "APPROVAL_ACCEPTED", result.model_dump(mode="json"))
         self.registry.update_master_run(run_id, approval_status="APPROVED")
         self._set_step(run_id, MasterStep.IMPLEMENTATION, MasterRunStatus.WAITING_FOR_APPROVAL, approval="APPROVED")
