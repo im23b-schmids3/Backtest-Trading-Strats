@@ -25,3 +25,16 @@ smithers.db-shm
 smithers.db-wal
 
 node_modules/
+.pytest_tmp/
+.research_worktrees/
+.tmp/
+data/value_area_trap/
+research_registry/
+research_runs/
+job-002-recovery.patch
+random_open_artifacts.json
+random_open_report.json
+value_area_trap_artifacts.json
+value_area_trap_final_artifacts.json
+value_area_trap_final_report.json
+value_area_trap_report.json
