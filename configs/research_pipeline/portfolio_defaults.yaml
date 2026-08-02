@@ -1,0 +1,20 @@
+budget:
+  minimum_strategies: 2
+  maximum_strategies: 4
+  maximum_candidate_portfolios: 50
+  maximum_scenarios: 20
+  maximum_stress_scenarios: 50
+  maximum_ablation_runs: 50
+  minimum_correlation_periods: 20
+overlap:
+  signal_window_minutes: 60
+  exposure_window_minutes: 240
+correlation:
+  minimum_periods: 20
+conflict_policies: [FIRST_SIGNAL_WINS, HIGHEST_CONFIDENCE, STRATEGY_PRIORITY, SKIP_CONFLICT, NET_EXPOSURE, ALLOW_INDEPENDENT]
+risk_allocations: [EQUAL_RISK, FIXED_STRATEGY_RISK_BUDGET, VOLATILITY_WEIGHTED, DRAWDOWN_AWARE, MARGINAL_RISK_CONTRIBUTION, PRIORITY_BASED]
+classification:
+  minimum_unique_contribution_rate: 0.15
+  maximum_signal_overlap_rate: 0.8
+  maximum_drawdown_correlation: 0.9
+  minimum_external_cashflow: 0

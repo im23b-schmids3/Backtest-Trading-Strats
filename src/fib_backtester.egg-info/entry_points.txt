@@ -1,0 +1,2 @@
+[console_scripts]
+fib-backtester = fib_backtester.cli:main

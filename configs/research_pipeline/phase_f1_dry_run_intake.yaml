@@ -1,0 +1,24 @@
+strategy_name: Phase F1 fictional trend fixture
+description: A deterministic fictional strategy used only to validate the end-to-end orchestration layer.
+markets:
+  - BTCUSDT
+timeframes:
+  - 1h
+entry_logic:
+  - Enter when the fictional trend condition is present.
+exit_logic:
+  - Exit at the fictional target or initial stop.
+risk_model: Fixed synthetic fixture risk.
+position_sizing: One fictional unit.
+filters:
+  - Use chronological timestamps.
+optional_notes: No live data, execution, or trading behavior is involved.
+unknown_fields: {}
+confidence_flags:
+  - SYNTHETIC_FIXTURE_ONLY
+ambiguities: []
+confirmed_facts:
+  - This is a fictional deterministic fixture.
+assumptions:
+  - The synthetic adapter supplies all required evidence.
+missing_information: []

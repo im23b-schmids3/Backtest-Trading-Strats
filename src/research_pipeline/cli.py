@@ -31,6 +31,12 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("new-strategy"); command.add_argument("path")
     sub.add_parser("list-strategies")
     command = sub.add_parser("status"); command.add_argument("strategy_id")
+    command = sub.add_parser("run", help="Phase F1 end-to-end master pipeline"); command.add_argument("strategy_file"); command.add_argument("--repository-root", default="."); command.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True); command.add_argument("--implementation-enabled", action="store_true"); command.add_argument("--research-scenario", default="strong-stable"); command.add_argument("--prop-scenario", default="profitable"); command.add_argument("--portfolio-scenario", default="complementary"); command.add_argument("--product", default="Alpha Futures Zero 25K")
+    command = sub.add_parser("resume", help="resume a Phase F1 master run"); command.add_argument("run_id"); command.add_argument("--repository-root", default=".")
+    command = sub.add_parser("approve", help="approve or reject a Phase F1 generated specification"); command.add_argument("run_id"); command.add_argument("--decision", choices=["APPROVE", "REJECT"], default="APPROVE"); command.add_argument("--note")
+    command = sub.add_parser("report", help="show a Phase F1 final report"); command.add_argument("run_id")
+    command = sub.add_parser("artifacts", help="list Phase F1 artifacts"); command.add_argument("run_id")
+    command = sub.add_parser("cancel", help="cancel a Phase F1 master run"); command.add_argument("run_id"); command.add_argument("--reason", default="cancelled by operator")
     command = sub.add_parser("validate-spec"); command.add_argument("strategy_id")
     command = sub.add_parser("submit-spec"); command.add_argument("strategy_id")
     command = sub.add_parser("approve-spec"); command.add_argument("strategy_id")
@@ -43,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("record-decision"); command.add_argument("strategy_id"); command.add_argument("decision_json")
     command = sub.add_parser("history"); command.add_argument("strategy_id")
     workflow = sub.add_parser("workflow", help="typed Smithers bridge commands")
-    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
+    workflow.add_argument("workflow_command", choices=["generate-spec", "validate-spec", "register-generated-spec", "approve", "implementation-plan", "execute-codex", "record-codex-result", "run-tests", "run-required-tests", "research-start", "research-run-baseline", "research-edge-gate", "research-analyze", "research-propose-round", "research-run-round", "research-review-round", "research-freeze-family", "research-freeze-candidate", "research-walk-forward", "research-holdout", "research-stress", "research-throughput", "research-final-review", "research-status", "research-journal", "prop-start", "prop-verify-rules", "prop-verify-contracts", "prop-reconcile", "prop-run-risk", "prop-run-scenarios", "prop-economics", "prop-final-review", "prop-status", "prop-journal", "portfolio-create", "portfolio-eligible-strategies", "portfolio-generate-candidates", "portfolio-merge-signals", "portfolio-analyze-overlap", "portfolio-analyze-correlation", "portfolio-run-risk", "portfolio-run-prop", "portfolio-run-ablation", "portfolio-run-stress", "portfolio-final-review", "portfolio-status", "portfolio-journal", "master-start", "master-approve", "master-resume", "master-status", "master-report", "master-artifacts", "master-cancel", "technical-verification", "final-status", "verification-create-manifest", "verification-run", "diagnose-tools"])
     workflow.add_argument("--input-json")
     workflow.add_argument("--repository-root", default=".")
     research = sub.add_parser("research", help="deterministic Phase C research commands")
@@ -68,6 +74,13 @@ def _parser() -> argparse.ArgumentParser:
     prop_sub = prop.add_subparsers(dest="prop_command", required=True)
     for name in ("dry-run", "start", "verify-rules", "verify-contracts", "reconcile", "run-risk", "run-scenarios", "scenario-status", "economics", "final-review", "journal", "status"):
         command = prop_sub.add_parser(name); command.add_argument("strategy_id"); command.add_argument("--scenario", default="profitable"); command.add_argument("--repository-root", default="."); command.add_argument("--product", default="Alpha Futures Zero 25K")
+    portfolio = sub.add_parser("portfolio", help="deterministic Phase E multi-strategy portfolio research")
+    portfolio_sub = portfolio.add_subparsers(dest="portfolio_command", required=True)
+    command = portfolio_sub.add_parser("create"); command.add_argument("portfolio_config"); command.add_argument("--repository-root", default=".")
+    command = portfolio_sub.add_parser("eligible-strategies"); command.add_argument("--exploratory-prop", action="store_true"); command.add_argument("--non-prop", action="store_true")
+    command = portfolio_sub.add_parser("dry-run"); command.add_argument("--portfolio-id", default="phase-e-dry-run"); command.add_argument("--scenario", default="complementary"); command.add_argument("--repository-root", default=".")
+    for name in ("generate-candidates", "merge-signals", "analyze-overlap", "analyze-correlation", "run-risk", "run-prop", "run-ablation", "run-stress", "final-review", "status", "journal"):
+        command = portfolio_sub.add_parser(name); command.add_argument("portfolio_id"); command.add_argument("--repository-root", default="."); command.add_argument("--scenario", default="complementary")
     verification = sub.add_parser("verification", help="Phase B.5 technical integrity verification")
     verification_sub = verification.add_subparsers(dest="verification_command", required=True)
     command = verification_sub.add_parser("create-manifest"); command.add_argument("strategy_id"); command.add_argument("--diagnostic-dir"); command.add_argument("--output")
@@ -113,7 +126,31 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "list-strategies":
             _print(registry.list_strategies())
         elif args.command == "status":
-            _print(controller.status(args.strategy_id))
+            try:
+                _print(controller.status(args.strategy_id))
+            except ResearchPipelineError:
+                from .phase_f1.service import MasterPipelineService
+                _print(MasterPipelineService(args.registry).status(args.strategy_id))
+        elif args.command == "run":
+            from .phase_f1.service import MasterPipelineService
+            service = MasterPipelineService(args.registry, args.repository_root)
+            options = service.input_model(args.strategy_file, args.repository_root, registry_path=args.registry, dry_run=args.dry_run, implementation_enabled=args.implementation_enabled, research_scenario=args.research_scenario, prop_scenario=args.prop_scenario, portfolio_scenario=args.portfolio_scenario, prop_product=args.product)
+            _print(service.start(options))
+        elif args.command == "resume":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry, args.repository_root).resume(args.run_id))
+        elif args.command == "approve":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry).approve(args.run_id, args.decision, args.note))
+        elif args.command == "report":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry).report(args.run_id))
+        elif args.command == "artifacts":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry).artifacts(args.run_id))
+        elif args.command == "cancel":
+            from .phase_f1.service import MasterPipelineService
+            _print(MasterPipelineService(args.registry).cancel(args.run_id, args.reason))
         elif args.command == "validate-spec":
             _print(controller.validate_specification(args.strategy_id))
         elif args.command == "submit-spec":
@@ -207,6 +244,34 @@ def main(argv: list[str] | None = None) -> int:
             elif command == "status": result = service.status(args.strategy_id)
             else: raise ValueError(f"unsupported prop command: {command}")
             _print(result.model_dump(mode="json") if hasattr(result, "model_dump") else result)
+        elif args.command == "portfolio":
+            from .portfolio.models import PortfolioSpec
+            from .portfolio.service import PortfolioService
+            if args.portfolio_command == "dry-run":
+                from .portfolio.fixtures import run_portfolio_dry_run
+                _print(run_portfolio_dry_run(args.registry, args.repository_root, args.portfolio_id, args.scenario))
+            elif args.portfolio_command == "create":
+                raw = yaml.safe_load(Path(args.portfolio_config).read_text(encoding="utf-8")) or {}
+                spec = PortfolioSpec.model_validate(raw)
+                _print(PortfolioService(args.registry, args.repository_root).create(spec))
+            elif args.portfolio_command == "eligible-strategies":
+                _print(PortfolioService(args.registry).eligible(exploratory_prop=args.exploratory_prop, non_prop=args.non_prop))
+            else:
+                service = PortfolioService(args.registry, args.repository_root, args.scenario)
+                command = args.portfolio_command
+                if command == "generate-candidates": result = service.generate_candidates(args.portfolio_id)
+                elif command == "merge-signals": result = service.merge_signals(args.portfolio_id)
+                elif command == "analyze-overlap": result = service.analyze_overlap(args.portfolio_id)
+                elif command == "analyze-correlation": result = service.analyze_correlation(args.portfolio_id)
+                elif command == "run-risk": result = service.run_risk(args.portfolio_id)
+                elif command == "run-prop": result = service.run_prop(args.portfolio_id)
+                elif command == "run-ablation": result = service.run_ablation(args.portfolio_id)
+                elif command == "run-stress": result = service.run_stress(args.portfolio_id)
+                elif command == "final-review": result = service.final_review(args.portfolio_id)
+                elif command == "status": result = service.status(args.portfolio_id)
+                elif command == "journal": result = {"entries": service.journal(args.portfolio_id)}
+                else: raise ValueError(f"unsupported portfolio command: {command}")
+                _print(result.model_dump(mode="json") if hasattr(result, "model_dump") else result)
         elif args.command == "verification":
             from .verification.fixtures import make_fixture
             from .verification.services import VerificationService

@@ -1,32 +1,3 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.pytest_tmp/
-.tmp/
-.venv/
-*.egg-info/
-data/raw/*.parquet
-data/binance_cache/
-.env
-.env.example
-reports/runs/
-reports/**/*.csv
-reports/**/*.parquet
-reports/**/*.html
-reports/**/*.png
-reports/**/*.xlsx
-reports/**/*.json
-
-# Keep documentation
-!reports/**/*.md
-!reports/**/README.md
-
-# Smithers run store (ephemeral — never commit)
-smithers.db
-smithers.db-shm
-smithers.db-wal
-
-node_modules/
 .pytest_tmp/
 .research_worktrees/
 .tmp/
