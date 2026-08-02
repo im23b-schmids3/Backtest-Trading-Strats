@@ -33,3 +33,8 @@ research_runs/
 job-002-recovery.patch
 value_area_trap_report.json
 >>>>>>> origin/feature/prop-compliance
+.env.example
+reports/
+smithers.db
+smithers.db-shm
+smithers.db-wal
