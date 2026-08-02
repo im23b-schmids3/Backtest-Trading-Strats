@@ -18,17 +18,28 @@ export const workflowInput = z.object({
   registry_path: z.string().min(1).nullable().optional(),
   dry_run: z.boolean().default(true),
   implementation_enabled: z.boolean().default(false),
+  confirmed_facts: z.array(z.string()).default([]),
+  assumptions: z.array(z.string()).default([]),
+  missing_information: z.array(z.string()).default([]),
+  ambiguities: z.array(z.string()).default([]),
+  source_run_id: z.string().nullable().optional(),
+  max_generation_attempts: z.number().int().min(1).max(3).default(3),
+  max_repair_attempts: z.number().int().min(0).max(2).default(2),
 }).strict();
 
 export const generatedSpec = z.object({
   strategy_id: z.string(), version: z.string(), specification_path: z.string(), specification_hash: z.string(),
   assumptions: z.array(z.string()), ambiguities: z.array(z.string()), fields_requiring_confirmation: z.array(z.string()),
   manual_review_required: z.boolean(), approval_summary: z.string(),
+  provenance: z.any(), validation_report_path: z.string().nullable().optional(),
+  semantic_validation_report_path: z.string().nullable().optional(), attempt: z.number().int().positive(),
 }).strict();
 
 export const specValidation = z.object({
   valid: z.boolean(), strategy_id: z.string(), version: z.string(), specification_path: z.string(), specification_hash: z.string(),
   errors: z.array(z.string()), manual_review_required: z.boolean(),
+  structured_errors: z.array(z.any()), semantic_report: z.any().nullable(),
+  canonical_path: z.string().nullable(), approval_ready: z.boolean(), provenance: z.any(),
 }).strict();
 
 export const registration = z.object({

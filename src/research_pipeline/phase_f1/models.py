@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -20,6 +20,15 @@ class MasterRunStatus(StrEnum):
     MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
     ABORTED = "ABORTED"
     FAILED = "FAILED"
+    SPECIFICATION_GENERATION_FAILURE = "SPECIFICATION_GENERATION_FAILURE"
+    WAITING_EXTERNAL_SPECIFICATION_GENERATION = "WAITING_EXTERNAL_SPECIFICATION_GENERATION"
+    WAITING_EXTERNAL_SPECIFICATION_REPAIR = "WAITING_EXTERNAL_SPECIFICATION_REPAIR"
+    WAITING_SPECIFICATION_APPROVAL = "WAITING_SPECIFICATION_APPROVAL"
+    WAITING_EXTERNAL_IMPLEMENTATION = "WAITING_EXTERNAL_IMPLEMENTATION"
+    WAITING_EXTERNAL_CODEX = "WAITING_EXTERNAL_CODEX"
+    ORCHESTRATOR_COMPLETED = "ORCHESTRATOR_COMPLETED"
+    PIPELINE_COMPLETED = "PIPELINE_COMPLETED"
+    RESEARCH_COMPLETED = "RESEARCH_COMPLETED"
 
 
 MasterRunOutcome = MasterRunStatus
@@ -52,6 +61,12 @@ class FinalClassification(StrEnum):
     REJECTED = "REJECTED"
     INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
     MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED"
+    INSUFFICIENT_MARKET_DATA = "INSUFFICIENT_MARKET_DATA"
+    REAL_ADAPTER_REQUIRED = "REAL_ADAPTER_REQUIRED"
+    IMPLEMENTATION_SCOPE_VIOLATION = "IMPLEMENTATION_SCOPE_VIOLATION"
+    ARTIFACT_INTEGRITY_FAILURE = "ARTIFACT_INTEGRITY_FAILURE"
+    IMPLEMENTATION_FAILURE = "IMPLEMENTATION_FAILURE"
+    RESEARCH_FAILURE = "RESEARCH_FAILURE"
 
 
 class IntakeSpec(StrictModel):
@@ -89,6 +104,11 @@ class MasterRunInput(StrictModel):
     prop_scenario: str = "profitable"
     portfolio_scenario: str = "complementary"
     prop_product: str = "Alpha Futures Zero 25K"
+    mode: Literal["dry_run", "real_run"] = "dry_run"
+    allow_proxy_data: bool = False
+    prebuilt_spec_path: str | None = None
+    max_generation_attempts: int = Field(default=3, ge=1, le=3)
+    max_repair_attempts: int = Field(default=2, ge=0, le=2)
 
 
 class ArtifactReference(StrictModel):
@@ -128,11 +148,26 @@ class FinalReport(StrictModel):
     portfolio_summary: dict[str, Any]
     final_recommendation: str
     known_limitations: list[str]
+    implementation_variant: str | None = None
     confidence: str
     artifacts: list[ArtifactReference]
     hashes: dict[str, str]
     phase_timings: list[PhaseTiming]
     generated_at: datetime
+    mode: Literal["dry_run", "real_run"] = "dry_run"
+    intake_summary: dict[str, Any] = Field(default_factory=dict)
+    adapter_validation: dict[str, Any] = Field(default_factory=dict)
+    data_availability: list[dict[str, Any]] = Field(default_factory=list)
+    baseline_summary: dict[str, Any] = Field(default_factory=dict)
+    parameter_research_summary: dict[str, Any] = Field(default_factory=dict)
+    frozen_candidate_summary: dict[str, Any] = Field(default_factory=dict)
+    walk_forward_summary: dict[str, Any] = Field(default_factory=dict)
+    holdout_summary: dict[str, Any] = Field(default_factory=dict)
+    stress_summary: dict[str, Any] = Field(default_factory=dict)
+    throughput_summary: dict[str, Any] = Field(default_factory=dict)
+    futures_prop_summary: dict[str, Any] = Field(default_factory=dict)
+    portfolio_eligibility: dict[str, Any] = Field(default_factory=dict)
+    git_review: dict[str, Any] = Field(default_factory=dict)
 
 
 class MasterStatus(StrictModel):
@@ -147,3 +182,12 @@ class MasterStatus(StrictModel):
     journal_entries: int
     artifacts: list[ArtifactReference]
     report: dict[str, Any] | None = None
+    mode: Literal["dry_run", "real_run"] = "dry_run"
+    pipeline_status: str = "ORCHESTRATOR_COMPLETED"
+    implementation_job_id: str | None = None
+    external_executor_required: bool = False
+    worktree_preflight: dict[str, Any] = Field(default_factory=dict)
+    codex_execution_status: str | None = None
+    implementation_test_status: str | None = None
+    b5_available: bool = False
+    next_command: str | None = None

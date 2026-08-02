@@ -573,6 +573,227 @@ def apply_migrations(connection) -> None:
             created_at TEXT NOT NULL,
             FOREIGN KEY(run_id) REFERENCES master_runs(run_id)
         );
+        CREATE TABLE IF NOT EXISTS strategy_adapters (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            adapter_version TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            implementation_module TEXT NOT NULL,
+            entry_point TEXT NOT NULL,
+            specification_hash TEXT NOT NULL,
+            code_commit TEXT,
+            worktree_path TEXT,
+            capabilities_json TEXT NOT NULL,
+            health_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version)
+        );
+        CREATE TABLE IF NOT EXISTS implementation_manifests (
+            master_run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            manifest_path TEXT NOT NULL,
+            manifest_hash TEXT NOT NULL,
+            manifest_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS implementation_scopes (
+            master_run_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            allowed INTEGER NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(master_run_id, path)
+        );
+        CREATE TABLE IF NOT EXISTS worktree_metadata (
+            master_run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            base_commit TEXT NOT NULL,
+            implementation_commit TEXT,
+            branch TEXT NOT NULL,
+            worktree_path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS normalized_backtest_runs (
+            run_id TEXT PRIMARY KEY,
+            master_run_id TEXT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            candidate_hash TEXT NOT NULL,
+            dataset_hashes_json TEXT NOT NULL,
+            configuration_hash TEXT NOT NULL,
+            artifact_paths_json TEXT NOT NULL,
+            artifact_hashes_json TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS trade_artifact_references (
+            run_id TEXT PRIMARY KEY,
+            artifact_path TEXT NOT NULL,
+            artifact_hash TEXT NOT NULL,
+            row_count INTEGER NOT NULL,
+            schema_version TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS parameter_family_schemas (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            family TEXT NOT NULL,
+            schema_json TEXT NOT NULL,
+            schema_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version, family)
+        );
+        CREATE TABLE IF NOT EXISTS phase_d_export_manifests (
+            master_run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            candidate_hash TEXT NOT NULL,
+            artifact_path TEXT NOT NULL,
+            artifact_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS phase_e_eligibility_records (
+            master_run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            candidate_hash TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS artifact_integrity_checks (
+            master_run_id TEXT NOT NULL,
+            artifact_path TEXT NOT NULL,
+            expected_hash TEXT NOT NULL,
+            observed_hash TEXT,
+            status TEXT NOT NULL,
+            checked_at TEXT NOT NULL,
+            PRIMARY KEY(master_run_id, artifact_path)
+        );
+        CREATE TABLE IF NOT EXISTS specification_attempts (
+            run_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            draft_path TEXT NOT NULL,
+            validation_path TEXT,
+            semantic_validation_path TEXT,
+            repair_prompt_path TEXT,
+            codex_invocation_path TEXT,
+            draft_hash TEXT,
+            validation_hash TEXT,
+            error_summary TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, attempt)
+        );
+        CREATE TABLE IF NOT EXISTS specification_ambiguities (
+            run_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            field_path TEXT NOT NULL,
+            message TEXT NOT NULL,
+            blocking INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, kind, field_path, message)
+        );
+        CREATE TABLE IF NOT EXISTS specification_failures (
+            run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            classification TEXT NOT NULL,
+            final_reason TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS implementation_jobs (
+            run_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            specification_hash TEXT NOT NULL,
+            job_path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            result_path TEXT,
+            result_hash TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(run_id) REFERENCES master_runs(run_id)
+        );
+        CREATE TABLE IF NOT EXISTS specification_jobs (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            job_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            job_path TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            result_path TEXT,
+            result_hash TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS specification_jobs_run_attempt
+            ON specification_jobs(run_id, attempt);
+        CREATE TABLE IF NOT EXISTS specification_job_attempts (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            candidate_status TEXT NOT NULL,
+            draft_path TEXT,
+            draft_hash TEXT,
+            validation_path TEXT,
+            validation_hash TEXT,
+            semantic_validation_path TEXT,
+            semantic_validation_hash TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id),
+            FOREIGN KEY(run_id, job_id) REFERENCES specification_jobs(run_id, job_id)
+        );
+        CREATE TABLE IF NOT EXISTS specification_external_invocations (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            invocation_path TEXT NOT NULL,
+            invocation_hash TEXT NOT NULL,
+            exit_code INTEGER,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id),
+            FOREIGN KEY(run_id, job_id) REFERENCES specification_jobs(run_id, job_id)
+        );
+        CREATE TABLE IF NOT EXISTS specification_result_manifests (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            manifest_path TEXT NOT NULL,
+            manifest_hash TEXT NOT NULL,
+            extraction_path TEXT,
+            extraction_hash TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id),
+            FOREIGN KEY(run_id, job_id) REFERENCES specification_jobs(run_id, job_id)
+        );
+        CREATE TABLE IF NOT EXISTS specification_pause_signals (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            smithers_run_id TEXT,
+            event_name TEXT NOT NULL,
+            correlation_id TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id, event_name),
+            FOREIGN KEY(run_id, job_id) REFERENCES specification_jobs(run_id, job_id)
+        );
         """
     )
     connection.execute("CREATE TABLE IF NOT EXISTS research_schema_version (version INTEGER NOT NULL)")
@@ -589,4 +810,13 @@ def apply_migrations(connection) -> None:
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS prop_contracts_strategy ON prop_contracts(strategy_id, strategy_version)")
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS prop_mappings_strategy ON prop_mappings(strategy_id, strategy_version)")
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS prop_final_reviews_strategy ON prop_final_reviews(strategy_id, strategy_version)")
+    connection.execute("CREATE TABLE IF NOT EXISTS phase_f2_schema_version (version INTEGER NOT NULL)")
+    if connection.execute("SELECT version FROM phase_f2_schema_version LIMIT 1").fetchone() is None:
+        connection.execute("INSERT INTO phase_f2_schema_version(version) VALUES (1)")
+    connection.execute("CREATE TABLE IF NOT EXISTS specification_schema_version (version INTEGER NOT NULL)")
+    row = connection.execute("SELECT version FROM specification_schema_version LIMIT 1").fetchone()
+    if row is None:
+        connection.execute("INSERT INTO specification_schema_version(version) VALUES (1)")
+    elif row[0] < 1:
+        connection.execute("UPDATE specification_schema_version SET version=1")
     connection.commit()

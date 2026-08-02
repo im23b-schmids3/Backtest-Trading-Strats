@@ -185,7 +185,9 @@ class PropResearchService:
             selected = []
         elif self.scenario == "synthetic-proxy":
             selected = [item.model_copy(update={"strategy_market": "TEST", "native_or_proxy": "proxy", "confidence_level": ConfidenceClass.SYNTHETIC_PROXY_HIGH_UNCERTAINTY, "limitations": ["synthetic return-mapped proxy"]}) for item in default_market_mappings() if item.target_futures_contract == "MBT"]
-        else: selected = [item for item in default_market_mappings() if item.target_futures_contract == "MBT"]
+        else:
+            requested = set(self._strategy(strategy_id)["specification_json"].get("markets", []))
+            selected = [item for item in default_market_mappings() if item.strategy_market in requested]
         if not selected: self.registry.update_prop_run(self._prop_run(strategy_id)["run_id"], phase=PropPhase.PROP_SIMULATION.value, status="INSUFFICIENT_FUTURES_DATA"); return {"status": "INSUFFICIENT_FUTURES_DATA", "compliance": compliance.model_dump(mode="json")}
         mappings = {item.strategy_market: item for item in selected}; trades = list(self.trade_adapter.signals(strategy_id, self.scenario))
         if self.scenario == "synthetic-proxy": trades = [item.model_copy(update={"source_market": "TEST"}) for item in trades]

@@ -30,7 +30,11 @@ const { Workflow, outputs, smithers } = createSmithers({
 
 async function bridge(command: string, payload: unknown, repositoryRoot: string): Promise<unknown> {
   const registryPath = (payload as { registry_path?: string }).registry_path ?? activeRegistryPath ?? process.env.RESEARCH_PIPELINE_REGISTRY ?? `${repositoryRoot}/research_registry/research_pipeline.sqlite3`;
-  const bridgedPayload = { ...(payload as Record<string, unknown>), registry_path: registryPath };
+  const bridgedPayload: Record<string, unknown> = { ...(payload as Record<string, unknown>), registry_path: registryPath };
+  if ("source_run_id" in bridgedPayload) {
+    bridgedPayload.run_id = bridgedPayload.source_run_id;
+    delete bridgedPayload.source_run_id;
+  }
   const env = { ...process.env, PYTHONPATH: `${repositoryRoot}/src`, RESEARCH_PIPELINE_REGISTRY: registryPath };
   const child = Bun.spawn(["python", "-m", "research_pipeline", "workflow", command, "--input-json", JSON.stringify(bridgedPayload)], {
     cwd: repositoryRoot, env, stdout: "pipe", stderr: "pipe",

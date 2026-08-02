@@ -1,0 +1,32 @@
+strategy_name: RandomOpenTest
+description: >-
+  A deterministic, intentionally meaningless integration-test strategy. On
+  every valid US trading day, use the first hourly bar representing the
+  regular America/New_York cash-session open, choose long or short from a
+  deterministic coin flip seeded by strategy name and trading date, allocate
+  5 percent of current equity, and exit at that same hourly bar's close.
+markets: [SPY]
+timeframes: [1h]
+entry_logic:
+  - Resolve hourly timestamps in America/New_York.
+  - Select the first regular-session bar at 09:30 local time.
+  - Choose long or short deterministically from RandomOpenTest plus trading date.
+exit_logic:
+  - Exit at the close of the same hourly bar.
+risk_model: Allocate 5 percent of current account equity per trade.
+position_sizing: Initial capital 10000; each daily trade uses 5 percent of current equity.
+filters: []
+optional_notes: >-
+  Repository-compatible 1-hour test variant only. The original 10-minute
+  holding period is not claimed or approximated. Use the existing
+  data/v11_5_proxy_raw/SPY_1h.parquet dataset only. Test period is
+  2025-01-01 through 2026-01-01, with the end date exclusive.
+confirmed_facts:
+  - This strategy exists only to validate the complete automated research pipeline.
+  - The strategy is intentionally not expected to be profitable.
+  - No optimization, filters, live trading, or deployment is authorized.
+assumptions:
+  - SPY is the repository-compatible US equity proxy market.
+  - A timestamped 1h bar represents the regular cash-session open at 09:30 America/New_York.
+missing_information: []
+ambiguities: []

@@ -1,4 +1,5 @@
 .pytest_tmp/
+.pytest_cache/
 .research_worktrees/
 .tmp/
 data/value_area_trap/
@@ -11,3 +12,4 @@ value_area_trap_artifacts.json
 value_area_trap_final_artifacts.json
 value_area_trap_final_report.json
 value_area_trap_report.json
+.phase-f2-real-*

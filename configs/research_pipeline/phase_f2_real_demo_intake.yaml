@@ -1,0 +1,25 @@
+strategy_name: F2-real-breakout-demo
+description: >-
+  A deterministic breakout demonstration strategy for Phase F2 integration
+  validation. It is a local-data engineering demonstration and makes no claim
+  of economic value.
+markets: [SPX]
+timeframes: [1h]
+entry_logic:
+  - Enter on the next bar after a completed candle closes above the prior lookback high or below the prior lookback low.
+exit_logic:
+  - Exit at a fixed stop, fixed target, maximum holding period, or terminal flatten.
+risk_model: Fixed one-unit demonstration risk with an explicit percentage stop.
+position_sizing: One unit per signal for deterministic diagnostics.
+filters:
+  - Use only completed candles and chronological local parquet data.
+optional_notes: >-
+  SPX is explicitly represented by the declared SPY local proxy for this
+  demonstration; proxy limitations must remain visible in the report.
+confirmed_facts:
+  - This is a deterministic local integration demonstration.
+  - No live trading, broker access, or deployment is authorized.
+assumptions:
+  - The repository-local SPY 1h dataset is the approved proxy for SPX.
+missing_information: []
+ambiguities: []

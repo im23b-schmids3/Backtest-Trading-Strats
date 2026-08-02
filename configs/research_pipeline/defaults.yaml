@@ -1,5 +1,8 @@
 registry_path: research_registry/research_pipeline.sqlite3
 report_size_limit_mb: 100
+specification_generation:
+  max_generation_attempts: 3
+  max_repair_attempts: 2
 budgets:
   max_parameter_families: 6
   max_rounds_per_family: 3

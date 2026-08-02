@@ -25,11 +25,8 @@ class CodexRunner:
             raise ValueError("Phase B Codex sandbox must be read-only or workspace-write")
         root = Path(cwd).resolve()
         command = [self.executable or "codex", "exec", "--sandbox", sandbox, "--cd", str(root)]
-        if sandbox == "workspace-write":
-            command.extend(["--ask-for-approval", "never"])
         if output_last_message:
             command.extend(["--output-last-message", str(Path(output_last_message).resolve())])
-        command.append(prompt)
         safe_command = [redact_secrets(str(item)) for item in command]
         if dry_run:
             return CodexExecutionResult(success=True, executed=False, command=safe_command, cwd=str(root), sandbox=sandbox,
@@ -39,7 +36,14 @@ class CodexRunner:
                 exit_code=None, stdout="", stderr="Codex executable not found", duration_ms=0, timed_out=False, error_type="MISSING_EXECUTABLE")
         started = time.monotonic()
         try:
-            completed = self.run_process(command, cwd=str(root), capture_output=True, text=True, timeout=timeout_seconds, shell=False)
+            process_options = dict(cwd=str(root), input=prompt, capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=timeout_seconds, shell=False)
+            # Avoid opening a console window for the external executor on
+            # Windows.  Test doubles often expose a narrower signature, so
+            # only pass the platform-specific option to subprocess.run itself.
+            if os.name == "nt" and self.run_process is subprocess.run:
+                process_options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            completed = self.run_process(command, **process_options)
             stdout, stderr = redact_secrets(completed.stdout or ""), redact_secrets(completed.stderr or "")
             return CodexExecutionResult(success=completed.returncode == 0, executed=True, command=safe_command, cwd=str(root), sandbox=sandbox,
                 exit_code=completed.returncode, stdout=stdout, stderr=stderr, duration_ms=int((time.monotonic() - started) * 1000), timed_out=False)
@@ -88,9 +92,19 @@ def codex_tool_diagnostic() -> dict[str, object]:
     version_ok = False
     if resolved:
         try:
-            version_ok = subprocess.run([resolved, "--version"], capture_output=True, text=True,
-                                        timeout=15, shell=False).returncode == 0
+            options = dict(capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, shell=False)
+            if os.name == "nt":
+                options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            version_ok = subprocess.run([resolved, "--version"], **options).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             version_ok = False
     return {"python_executable": sys.executable, "codex_executable": resolved,
             "codex_version_command_success": version_ok}
+
+
+def is_restricted_execution_failure(result: CodexExecutionResult) -> bool:
+    """Recognize tenant/sandbox denial without weakening the security policy."""
+    text = f"{result.stderr}\n{result.stdout}".lower()
+    explicit = ("os error 10013", "tenant policy", "network access is disabled",
+                "network access disabled", "sandbox policy", "restricted sandbox")
+    return any(marker in text for marker in explicit)
