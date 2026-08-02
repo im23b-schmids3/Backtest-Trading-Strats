@@ -1,0 +1,2 @@
+{"timestamp": "2026-07-16T17:31:06+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-b-final-4f42ca32 version=phase-b-1"}
+{"timestamp": "2026-07-16T17:31:06+0200", "level": "INFO", "event": "state_transition strategy_id=phase-b-final-4f42ca32 old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}

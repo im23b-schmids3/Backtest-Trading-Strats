@@ -1,0 +1,11 @@
+{
+  "dataset_hash": "dataset-phase-c",
+  "experiment_id": "round-phase-d-profitable-2-stop_distance-experiment-3",
+  "parameters": {
+    "stop_distance": 4
+  },
+  "specification_hash": "9fc80b72f7303c824cd79368e0dd4fcba9bb97dcf68e594a5c1c7d5c8a0ebdb7",
+  "split_hash": "db25061102570583a938f5aee178834874b3d7d964fd96c5d4a96fe03739e8b5",
+  "strategy_id": "phase-d-profitable",
+  "strategy_version": "phase-c-1"
+}

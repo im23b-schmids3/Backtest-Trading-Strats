@@ -1,0 +1,36 @@
+{"timestamp": "2026-07-17T00:35:17+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-d-profitable version=phase-c-1"}
+{"timestamp": "2026-07-17T00:35:17+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-17T00:35:17+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-17T00:35:17+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-17T00:35:17+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
+{"timestamp": "2026-07-17T00:35:17+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=BASELINE_BACKTEST"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=BASELINE_BACKTEST new_state=EDGE_GATE"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=EDGE_GATE new_state=PARAMETER_RESEARCH"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "budget_used strategy_id=phase-d-profitable total_backtests=5"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "budget_used strategy_id=phase-d-profitable total_backtests=10"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=PARAMETER_RESEARCH new_state=CANDIDATE_FREEZE"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=CANDIDATE_FREEZE new_state=WALK_FORWARD"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=WALK_FORWARD new_state=HOLDOUT"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "holdout_access strategy_id=phase-d-profitable"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=HOLDOUT new_state=STRESS_TESTS"}
+{"timestamp": "2026-07-17T00:35:18+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=STRESS_TESTS new_state=THROUGHPUT"}
+{"timestamp": "2026-07-17T00:35:19+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=THROUGHPUT new_state=FINAL_REVIEW"}
+{"timestamp": "2026-07-17T00:35:19+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-profitable old_state=FINAL_REVIEW new_state=ACCEPTED"}
+{"timestamp": "2026-07-17T00:35:51+0200", "level": "INFO", "event": "strategy_registered strategy_id=phase-d-negative version=phase-c-1"}
+{"timestamp": "2026-07-17T00:35:51+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=STRATEGY_DRAFT new_state=WAITING_FOR_SPEC_APPROVAL"}
+{"timestamp": "2026-07-17T00:35:51+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=WAITING_FOR_SPEC_APPROVAL new_state=IMPLEMENTATION"}
+{"timestamp": "2026-07-17T00:35:51+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=IMPLEMENTATION new_state=IMPLEMENTATION_VERIFICATION"}
+{"timestamp": "2026-07-17T00:35:51+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=IMPLEMENTATION_VERIFICATION new_state=TECHNICAL_INTEGRITY_VERIFICATION"}
+{"timestamp": "2026-07-17T00:35:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=TECHNICAL_INTEGRITY_VERIFICATION new_state=BASELINE_BACKTEST"}
+{"timestamp": "2026-07-17T00:35:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=BASELINE_BACKTEST new_state=EDGE_GATE"}
+{"timestamp": "2026-07-17T00:35:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=EDGE_GATE new_state=PARAMETER_RESEARCH"}
+{"timestamp": "2026-07-17T00:35:52+0200", "level": "INFO", "event": "budget_used strategy_id=phase-d-negative total_backtests=5"}
+{"timestamp": "2026-07-17T00:35:52+0200", "level": "INFO", "event": "budget_used strategy_id=phase-d-negative total_backtests=10"}
+{"timestamp": "2026-07-17T00:35:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=PARAMETER_RESEARCH new_state=CANDIDATE_FREEZE"}
+{"timestamp": "2026-07-17T00:35:52+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=CANDIDATE_FREEZE new_state=WALK_FORWARD"}
+{"timestamp": "2026-07-17T00:35:53+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=WALK_FORWARD new_state=HOLDOUT"}
+{"timestamp": "2026-07-17T00:35:53+0200", "level": "INFO", "event": "holdout_access strategy_id=phase-d-negative"}
+{"timestamp": "2026-07-17T00:35:53+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=HOLDOUT new_state=STRESS_TESTS"}
+{"timestamp": "2026-07-17T00:35:53+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=STRESS_TESTS new_state=THROUGHPUT"}
+{"timestamp": "2026-07-17T00:35:53+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=THROUGHPUT new_state=FINAL_REVIEW"}
+{"timestamp": "2026-07-17T00:35:53+0200", "level": "INFO", "event": "state_transition strategy_id=phase-d-negative old_state=FINAL_REVIEW new_state=ACCEPTED"}

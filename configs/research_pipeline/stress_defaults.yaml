@@ -1,0 +1,12 @@
+# Stress scenarios are diagnostic and never change a frozen candidate.
+scenarios:
+  - normal_fees
+  - fees_x2
+  - fees_x3
+  - slippage
+  - worse_entries
+  - worse_exits
+  - trade_removal_seed_17
+  - missing_fills
+minimum_profitable_scenario_ratio: 0.50
+maximum_acceptable_drawdown: 0.35

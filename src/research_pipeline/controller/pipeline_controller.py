@@ -64,6 +64,12 @@ class PipelineController:
     def transition(self, strategy_id: str, new_state: PipelineState | str, reason: str) -> dict:
         strategy = self.registry.get_strategy(strategy_id)
         state = PipelineState(new_state)
+        if state == PipelineState.BASELINE_BACKTEST and strategy["current_phase"] == PipelineState.TECHNICAL_INTEGRITY_VERIFICATION.value and not self.registry.has_verified_verification(strategy_id, strategy["version"]):
+            raise SpecificationValidationError("BASELINE_BACKTEST requires a persisted VERIFIED technical-integrity result")
+        # Preserve the Phase A test fixture's historical direct path while all
+        # Phase B+ strategy versions use the mandatory B.5 gate.
+        if state == PipelineState.BASELINE_BACKTEST and strategy["current_phase"] == PipelineState.IMPLEMENTATION_VERIFICATION.value and not strategy["version"].startswith("phase-a-"):
+            raise SpecificationValidationError("new implementations must enter TECHNICAL_INTEGRITY_VERIFICATION before baseline research")
         if requires_split_for_transition(state) and self.registry.get_split(strategy_id) is None:
             raise SpecificationValidationError("a split definition must exist before parameter research starts")
         if state == PipelineState.PARAMETER_RESEARCH and strategy["parameters_frozen"]:

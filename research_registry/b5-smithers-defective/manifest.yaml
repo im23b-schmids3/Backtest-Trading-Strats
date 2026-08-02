@@ -1,0 +1,34 @@
+strategy_id: phase-b-dry-run
+strategy_version: phase-b-1
+implementation_commit: null
+verification_run_id: 0a92dd5d-3c2a-4625-8e78-51f98dacad78
+applicable_capabilities: []
+diagnostic_files:
+- research_registry\b5-smithers-defective\diagnostics.json
+tolerance_settings:
+  absolute_pnl: 1.0e-09
+  relative_pnl: 1.0e-09
+  quantity: 1.0e-09
+  fees: 1.0e-09
+  timestamp: 0.0
+  hash: 0.0
+  report_metric: 1.0e-09
+required_checks:
+- trade_pnl
+- partial_exits
+- position_scaling
+- fees
+- trade_counts
+- causality
+- session_boundary
+- report_reconciliation
+- data_sources
+- determinism
+optional_checks: []
+data_sources: []
+expected_contracts: []
+expected_sessions: []
+known_exemptions: []
+approved_invariants_hash: null
+created_at: '2026-07-16T15:56:04.734018Z'
+manifest_hash: 33eb9d0f2553915a2ab0f147c9452046ac42d880a523c3c3d82fa00ded1266e0

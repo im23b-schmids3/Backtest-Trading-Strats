@@ -1,0 +1,9 @@
+{
+  "command": [
+    "synthetic-fixture",
+    "strong-stable",
+    "parameter_experiment"
+  ],
+  "exit_code": 0,
+  "status": "COMPLETED"
+}

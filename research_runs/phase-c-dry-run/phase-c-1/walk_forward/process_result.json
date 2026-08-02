@@ -1,0 +1,9 @@
+{
+  "command": [
+    "synthetic-fixture",
+    "strong-stable",
+    "walk_forward"
+  ],
+  "exit_code": 0,
+  "status": "COMPLETED"
+}

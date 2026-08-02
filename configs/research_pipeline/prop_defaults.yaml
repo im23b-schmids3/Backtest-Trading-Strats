@@ -1,0 +1,22 @@
+budgets:
+  max_scenarios: 20
+  max_accounts_per_scenario: 5
+  max_replay_duration_days: 365
+  max_artifact_size_mb: 100
+  max_policy_variants: 5
+  max_concurrent_evaluations: 5
+rules:
+  max_age_days: 120
+  default_provider: Alpha Futures
+  default_product: Zero 25K
+  verified_sources:
+    - https://help.alpha-futures.com/en/articles/11771813-zero-account-overview
+    - https://help.alpha-futures.com/en/articles/9492051-payout-policy
+    - https://help.alpha-futures.com/en/articles/9492014-daily-loss-guard
+contracts:
+  allowed: [MBT, MET, MGC, SIL, MES, MNQ, MCL]
+  require_source_hash: true
+data_limitations:
+  synthetic_adapter_is_not_live_evidence: true
+  proxy_results_require_exploratory_classification: true
+  native_futures_data_required_for_production: true

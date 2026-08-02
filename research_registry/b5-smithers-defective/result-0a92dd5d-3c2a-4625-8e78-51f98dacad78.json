@@ -1,0 +1,187 @@
+{
+  "blocking_issues": [
+    "T1: PnL reconciliation failed"
+  ],
+  "checks": [
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [
+        "T1: PnL reconciliation failed"
+      ],
+      "check_name": "trade_pnl",
+      "evidence_path": null,
+      "evidence_rows": [
+        {
+          "calculated_gross": 10.0,
+          "reported_gross": 20.0,
+          "trade_id": "T1"
+        }
+      ],
+      "expected_value": 0,
+      "observed_value": 1,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "FAIL",
+      "tolerance": 1e-09,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "partial_exits",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "position_scaling",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "fees",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "trade_counts",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "causality",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "session_boundary",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "report_reconciliation",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": true,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "data_sources",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    },
+    {
+      "applicability": "mandatory",
+      "blocking_issues": [],
+      "check_name": "determinism",
+      "evidence_path": null,
+      "evidence_rows": [],
+      "expected_value": null,
+      "observed_value": null,
+      "repair_eligible": false,
+      "severity": "blocking",
+      "status": "PASS",
+      "tolerance": null,
+      "warnings": []
+    }
+  ],
+  "evidence_rows": [
+    {
+      "calculated_gross": 10.0,
+      "reported_gross": 20.0,
+      "trade_id": "T1"
+    }
+  ],
+  "files_inspected": [
+    "C:\\Users\\sandr\\Trading-Bot-Fib\\research_registry\\b5-smithers-defective\\diagnostics.json"
+  ],
+  "mandatory_checks_failed": [
+    "trade_pnl"
+  ],
+  "mandatory_checks_passed": [
+    "partial_exits",
+    "position_scaling",
+    "fees",
+    "trade_counts",
+    "causality",
+    "session_boundary",
+    "report_reconciliation",
+    "data_sources",
+    "determinism"
+  ],
+  "outcome": "TECHNICAL_REPAIR_REQUIRED",
+  "recommended_next_state": "TECHNICAL_REPAIR_REQUIRED",
+  "repair_eligibility": true,
+  "strategy_id": "phase-b-dry-run",
+  "strategy_version": "phase-b-1",
+  "timestamp": "2026-07-16T15:56:21.740567Z",
+  "verification_run_id": "0a92dd5d-3c2a-4625-8e78-51f98dacad78",
+  "warnings": []
+}

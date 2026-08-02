@@ -185,6 +185,206 @@ class Registry:
         with self.database.session() as connection:
             result = {}
             for table in ("transitions", "experiments", "holdout_accesses", "decisions", "failures"):
-                rows = connection.execute(f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=? ORDER BY id", (strategy["strategy_id"], strategy["version"])).fetchall()
+                rows = connection.execute(f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=? ORDER BY rowid", (strategy["strategy_id"], strategy["version"])).fetchall()
                 result[table] = [dict(row) for row in rows]
             return result
+
+    def record_verification(self, result: dict, manifest: dict, artifact_rows: list[dict] | None = None) -> dict:
+        """Persist a B.5 result idempotently, including its check evidence."""
+        strategy = self.get_strategy(result["strategy_id"], result["strategy_version"])
+        checks = result.get("checks", [])
+        with self.database.transaction() as connection:
+            existing = connection.execute("SELECT result_json FROM verification_runs WHERE verification_run_id=?", (result["verification_run_id"],)).fetchone()
+            if existing:
+                return json.loads(existing[0])
+            connection.execute("""INSERT INTO verification_runs(verification_run_id,strategy_id,strategy_version,implementation_commit,manifest_path,manifest_hash,started_at,ended_at,status,outcome,result_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (result["verification_run_id"], strategy["strategy_id"], strategy["version"], manifest.get("implementation_commit"), manifest.get("manifest_path", ""), manifest["manifest_hash"], result["timestamp"], result["timestamp"], "COMPLETED", result["outcome"], json.dumps(result, sort_keys=True)))
+            for check in checks:
+                connection.execute("""INSERT INTO verification_checks(verification_run_id,check_name,applicability,status,severity,observed_value,expected_value,tolerance,evidence_path,repair_eligibility)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""", (result["verification_run_id"], check["check_name"], check.get("applicability", "mandatory"), check["status"], check.get("severity", "blocking"), json.dumps(check.get("observed_value"), sort_keys=True), json.dumps(check.get("expected_value"), sort_keys=True), str(check.get("tolerance")) if check.get("tolerance") is not None else None, check.get("evidence_path"), int(check.get("repair_eligible", False))))
+            for artifact in artifact_rows or []:
+                connection.execute("INSERT INTO diagnostic_artifacts(verification_run_id,file_path,file_hash,schema_version,row_count,created_at) VALUES(?,?,?,?,?,?)", (result["verification_run_id"], artifact["file_path"], artifact["file_hash"], artifact.get("schema_version", "1"), artifact.get("row_count", 0), artifact.get("created_at", now_iso())))
+        return result
+
+    def get_verification(self, strategy_id: str, verification_run_id: str | None = None) -> dict | None:
+        strategy = self.get_strategy(strategy_id)
+        with self.database.session() as connection:
+            query = "SELECT result_json FROM verification_runs WHERE strategy_id=? AND strategy_version=?"
+            params: list = [strategy["strategy_id"], strategy["version"]]
+            if verification_run_id:
+                query += " AND verification_run_id=?"; params.append(verification_run_id)
+            query += " ORDER BY started_at DESC LIMIT 1"
+            row = connection.execute(query, params).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def has_verified_verification(self, strategy_id: str, version: str | None = None) -> bool:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            return connection.execute("SELECT 1 FROM verification_runs WHERE strategy_id=? AND strategy_version=? AND outcome='VERIFIED' LIMIT 1", (strategy["strategy_id"], strategy["version"])).fetchone() is not None
+
+    # Phase C research records. These methods are intentionally small,
+    # idempotent persistence primitives; policy remains in PhaseCService.
+    def _strategy_key(self, strategy_id: str, version: str | None = None) -> tuple[str, str]:
+        strategy = self.get_strategy(strategy_id, version)
+        return strategy["strategy_id"], strategy["version"]
+
+    def research_run(self, run_id: str, strategy_id: str, version: str, phase: str, root_path: str, scenario: str | None = None) -> dict:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO research_runs(run_id,strategy_id,strategy_version,current_phase,status,root_path,scenario,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (run_id, strategy_id, version, phase, "RUNNING", root_path, scenario, timestamp, timestamp))
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM research_runs WHERE run_id=?", (run_id,)).fetchone()
+            return dict(row)
+
+    def save_research_json(self, table: str, strategy_id: str, version: str, payload: dict) -> None:
+        allowed = {"research_walk_forward", "research_holdout", "research_stress", "research_throughput", "research_final_reviews"}
+        if table not in allowed:
+            raise RegistryError(f"unsupported research result table: {table}")
+        with self.database.transaction() as connection:
+            connection.execute(f"INSERT INTO {table}(strategy_id,strategy_version,result_json,created_at) VALUES(?,?,?,?) ON CONFLICT(strategy_id,strategy_version) DO UPDATE SET result_json=excluded.result_json", (strategy_id, version, json.dumps(payload, sort_keys=True), now_iso()))
+
+    def get_research_json(self, table: str, strategy_id: str, version: str | None = None) -> dict | None:
+        allowed = {"research_walk_forward", "research_holdout", "research_stress", "research_throughput", "research_final_reviews"}
+        if table not in allowed:
+            raise RegistryError(f"unsupported research result table: {table}")
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute(f"SELECT result_json FROM {table} WHERE strategy_id=? AND strategy_version=?", (sid, ver)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def save_baseline(self, strategy_id: str, version: str, experiment_id: str, artifact: dict, verification_outcome: str, gates: list[dict]) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO research_baselines(strategy_id,strategy_version,experiment_id,artifact_json,verification_outcome,gate_outcomes_json,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(strategy_id,strategy_version) DO UPDATE SET experiment_id=excluded.experiment_id,artifact_json=excluded.artifact_json,verification_outcome=excluded.verification_outcome,gate_outcomes_json=excluded.gate_outcomes_json", (strategy_id, version, experiment_id, json.dumps(artifact, sort_keys=True), verification_outcome, json.dumps(gates, sort_keys=True), now_iso()))
+
+    def get_baseline(self, strategy_id: str, version: str | None = None) -> dict | None:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM research_baselines WHERE strategy_id=? AND strategy_version=?", (sid, ver)).fetchone()
+            if not row: return None
+            result = dict(row); result["artifact_json"] = json.loads(result["artifact_json"]); result["gate_outcomes_json"] = json.loads(result["gate_outcomes_json"]); return result
+
+    def save_research_round(self, round_id: str, strategy_id: str, version: str, family: str, number: int, proposed: list, status: str = "PROPOSED", reason: str = "") -> None:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO research_rounds(round_id,strategy_id,strategy_version,family,round_number,proposed_values_json,status,reason,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (round_id, strategy_id, version, family, number, json.dumps(proposed, sort_keys=True), status, reason, timestamp, timestamp))
+
+    def update_research_round(self, round_id: str, *, experiments: list | None = None, review: dict | None = None, selected_value: Any = None, status: str | None = None, reason: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            row = connection.execute("SELECT * FROM research_rounds WHERE round_id=?", (round_id,)).fetchone()
+            if not row: raise RegistryError(f"research round not found: {round_id}")
+            connection.execute("UPDATE research_rounds SET experiments_json=?,review_json=?,selected_value_json=?,status=?,reason=?,updated_at=? WHERE round_id=?", (json.dumps(experiments if experiments is not None else json.loads(row["experiments_json"]), sort_keys=True), json.dumps(review, sort_keys=True) if review is not None else row["review_json"], json.dumps(selected_value, sort_keys=True) if selected_value is not None else row["selected_value_json"], status or row["status"], reason if reason is not None else row["reason"], now_iso(), round_id))
+
+    def get_research_round(self, round_id: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM research_rounds WHERE round_id=?", (round_id,)).fetchone()
+            if not row: return None
+            result = dict(row)
+            for key in ("proposed_values_json", "experiments_json", "review_json", "selected_value_json"):
+                if result[key] is not None: result[key] = json.loads(result[key])
+            return result
+
+    def list_research_rounds(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM research_rounds WHERE strategy_id=? AND strategy_version=? ORDER BY round_number,created_at", (sid, ver)).fetchall()]
+
+    def save_candidate(self, strategy_id: str, version: str, candidate_hash: str, manifest: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO research_candidates(strategy_id,strategy_version,candidate_hash,manifest_json,created_at) VALUES(?,?,?,?,?)", (strategy_id, version, candidate_hash, json.dumps(manifest, sort_keys=True), now_iso()))
+
+    def get_candidate(self, strategy_id: str, version: str | None = None) -> dict | None:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM research_candidates WHERE strategy_id=? AND strategy_version=? ORDER BY created_at DESC LIMIT 1", (sid, ver)).fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["manifest_json"] = json.loads(result["manifest_json"])
+            return result
+
+    def record_metric_citation(self, strategy_id: str, version: str, phase: str, citation: dict, valid: bool, reason: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO research_metric_citations(strategy_id,strategy_version,phase,experiment_id,metric_name,cited_value,source_file,source_path,validation_status,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (strategy_id, version, phase, citation["experiment_id"], citation["metric_name"], citation["value"], citation["source_file"], citation["source_path"], "VALID" if valid else "INVALID", reason, now_iso()))
+
+    def journal(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM research_journal WHERE strategy_id=? AND strategy_version=? ORDER BY id", (sid, ver)).fetchall()]
+
+    def add_journal_entry(self, strategy_id: str, version: str, phase: str, entry: dict, markdown: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO research_journal(strategy_id,strategy_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))
+
+    # Phase D records use hashed JSON artifacts rather than storing trade
+    # journals directly in SQLite. The table name is allow-listed so callers
+    # cannot turn this helper into arbitrary SQL execution.
+    def prop_run(self, run_id: str, strategy_id: str, version: str, phase: str, root_path: str, scenario: str | None = None) -> dict:
+        timestamp = now_iso()
+        with self.database.transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO prop_runs(run_id,strategy_id,strategy_version,current_phase,status,root_path,scenario,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (run_id, strategy_id, version, phase, "RUNNING", root_path, scenario, timestamp, timestamp))
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM prop_runs WHERE run_id=?", (run_id,)).fetchone()
+            return dict(row)
+
+    def update_prop_run(self, run_id: str, phase: str | None = None, status: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            row = connection.execute("SELECT * FROM prop_runs WHERE run_id=?", (run_id,)).fetchone()
+            if not row: raise RegistryError(f"prop run not found: {run_id}")
+            connection.execute("UPDATE prop_runs SET current_phase=?,status=?,updated_at=? WHERE run_id=?", (phase or row["current_phase"], status or row["status"], now_iso(), run_id))
+
+    def save_prop_budget(self, strategy_id: str, version: str, limits: dict, usage: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO prop_budgets(strategy_id,strategy_version,limits_json,usage_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(strategy_id,strategy_version) DO UPDATE SET limits_json=excluded.limits_json, usage_json=excluded.usage_json, updated_at=excluded.updated_at", (strategy_id, version, json.dumps(limits, sort_keys=True), json.dumps(usage, sort_keys=True), now_iso()))
+
+    def get_prop_budget(self, strategy_id: str, version: str | None = None) -> dict | None:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM prop_budgets WHERE strategy_id=? AND strategy_version=?", (sid, ver)).fetchone()
+            if not row: return None
+            result = dict(row); result["limits_json"] = json.loads(result["limits_json"]); result["usage_json"] = json.loads(result["usage_json"]); return result
+
+    def save_prop_record(self, table: str, record_key: str, strategy_id: str, version: str, payload: dict, **fields: Any) -> None:
+        allowed = {"prop_rules", "prop_contracts", "prop_mappings", "prop_risk_runs", "prop_scenarios", "prop_accounts", "prop_payouts", "prop_billing_events", "prop_economics", "prop_compliance", "prop_final_reviews"}
+        if table not in allowed: raise RegistryError(f"unsupported prop table: {table}")
+        columns = ["record_key", "strategy_id", "strategy_version"] + list(fields) + ["result_json", "created_at"]
+        values = [record_key, strategy_id, version] + list(fields.values()) + [json.dumps(payload, sort_keys=True), now_iso()]
+        placeholders = ",".join("?" for _ in values)
+        updates = ",".join(f"{column}=excluded.{column}" for column in columns[1:] if column != "created_at")
+        with self.database.transaction() as connection:
+            connection.execute(f"INSERT INTO {table}({','.join(columns)}) VALUES({placeholders}) ON CONFLICT(record_key) DO UPDATE SET {updates}", values)
+
+    def get_prop_record(self, table: str, strategy_id: str, version: str | None = None, record_key: str | None = None) -> dict | None:
+        allowed = {"prop_rules", "prop_contracts", "prop_mappings", "prop_risk_runs", "prop_scenarios", "prop_accounts", "prop_payouts", "prop_billing_events", "prop_economics", "prop_compliance", "prop_final_reviews"}
+        if table not in allowed: raise RegistryError(f"unsupported prop table: {table}")
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            query = f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=?"
+            params: list[Any] = [sid, ver]
+            if record_key: query += " AND record_key=?"; params.append(record_key)
+            query += " ORDER BY created_at DESC LIMIT 1"
+            row = connection.execute(query, params).fetchone()
+            if not row: return None
+            result = dict(row); result["result_json"] = json.loads(result["result_json"]); return result
+
+    def list_prop_records(self, table: str, strategy_id: str, version: str | None = None) -> list[dict]:
+        allowed = {"prop_scenarios", "prop_economics", "prop_accounts", "prop_payouts", "prop_billing_events"}
+        if table not in allowed: raise RegistryError(f"unsupported prop table: {table}")
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            result = []
+            for row in connection.execute(f"SELECT * FROM {table} WHERE strategy_id=? AND strategy_version=? ORDER BY created_at", (sid, ver)).fetchall():
+                item = dict(row); item["result_json"] = json.loads(item["result_json"]); result.append(item)
+            return result
+
+    def add_prop_event(self, strategy_id: str, version: str, account_id: str, event: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO prop_account_events(strategy_id,strategy_version,account_id,event_json,created_at) VALUES(?,?,?,?,?)", (strategy_id, version, account_id, json.dumps(event, sort_keys=True), now_iso()))
+
+    def prop_journal(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        sid, ver = self._strategy_key(strategy_id, version)
+        with self.database.session() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM prop_journal WHERE strategy_id=? AND strategy_version=? ORDER BY id", (sid, ver)).fetchall()]
+
+    def add_prop_journal_entry(self, strategy_id: str, version: str, phase: str, entry: dict, markdown: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO prop_journal(strategy_id,strategy_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))
