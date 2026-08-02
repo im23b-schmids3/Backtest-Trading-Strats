@@ -32,8 +32,9 @@ from ..research.services import PhaseCService
 from ..verification.fixtures import make_fixture
 from ..verification.services import VerificationService
 from ..implementation.jobs import ImplementationJobService
+from ..value_area_trap import AggregateTradeManifest
 from .models import (ApprovalRecord, ArtifactReference, FinalClassification, FinalReport, IntakeSpec,
-    MasterRunInput, MasterRunOutcome, MasterRunStatus, MasterStatus, MasterStep, PhaseTiming)
+    MasterRunInput, MasterRunOutcome, MasterRunStatus, MasterStatus, MasterStep, PhaseTiming, RealDataContext)
 from .utils import file_hash, safe_strategy_id, stable_hash
 
 
@@ -89,12 +90,25 @@ class MasterPipelineService:
                     dry_run: bool = True, implementation_enabled: bool = False, research_scenario: str = "strong-stable",
                     prop_scenario: str = "profitable", portfolio_scenario: str = "complementary",
                     prop_product: str = "Alpha Futures Zero 25K", mode: str | None = None, allow_proxy_data: bool = False,
-                    data_manifest_path: str | Path | None = None, worktree_parent: str | Path | None = None) -> MasterRunInput:
+                    data_manifest_path: str | Path | None = None, worktree_parent: str | Path | None = None,
+                    implementation_timeout_seconds: int = 1800, run_id_override: str | None = None) -> MasterRunInput:
         selected_mode = mode or ("dry_run" if dry_run else "real_run")
-        return MasterRunInput(intake_path=str(Path(intake_path).resolve()), repository_root=str(Path(repository_root).resolve()), registry_path=str(Path(registry_path).resolve()) if registry_path else None, dry_run=selected_mode == "dry_run", implementation_enabled=implementation_enabled, research_scenario=research_scenario, prop_scenario=prop_scenario, portfolio_scenario=portfolio_scenario, prop_product=prop_product, mode=selected_mode, allow_proxy_data=allow_proxy_data, data_manifest_path=str(Path(data_manifest_path).resolve()) if data_manifest_path else None, worktree_parent=str(Path(worktree_parent).resolve()) if worktree_parent else None)
+        manifest_path = str(Path(data_manifest_path).resolve()) if data_manifest_path else None
+        if manifest_path:
+            if mode == "dry_run":
+                raise SpecificationValidationError("--data-manifest requires real_run; fixture mode is not permitted")
+            # A normalized manifest is an explicit request for the real-data
+            # pipeline.  This prevents argparse's historic dry-run default
+            # from silently selecting synthetic fixtures.
+            selected_mode = "real_run"
+        return MasterRunInput(intake_path=str(Path(intake_path).resolve()), repository_root=str(Path(repository_root).resolve()), registry_path=str(Path(registry_path).resolve()) if registry_path else None, dry_run=selected_mode == "dry_run", implementation_enabled=implementation_enabled, research_scenario=research_scenario, prop_scenario=prop_scenario, portfolio_scenario=portfolio_scenario, prop_product=prop_product, mode=selected_mode, allow_proxy_data=allow_proxy_data, data_manifest_path=manifest_path, worktree_parent=str(Path(worktree_parent).resolve()) if worktree_parent else None, implementation_timeout_seconds=implementation_timeout_seconds, run_id_override=run_id_override)
 
     def _input_hash(self, intake: IntakeSpec, options: MasterRunInput) -> str:
-        return stable_hash({"intake": intake.model_dump(mode="json"), "options": options.model_dump(mode="json", exclude={"intake_path"})})
+        option_payload = options.model_dump(mode="json", exclude={"intake_path"})
+        # A caller-selected durable label controls only the storage key; it is
+        # not a material research input and must not alter historic run hashes.
+        option_payload.pop("run_id_override", None)
+        return stable_hash({"intake": intake.model_dump(mode="json"), "options": option_payload})
 
     def _root(self, strategy_id: str, run_id: str) -> Path:
         root = self.repository_root / "research_runs" / strategy_id / run_id
@@ -107,6 +121,84 @@ class MasterPipelineService:
         path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
         return file_hash(path)
 
+    @staticmethod
+    def _options_from_state(state: dict[str, Any]) -> MasterRunInput:
+        return MasterRunInput.model_validate(state["options"] | {"intake_path": state["intake_path"]})
+
+    def _resolve_real_data_context(self, options: MasterRunInput) -> RealDataContext | None:
+        """Resolve immutable real-data provenance once, at master-run creation."""
+
+        if options.mode != "real_run" or not options.data_manifest_path:
+            return None
+        manifest_path = Path(options.data_manifest_path).resolve()
+        if not manifest_path.is_file():
+            raise SpecificationValidationError(f"persisted real-data manifest is missing: {manifest_path}")
+        try:
+            manifest = AggregateTradeManifest.model_validate(json.loads(manifest_path.read_text(encoding="utf-8")))
+        except Exception as exc:
+            raise SpecificationValidationError(f"invalid real-data manifest {manifest_path}: {exc}") from exc
+        if self._manifest_integrity_hash(manifest) != manifest.manifest_hash:
+            raise SpecificationValidationError(f"real-data manifest hash mismatch: {manifest_path}")
+        parquet_path = manifest_path.with_name("aggregate_trades.parquet")
+        if not parquet_path.is_file():
+            raise SpecificationValidationError(f"real-data normalized artifact is missing: {parquet_path}")
+        if manifest_path.parent.name != manifest.normalized_dataset_hash:
+            raise SpecificationValidationError("real-data manifest dataset hash does not match its content-addressed directory")
+        return RealDataContext(
+            execution_mode="REAL_DATA",
+            manifest_path=str(manifest_path),
+            manifest_file_hash=file_hash(manifest_path),
+            manifest_hash=manifest.manifest_hash,
+            dataset_hash=manifest.normalized_dataset_hash,
+            provider=manifest.provider,
+            normalized_artifact_paths={"manifest": str(manifest_path), "aggregate_trades_parquet": str(parquet_path)},
+            row_count=manifest.row_count,
+        )
+
+    @staticmethod
+    def _manifest_integrity_hash(manifest: AggregateTradeManifest) -> str:
+        payload = manifest.model_dump(mode="json")
+        payload.pop("manifest_hash", None)
+        return stable_hash(payload)
+
+    def _persisted_real_data_context(self, run_id: str) -> RealDataContext | None:
+        """Reload and verify the creation-time context; never infer fixture mode."""
+
+        run = self.registry.get_master_run(run_id)
+        state = run["resume_state_json"]
+        raw = state.get("real_data_context")
+        if raw is None:
+            return None
+        context = RealDataContext.model_validate(raw)
+        manifest_path = Path(context.manifest_path)
+        if not manifest_path.is_file():
+            raise SpecificationValidationError(f"persisted real-data manifest is unavailable: {manifest_path}")
+        if file_hash(manifest_path) != context.manifest_file_hash:
+            raise SpecificationValidationError(f"persisted real-data manifest file hash changed: {manifest_path}")
+        try:
+            manifest = AggregateTradeManifest.model_validate(json.loads(manifest_path.read_text(encoding="utf-8")))
+        except Exception as exc:
+            raise SpecificationValidationError(f"persisted real-data manifest is invalid: {manifest_path}: {exc}") from exc
+        parquet_path = Path(context.normalized_artifact_paths["aggregate_trades_parquet"])
+        if (self._manifest_integrity_hash(manifest) != manifest.manifest_hash
+                or manifest.manifest_hash != context.manifest_hash
+                or manifest.normalized_dataset_hash != context.dataset_hash
+                or manifest.provider != context.provider
+                or manifest_path.parent.name != context.dataset_hash
+                or not parquet_path.is_file()):
+            raise SpecificationValidationError("persisted real-data manifest provenance no longer matches the master run")
+        return context
+
+    def _phase_data_context(self, run_id: str, payload: Any) -> Any:
+        """Attach authoritative provenance to every persisted master phase result."""
+
+        if not isinstance(payload, dict):
+            return payload
+        context = self._persisted_real_data_context(run_id)
+        if context is None:
+            return payload
+        return {**payload, "execution_mode": "REAL_DATA", "data_context": context.model_dump(mode="json")}
+
     def _record_artifact(self, run_id: str, phase: MasterStep | str, path: Path, artifact_type: str) -> ArtifactReference:
         reference = ArtifactReference(phase=str(phase), path=str(path.resolve()), artifact_type=artifact_type, sha256=file_hash(path))
         self.registry.add_master_artifact(run_id, reference.phase, reference.path, reference.sha256, reference.artifact_type)
@@ -115,6 +207,7 @@ class MasterPipelineService:
     def _record_phase(self, run_id: str, phase: MasterStep, result: Any, artifact_path: Path, status: str = "SUCCESS") -> dict:
         started = datetime.now(timezone.utc); began = time.monotonic()
         payload = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+        payload = self._phase_data_context(run_id, payload)
         digest = self._write_json(artifact_path, payload)
         ended = datetime.now(timezone.utc)
         self.registry.save_master_phase_result(run_id, phase.value, status, payload, [str(artifact_path.resolve())], digest, started.isoformat(), ended.isoformat(), int((time.monotonic() - began) * 1000))
@@ -128,12 +221,27 @@ class MasterPipelineService:
 
     def _real_adapter(self, run_id: str, repository_root: str | Path | None = None):
         run = self.registry.get_master_run(run_id); state = run["resume_state_json"]; spec = self.registry.get_specification(state["strategy_id"])
-        options = MasterRunInput.model_validate(state["options"] | {"intake_path": state["intake_path"]})
+        options = self._options_from_state(state)
+        context = self._persisted_real_data_context(run_id)
+        if options.data_manifest_path and context is None:
+            raise SpecificationValidationError("real-data manifest was supplied but its immutable master-run context is missing")
         root = Path(repository_root).resolve() if repository_root else self.repository_root
         adapter_kwargs = {}
         if spec.strategy_family == "value_area_trap_reference":
-            adapter_kwargs["manifest_path"] = options.data_manifest_path
+            if context is None:
+                raise SpecificationValidationError("ValueAreaTrap real runs require persisted real-data context")
+            adapter_kwargs["manifest_path"] = context.manifest_path
         adapter = default_adapter_registry().resolve(spec, root, **adapter_kwargs)
+        artifact_root = Path(run["root_path"]) / "research"
+        if hasattr(adapter, "bind_artifact_root"):
+            adapter.bind_artifact_root(artifact_root)
+        adapter_digest = stable_hash(adapter.identity.model_dump(mode="json"))
+        if context is not None:
+            if context.adapter_identity and context.adapter_identity != adapter_digest:
+                raise SpecificationValidationError("real-data adapter identity changed after master-run creation")
+            if not context.adapter_identity:
+                updated = context.model_copy(update={"adapter_identity": adapter_digest})
+                self._set_step(run_id, MasterStep(run["current_step"]), run["outcome"], real_data_context=updated.model_dump(mode="json"))
         health = adapter.health(spec)
         self.registry.save_strategy_adapter(adapter.identity.model_dump(mode="json"), adapter.capabilities.model_dump(mode="json"), health.model_dump(mode="json"))
         if not health.healthy: raise RealAdapterRequired("REAL_ADAPTER_REQUIRED: adapter health check failed")
@@ -141,6 +249,32 @@ class MasterPipelineService:
         if any(item.classification.value == "AVAILABLE_PROXY" for item in availability) and not options.allow_proxy_data:
             raise DataAvailabilityError("INSUFFICIENT_MARKET_DATA: proxy data requires --allow-proxy-data")
         return adapter, spec
+
+    @staticmethod
+    def _research_cache_context(run_id: str, context: RealDataContext | None, adapter: Any | None) -> dict[str, str]:
+        """Cache identity that prevents fixture/research artifact cross-talk."""
+
+        payload = {
+            "run_id": run_id,
+            "execution_mode": "REAL_DATA" if adapter is not None else "FIXTURE",
+            "dataset_hash": context.dataset_hash if context else "",
+            "adapter_identity": stable_hash(adapter.identity.model_dump(mode="json")) if adapter is not None else "synthetic-fixture-adapter",
+        }
+        if adapter is not None:
+            payload["specification_hash"] = adapter.identity.specification_hash
+        return payload
+
+    @staticmethod
+    def _tag_master_research_artifact(artifact: Any, cache_context: dict[str, str]) -> Any:
+        """Bind the B.5-produced baseline to the same run cache as Phase C."""
+
+        source = Path(artifact.input_path)
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload["pipeline_cache_context"] = cache_context
+        source.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        hashes = dict(artifact.report_hashes)
+        hashes[source.name] = file_hash(source)
+        return artifact.model_copy(update={"report_hashes": hashes})
 
     @staticmethod
     def _real_split(adapter, spec) -> SplitDefinition:
@@ -170,12 +304,17 @@ class MasterPipelineService:
 
     def start(self, options: MasterRunInput) -> dict:
         intake = self.load_intake(options.intake_path)
+        real_data_context = self._resolve_real_data_context(options)
         strategy_id = safe_strategy_id(intake.strategy_name)
         input_hash = self._input_hash(intake, options)
-        run_id = f"f1-{strategy_id}-{input_hash[:12]}"
+        run_id = options.run_id_override or f"f1-{strategy_id}-{input_hash[:12]}"
         root = self._root(strategy_id, run_id)
         try:
             existing = self.registry.get_master_run(run_id)
+            if existing["input_hash"] != input_hash:
+                raise SpecificationValidationError(
+                    "run-id override already belongs to a different immutable master-run input"
+                )
             return self.status(run_id)
         except RegistryError:
             pass
@@ -185,7 +324,7 @@ class MasterPipelineService:
             "run_id": run_id,
             "registry_path": str(self.registry_path.resolve()),
         })
-        self.registry.save_master_run(run_id, strategy_id, None, input_hash, MasterStep.SPECIFICATION.value, MasterRunStatus.WAITING_FOR_APPROVAL.value, "PENDING" if not intake.ambiguities and not intake.missing_information else "MANUAL_REVIEW_REQUIRED", str(root), {"options": options.model_dump(mode="json"), "intake_path": str(intake_path), "intake": intake.model_dump(mode="json")})
+        self.registry.save_master_run(run_id, strategy_id, None, input_hash, MasterStep.SPECIFICATION.value, MasterRunStatus.WAITING_FOR_APPROVAL.value, "PENDING" if not intake.ambiguities and not intake.missing_information else "MANUAL_REVIEW_REQUIRED", str(root), {"options": options.model_dump(mode="json"), "intake_path": str(intake_path), "intake": intake.model_dump(mode="json"), "real_data_context": real_data_context.model_dump(mode="json") if real_data_context else None})
         self.registry.add_master_journal(run_id, MasterStep.INTAKE.value, "INTAKE_ACCEPTED", {"input_hash": input_hash, "intake_artifact": str(intake_path.resolve()), "manual_review_required": bool(intake.ambiguities or intake.missing_information)})
         if intake.ambiguities or intake.missing_information:
             self._set_step(run_id, MasterStep.APPROVAL, MasterRunStatus.MANUAL_REVIEW_REQUIRED, manual_review_required=True)
@@ -400,6 +539,9 @@ class MasterPipelineService:
 
     def approve(self, run_id: str, decision: str = "APPROVE", note: str | None = None) -> dict:
         run = self.registry.get_master_run(run_id); state = run["resume_state_json"]
+        # Approval is also a provenance boundary: a run with a real manifest
+        # must fail closed before an immutable specification is approved.
+        self._persisted_real_data_context(run_id)
         if run["approval_status"] == "MANUAL_REVIEW_REQUIRED":
             raise SpecificationValidationError("material intake ambiguity requires a clarified intake and a new run")
         if run["current_step"] != MasterStep.APPROVAL.value:
@@ -423,7 +565,7 @@ class MasterPipelineService:
     def resume(self, run_id: str) -> dict:
         run = self.registry.get_master_run(run_id)
         if run["current_step"] == MasterStep.SPECIFICATION.value and run["outcome"] in {MasterRunStatus.WAITING_EXTERNAL_SPECIFICATION_GENERATION.value, MasterRunStatus.WAITING_EXTERNAL_SPECIFICATION_REPAIR.value}:
-            options = MasterRunInput.model_validate(run["resume_state_json"]["options"] | {"intake_path": run["resume_state_json"]["intake_path"]})
+            options = self._options_from_state(run["resume_state_json"])
             intake = IntakeSpec.model_validate(run["resume_state_json"]["intake"])
             try:
                 return self._generate_and_register(run_id, options, intake, Path(run["root_path"]))
@@ -436,8 +578,11 @@ class MasterPipelineService:
                 raise
         if run["approval_status"] != "APPROVED": return self.status(run_id)
         if run["current_step"] == MasterStep.COMPLETED.value: return self.status(run_id)
-        options = MasterRunInput.model_validate(run["resume_state_json"]["options"] | {"intake_path": run["resume_state_json"]["intake_path"]})
+        if run["outcome"] == MasterRunStatus.IMPLEMENTATION_FAILURE.value:
+            return self.status(run_id)
+        options = self._options_from_state(run["resume_state_json"])
         try:
+            self._persisted_real_data_context(run_id)
             step_before_implementation = run["current_step"]
             self._implementation(run_id, options)
             current = self.registry.get_master_run(run_id)
@@ -474,7 +619,7 @@ class MasterPipelineService:
         if run["current_step"] != MasterStep.SPECIFICATION.value:
             return self.status(run_id)
         state = run["resume_state_json"]
-        options = MasterRunInput.model_validate(state["options"] | {"intake_path": state["intake_path"]})
+        options = self._options_from_state(state)
         intake = IntakeSpec.model_validate(state["intake"])
         try:
             return self._generate_and_register(run_id, options, intake, Path(run["root_path"]))
@@ -501,21 +646,30 @@ class MasterPipelineService:
             if not existing or existing["status"] == "WAITING_EXTERNAL_CODEX":
                 created = jobs.create(run_id)
                 state = self.registry.get_master_run(run_id)["resume_state_json"]
+                preflight = created.get("preflight") or {}
+                if not isinstance(preflight, dict):
+                    preflight = {"report_path": str(preflight)}
                 self._set_step(run_id, MasterStep.IMPLEMENTATION, MasterRunStatus.WAITING_EXTERNAL_CODEX,
                                 implementation_job_id=created["job"]["job_id"],
                                 implementation_job_path=created["job_path"],
-                                worktree_preflight=created.get("preflight") or {},
+                                worktree_preflight=preflight,
                                 external_executor_required=True,
                                 next_command=created.get("next_command", f"py -m research_pipeline codex-executor run {run_id}"))
                 return
             if existing["status"] != "INGESTED":
                 completion_path = Path(existing.get("result_path") or "")
                 if not completion_path.is_file():
+                    if existing["status"] in jobs.TERMINAL_STATUSES:
+                        jobs.reconcile(run_id)
+                        return
                     self._set_step(run_id, MasterStep.IMPLEMENTATION, MasterRunStatus.WAITING_EXTERNAL_CODEX,
                                    implementation_job_id=existing["job_id"], external_executor_required=True,
                                    next_command=f"py -m research_pipeline codex-executor run {run_id}")
                     return
-                completion = jobs.ingest(run_id)
+                reconciled = jobs.reconcile(run_id)
+                if reconciled["outcome"] == MasterRunStatus.IMPLEMENTATION_FAILURE.value:
+                    return
+                completion = json.loads(completion_path.read_text(encoding="utf-8"))
             else:
                 completion_path = Path(existing["result_path"])
                 completion = json.loads(completion_path.read_text(encoding="utf-8"))
@@ -557,7 +711,14 @@ class MasterPipelineService:
                 phase_b.controller.transition(strategy_id, PipelineState.IMPLEMENTATION_VERIFICATION, "real adapter implementation discovered")
             test = phase_b.tests.run(worktree_path, [sys.executable, "-m", "pytest", "-q", "tests/research_pipeline/test_phase_f2_adapters.py"], dry_run=False, report_path=root / "implementation" / "tests" / "adapter-tests.txt")
             if not test.passed: raise SpecificationValidationError("real adapter implementation verification failed")
-            artifact = adapter.run_baseline(spec, self._real_split(adapter, spec), root / "technical_verification" / "baseline")
+            # The B.5 baseline is the authoritative baseline for this master
+            # run.  Keep it under the run root so another run's fixture cannot
+            # satisfy Phase C's lookup.
+            artifact = adapter.run_baseline(spec, self._real_split(adapter, spec), root / "research" / "baseline")
+            artifact = self._tag_master_research_artifact(
+                artifact,
+                self._research_cache_context(run_id, self._persisted_real_data_context(run_id), adapter),
+            )
             verification = VerificationService(self.registry_path).run(strategy_id, artifact.diagnostic_manifest_path or "")
             self._record_phase(run_id, MasterStep.IMPLEMENTATION_VERIFICATION, {"tests": test.model_dump(mode="json"), "adapter": adapter.identity.model_dump(mode="json"), "artifact": artifact.model_dump(mode="json")}, root / "verification" / "implementation.json")
             verification = {**verification, "execution_mode": "REAL_DATA", "data": [item.model_dump(mode="json") for item in adapter.data_availability(spec)], "adapter": adapter.identity.model_dump(mode="json")}
@@ -593,10 +754,18 @@ class MasterPipelineService:
         if self._success_phase(run_id, MasterStep.RESEARCH): return
         run = self.registry.get_master_run(run_id); strategy_id = run["resume_state_json"]["strategy_id"]; root = Path(run["root_path"])
         adapter = None
+        context = self._persisted_real_data_context(run_id)
         if options.mode == "real_run":
             adapter, spec = self._real_adapter(run_id)
             if self.registry.get_split(strategy_id) is None: self.registry.create_split(strategy_id, None, self._real_split(adapter, spec))
-        service = PhaseCService(self.registry_path, adapter=adapter, repository_root=self.repository_root, scenario=options.research_scenario)
+        service = PhaseCService(
+            self.registry_path,
+            adapter=adapter,
+            repository_root=self.repository_root,
+            scenario=options.research_scenario,
+            master_run_id=run_id,
+            cache_context=self._research_cache_context(run_id, context, adapter),
+        )
         if self.registry.get_split(strategy_id) is None:
             if options.dry_run:
                 service.controller.create_split(strategy_id, make_phase_c_split())
@@ -704,9 +873,11 @@ class MasterPipelineService:
             if baseline_metrics.get(key):
                 report_hashes[key] = baseline_metrics[key]
         implementation_variant = "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else "RandomOpenTest deterministic fixed-quantity reference adapter" if spec.strategy_family == "f2_random_open_reference" else None
-        report = FinalReport(run_id=run_id, strategy_id=strategy_id, strategy_version=strategy["version"], classification=classification, specification={"specification": spec.model_dump(mode="json"), "source": state.get("specification_path")}, implementation_summary=phase_results.get(MasterStep.IMPLEMENTATION.value, {}) or {}, verification_summary={"implementation": phase_results.get(MasterStep.IMPLEMENTATION_VERIFICATION.value, {}) or {}, "technical": phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value, {}) or {}}, research_summary=research_phase, prop_summary=phase_results.get(MasterStep.PROP.value, {}) or {}, portfolio_summary=portfolio or {}, final_recommendation=self._recommendation(classification), known_limitations=spec.known_limitations + (["Phase F1 portfolio evaluation requires two independently eligible strategies."] if options.dry_run else []), implementation_variant=implementation_variant, confidence="SYNTHETIC_FIXTURE" if options.dry_run else "REAL_LOCAL_DATA_DEMONSTRATION", artifacts=artifacts, hashes=report_hashes, phase_timings=[PhaseTiming(phase=item["phase"], status=item["status"], started_at=item["started_at"], ended_at=item["ended_at"], duration_ms=item["duration_ms"], result_hash=item["result_hash"], artifact_paths=item["artifact_paths_json"]) for item in self.registry.master_phase_results(run_id)], generated_at=datetime.now(timezone.utc), mode=options.mode, intake_summary=state.get("intake", {}), adapter_validation=phase_results.get(MasterStep.IMPLEMENTATION.value, {}).get("adapter", {}) if phase_results.get(MasterStep.IMPLEMENTATION.value) else {}, data_availability=phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value, {}).get("data", []) if phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value) else [], baseline_summary=research_phase.get("baseline", {}) or {}, parameter_research_summary=research_phase, frozen_candidate_summary=research_phase.get("candidate", {}) or {}, walk_forward_summary=research_phase.get("walk_forward", {}) or {}, holdout_summary=research_phase.get("holdout", {}) or {}, stress_summary=research_phase.get("stress", {}) or {}, throughput_summary=research_phase.get("throughput", {}) or {}, futures_prop_summary=phase_results.get(MasterStep.PROP.value, {}) or {}, portfolio_eligibility=portfolio or {}, git_review=self.registry.get_worktree_metadata(run_id) or {})
+        context = self._persisted_real_data_context(run_id)
+        execution_mode = "REAL_DATA" if options.mode == "real_run" else "FIXTURE"
+        report = FinalReport(run_id=run_id, strategy_id=strategy_id, strategy_version=strategy["version"], classification=classification, specification={"specification": spec.model_dump(mode="json"), "source": state.get("specification_path")}, implementation_summary=phase_results.get(MasterStep.IMPLEMENTATION.value, {}) or {}, verification_summary={"implementation": phase_results.get(MasterStep.IMPLEMENTATION_VERIFICATION.value, {}) or {}, "technical": phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value, {}) or {}}, research_summary=research_phase, prop_summary=phase_results.get(MasterStep.PROP.value, {}) or {}, portfolio_summary=portfolio or {}, final_recommendation=self._recommendation(classification), known_limitations=spec.known_limitations + (["Phase F1 portfolio evaluation requires two independently eligible strategies."] if options.dry_run else []), implementation_variant=implementation_variant, confidence="REAL_LOCAL_DATA_DEMONSTRATION" if options.mode == "real_run" else "SYNTHETIC_FIXTURE", artifacts=artifacts, hashes=report_hashes, phase_timings=[PhaseTiming(phase=item["phase"], status=item["status"], started_at=item["started_at"], ended_at=item["ended_at"], duration_ms=item["duration_ms"], result_hash=item["result_hash"], artifact_paths=item["artifact_paths_json"]) for item in self.registry.master_phase_results(run_id)], generated_at=datetime.now(timezone.utc), mode=options.mode, intake_summary=state.get("intake", {}), adapter_validation=phase_results.get(MasterStep.IMPLEMENTATION.value, {}).get("adapter", {}) if phase_results.get(MasterStep.IMPLEMENTATION.value) else {}, data_availability=phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value, {}).get("data", []) if phase_results.get(MasterStep.TECHNICAL_VERIFICATION.value) else [], baseline_summary=research_phase.get("baseline", {}) or {}, parameter_research_summary=research_phase, frozen_candidate_summary=research_phase.get("candidate", {}) or {}, walk_forward_summary=research_phase.get("walk_forward", {}) or {}, holdout_summary=research_phase.get("holdout", {}) or {}, stress_summary=research_phase.get("stress", {}) or {}, throughput_summary=research_phase.get("throughput", {}) or {}, futures_prop_summary=phase_results.get(MasterStep.PROP.value, {}) or {}, portfolio_eligibility=portfolio or {}, git_review=self.registry.get_worktree_metadata(run_id) or {}, execution_mode=execution_mode, data_context=context.model_dump(mode="json") if context else {})
         report_path = root / "report" / "final_report.json"; report_hash = self._write_json(report_path, report.model_dump(mode="json")); self.registry.save_master_report(run_id, str(report_path.resolve()), report_hash, report.model_dump(mode="json")); self._record_artifact(run_id, MasterStep.FINAL_REPORT, report_path, "final-report")
-        archive_manifest = root / "archive" / "manifest.json"; self._write_json(archive_manifest, {"run_id": run_id, "report_path": str(report_path.resolve()), "report_hash": report_hash, "artifact_count": len(artifacts)}); self._record_phase(run_id, MasterStep.ARCHIVE, {"report_path": str(report_path.resolve()), "report_hash": report_hash, "archive_manifest": str(archive_manifest.resolve())}, root / "archive" / "result.json")
+        archive_manifest = root / "archive" / "manifest.json"; self._write_json(archive_manifest, {"run_id": run_id, "report_path": str(report_path.resolve()), "report_hash": report_hash, "artifact_count": len(artifacts), "execution_mode": execution_mode, "data_context": context.model_dump(mode="json") if context else {}}); self._record_phase(run_id, MasterStep.ARCHIVE, {"report_path": str(report_path.resolve()), "report_hash": report_hash, "archive_manifest": str(archive_manifest.resolve())}, root / "archive" / "result.json")
 
     @staticmethod
     def _classification(research: str | None, prop: str | None, portfolio: str | None, *, real_mode: bool = False) -> FinalClassification:
@@ -740,7 +911,7 @@ class MasterPipelineService:
         job_status = job["status"] if job else None
         waiting_spec = run["outcome"] in {MasterRunStatus.WAITING_EXTERNAL_SPECIFICATION_GENERATION.value, MasterRunStatus.WAITING_EXTERNAL_SPECIFICATION_REPAIR.value}
         pipeline_status = "PIPELINE_COMPLETED" if run["current_step"] == MasterStep.COMPLETED.value and run["outcome"] == MasterRunStatus.SUCCESS.value else (run["outcome"] if waiting_spec else ("WAITING_EXTERNAL_CODEX" if run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value else ("IMPLEMENTATION_VERIFICATION_REQUIRED" if run["outcome"] == MasterRunStatus.IMPLEMENTATION_VERIFICATION_REQUIRED.value else ("IMPLEMENTATION_FAILED" if run["outcome"] == MasterRunStatus.IMPLEMENTATION_FAILURE.value else "ORCHESTRATOR_COMPLETED"))))
-        return MasterStatus(run_id=run_id, strategy_id=run["strategy_id"], strategy_version=run["strategy_version"], current_step=MasterStep(run["current_step"]), outcome=MasterRunStatus(run["outcome"]), approval_status=run["approval_status"], root_path=run["root_path"], phase_results=self.registry.master_phase_results(run_id), journal_entries=len(self.registry.master_journal(run_id)), artifacts=artifacts, report=self.registry.master_report(run_id), mode=mode, pipeline_status=pipeline_status, implementation_job_id=job["job_id"] if job else state.get("implementation_job_id"), external_executor_required=waiting_spec or run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value, worktree_preflight=state.get("worktree_preflight", {}), codex_execution_status=job_status, implementation_test_status=job_status if job_status in {"INGESTED", "FAILED_REQUIRED_TESTS"} else None, b5_available=bool(self.registry.get_master_phase_result(run_id, MasterStep.TECHNICAL_VERIFICATION.value)), next_command=state.get("next_command") or (f"py -m research_pipeline specification-executor run {run_id}" if waiting_spec else (f"py -m research_pipeline codex-executor run {run_id}" if run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value else None))).model_dump(mode="json")
+        return MasterStatus(run_id=run_id, strategy_id=run["strategy_id"], strategy_version=run["strategy_version"], current_step=MasterStep(run["current_step"]), outcome=MasterRunStatus(run["outcome"]), approval_status=run["approval_status"], root_path=run["root_path"], phase_results=self.registry.master_phase_results(run_id), journal_entries=len(self.registry.master_journal(run_id)), artifacts=artifacts, report=self.registry.master_report(run_id), mode=mode, pipeline_status=pipeline_status, implementation_job_id=job["job_id"] if job else state.get("implementation_job_id"), external_executor_required=waiting_spec or run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value, worktree_preflight=state.get("worktree_preflight", {}), codex_execution_status=job_status, implementation_test_status=state.get("implementation_test_status") or (job_status if job_status in {"INGESTED", "FAILED_REQUIRED_TESTS"} else None), b5_available=bool(self.registry.get_master_phase_result(run_id, MasterStep.TECHNICAL_VERIFICATION.value)), next_command=state.get("next_command") or (f"py -m research_pipeline specification-executor run {run_id}" if waiting_spec else (f"py -m research_pipeline codex-executor run {run_id}" if run["outcome"] == MasterRunStatus.WAITING_EXTERNAL_CODEX.value else None))).model_dump(mode="json")
 
     def report(self, run_id: str) -> dict:
         report = self.registry.master_report(run_id)

@@ -57,6 +57,12 @@ class NativeRepositoryAdapter:
                                                  parameter_families=[item.name for item in specification.parameter_families if item.mutable],
                                                  data_providers=["local_parquet"])
         self._last_run: BacktestRun | None = None
+        self._artifact_root: Path | None = None
+
+    def bind_artifact_root(self, root: str | Path) -> None:
+        """Restrict resume-time trade exports to one master-run artifact tree."""
+
+        self._artifact_root = Path(root).resolve()
 
     @staticmethod
     def _commit() -> str | None:
@@ -403,7 +409,8 @@ class NativeRepositoryAdapter:
 
     def _load_last_run(self) -> BacktestRun | None:
         if self._last_run is not None: return self._last_run
-        candidates = sorted((self.root / "research_runs" / self.identity.strategy_id).rglob("normalized_backtest.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
+        search_root = self._artifact_root or (self.root / "research_runs" / self.identity.strategy_id)
+        candidates = sorted(search_root.rglob("normalized_backtest.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
         if candidates:
             self._last_run = BacktestRun.model_validate(json.loads(candidates[0].read_text(encoding="utf-8")))
         return self._last_run

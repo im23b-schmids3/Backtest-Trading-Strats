@@ -130,6 +130,9 @@ class CodexExecutionResult(StrictModel):
     stderr: str
     duration_ms: int
     timed_out: bool
+    configured_timeout_seconds: int | None = None
+    termination_method: str | None = None
+    process_signal: int | None = None
     error_type: str | None = None
     session_id: str | None = None
     files_changed: list[str] = Field(default_factory=list)

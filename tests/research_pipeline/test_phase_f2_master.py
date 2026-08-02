@@ -20,6 +20,22 @@ INTAKE = ROOT / "configs/research_pipeline/phase_f2_real_demo_intake.yaml"
 SPEC = ROOT / "research_registry/spec_drafts/F2-real-breakout-demo_vphase-b-1.yaml"
 
 
+def _use_isolated_run_root(service: MasterPipelineService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep deterministic test run IDs away from existing repository artifacts."""
+
+    def isolated_root(strategy_id: str, run_id: str) -> Path:
+        root = tmp_path / "research_runs" / strategy_id / run_id
+        for name in ("run", "specification", "implementation", "verification", "research", "prop", "portfolio", "report", "archive"):
+            (root / name).mkdir(parents=True, exist_ok=True)
+        return root
+
+    monkeypatch.setattr(
+        service,
+        "_root",
+        isolated_root,
+    )
+
+
 def test_real_mode_is_explicit_and_approval_gated(tmp_path):
     service = MasterPipelineService(tmp_path / "registry.sqlite3", ROOT)
     options = service.input_model(INTAKE, ROOT, registry_path=tmp_path / "registry.sqlite3", dry_run=False, mode="real_run", allow_proxy_data=True)
@@ -32,6 +48,7 @@ def test_real_mode_is_explicit_and_approval_gated(tmp_path):
 
 def test_real_demo_uses_external_implementation_job_before_b5(tmp_path, monkeypatch: pytest.MonkeyPatch):
     service = MasterPipelineService(tmp_path / "registry.sqlite3", ROOT)
+    _use_isolated_run_root(service, tmp_path, monkeypatch)
     options = service.input_model(INTAKE, ROOT, registry_path=tmp_path / "registry.sqlite3", dry_run=False, mode="real_run", allow_proxy_data=True)
     options = options.model_copy(update={"prebuilt_spec_path": str(SPEC)})
     started = service.start(options); run_id = started["run_id"]
@@ -135,6 +152,7 @@ def test_real_demo_uses_external_implementation_job_before_b5(tmp_path, monkeypa
 
 def test_real_implementation_verification_failure_does_not_enter_b5(tmp_path, monkeypatch: pytest.MonkeyPatch):
     service = MasterPipelineService(tmp_path / "registry.sqlite3", ROOT)
+    _use_isolated_run_root(service, tmp_path, monkeypatch)
     options = service.input_model(INTAKE, ROOT, registry_path=tmp_path / "registry.sqlite3", dry_run=False, mode="real_run", allow_proxy_data=True)
     options = options.model_copy(update={"prebuilt_spec_path": str(SPEC)})
     started = service.start(options)

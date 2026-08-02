@@ -11,12 +11,19 @@ from ..schemas.strategy_spec import StrictModel
 
 class CodexCompletionStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
+    # Some external executors use COMPLETED for the same successful terminal
+    # result.  Accept it at the durable handoff boundary without treating it as
+    # completion of the master research pipeline.
+    COMPLETED = "COMPLETED"
     FAILED_CODEX_EXECUTION = "FAILED_CODEX_EXECUTION"
+    TIMED_OUT = "TIMED_OUT"
     FAILED_WORKTREE_PREFLIGHT = "FAILED_WORKTREE_PREFLIGHT"
     FAILED_WORKTREE_CREATION = "FAILED_WORKTREE_CREATION"
     FAILED_SCOPE_VALIDATION = "FAILED_SCOPE_VALIDATION"
     FAILED_REQUIRED_TESTS = "FAILED_REQUIRED_TESTS"
     FAILED_ARTIFACT_INTEGRITY = "FAILED_ARTIFACT_INTEGRITY"
+    INTERRUPTED = "INTERRUPTED"
+    ABORTED_BY_USER = "ABORTED_BY_USER"
     CANCELLED = "CANCELLED"
 
 
@@ -35,7 +42,7 @@ class ImplementationJobRequest(StrictModel):
     forbidden_paths: list[str]
     required_tests: list[list[str]]
     expected_output_contract: str
-    timeout_seconds: int = Field(ge=1)
+    timeout_seconds: int = Field(ge=60, le=7200)
     max_repair_attempts: int = Field(default=0, ge=0)
     codex_model: str | None = None
     codex_config_requirements: dict[str, Any] = Field(default_factory=dict)
@@ -69,6 +76,10 @@ class ImplementationCompletion(StrictModel):
     stdout_summary: str = ""
     stderr_summary: str = ""
     duration_ms: int = Field(default=0, ge=0)
+    timed_out: bool = False
+    configured_timeout_seconds: int | None = Field(default=None, ge=60, le=7200)
+    termination_method: str | None = None
+    process_signal: int | None = None
     changed_files: list[str] = Field(default_factory=list)
     artifact_paths: dict[str, str] = Field(default_factory=dict)
     artifact_hashes: dict[str, str] = Field(default_factory=dict)

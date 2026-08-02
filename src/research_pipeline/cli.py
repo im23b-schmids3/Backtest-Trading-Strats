@@ -24,6 +24,20 @@ from .schemas.splits import SplitDefinition, calculate_split_hash
 from .schemas.strategy_spec import load_strategy_spec
 
 
+def _symbol_manifest_map(items: list[str]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in items:
+        try:
+            symbol, path = item.split("=", 1)
+        except ValueError as exc:
+            raise ValueError(f"--manifest must use SYMBOL=PATH, got {item!r}") from exc
+        symbol = symbol.upper()
+        if not symbol or not path or symbol in result:
+            raise ValueError(f"invalid or duplicate --manifest value: {item!r}")
+        result[symbol] = str(Path(path).resolve())
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m research_pipeline", description="Deterministic Phase A research-pipeline registry")
     parser.add_argument("--registry", default=os.environ.get("RESEARCH_PIPELINE_REGISTRY", "research_registry/research_pipeline.sqlite3"))
@@ -35,6 +49,26 @@ def _parser() -> argparse.ArgumentParser:
     command = value_area_sub.add_parser("import-archive"); command.add_argument("archive"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap")
     command = value_area_sub.add_parser("import-calendar"); command.add_argument("source"); command.add_argument("output")
     command = value_area_sub.add_parser("validate-data"); command.add_argument("parquet")
+    command = value_area_sub.add_parser("ingest-range", help="resumable download and normalization of immutable monthly BTCUSDT aggregate-trade partitions")
+    command.add_argument("--start-month", required=True); command.add_argument("--end-month", required=True); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--allow-network", action="store_true"); command.add_argument("--allow-gap-repair", action="store_true", help="opt in to fetching only proven missing aggregate-trade IDs")
+    command = value_area_sub.add_parser("validate-manifest", help="validate an immutable combined monthly aggregate-trade manifest")
+    command.add_argument("manifest")
+    command = value_area_sub.add_parser("run-frozen", help="run the packaged, non-optimizing UTC_24H_SESSION strategy")
+    command.add_argument("--variant", required=True); command.add_argument("--data-manifest", required=True); command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--registry", default=argparse.SUPPRESS); command.add_argument("--auto-approve", action="store_true"); command.add_argument("--reuse-verified-implementation", action="store_true")
+    command = value_area_sub.add_parser("ingest-cross-market", help="resumably ingest frozen XAUUSDT, QQQUSDT, and SPYUSDT proxy evidence")
+    command.add_argument("--symbols", nargs="+", default=["XAUUSDT", "QQQUSDT", "SPYUSDT"]); command.add_argument("--start-month", default="2026-05"); command.add_argument("--end-month", default="2026-07"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--metadata-artifact"); command.add_argument("--allow-network", action="store_true"); command.add_argument("--allow-gap-repair", action="store_true")
+    command = value_area_sub.add_parser("validate-cross-market", help="validate three pinned cross-market aggregate-trade manifests")
+    command.add_argument("--manifest", action="append", required=True, metavar="SYMBOL=PATH")
+    command = value_area_sub.add_parser("run-frozen-cross-market", help="run descriptive frozen cross-market robustness evaluation")
+    command.add_argument("--manifest", action="append", required=True, metavar="SYMBOL=PATH"); command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default=".")
+    command = value_area_sub.add_parser("validate-equity-variant-study", help="validate the sealed QQQUSDT/SPYUSDT exploratory in-sample study inputs")
+    command.add_argument("--manifest", action="append", required=True, metavar="SYMBOL=PATH")
+    command = value_area_sub.add_parser("run-equity-variant-study", help="run only the six pre-registered QQQUSDT/SPYUSDT exploratory variants")
+    command.add_argument("--manifest", action="append", required=True, metavar="SYMBOL=PATH"); command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default=".")
+    command = value_area_sub.add_parser("materialize-variants", help="write immutable, unexecuted ValueAreaTrap variant specifications")
+    command.add_argument("--data-manifest", required=True)
+    command.add_argument("--artifact-root", default="research_runs/ValueAreaTrapVariants")
+    command.add_argument("--repository-root", default=".")
     repository = sub.add_parser("repository", help="repository safety checks")
     repository_sub = repository.add_subparsers(dest="repository_command", required=True)
     command = repository_sub.add_parser("worktree-preflight")
@@ -48,8 +82,11 @@ def _parser() -> argparse.ArgumentParser:
         command = implementation_sub.add_parser(name); command.add_argument("run_id")
     executor = sub.add_parser("codex-executor", help="run an approved implementation job outside Smithers")
     executor_sub = executor.add_subparsers(dest="executor_command", required=True)
-    for name in ("run", "status", "resume"):
+    for name in ("run", "status", "resume", "reconcile", "reclassify-legacy-timeout"):
         command = executor_sub.add_parser(name); command.add_argument("run_id")
+    command = executor_sub.add_parser("retry", help="replace a stale interrupted implementation job with a new immutable job")
+    command.add_argument("run_id")
+    command.add_argument("--stale-after-seconds", type=int, default=300)
     specification_executor = sub.add_parser("specification-executor", help="run an external read-only specification job")
     specification_executor_sub = specification_executor.add_subparsers(dest="specification_executor_command", required=True)
     for name in ("run", "status", "resume", "inspect"):
@@ -58,7 +95,7 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("new-strategy"); command.add_argument("path")
     sub.add_parser("list-strategies")
     command = sub.add_parser("status"); command.add_argument("strategy_id")
-    command = sub.add_parser("run", help="Phase F1/F2 end-to-end master pipeline"); command.add_argument("strategy_file"); command.add_argument("--repository-root", default="."); command.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True); command.add_argument("--mode", choices=["dry_run", "real_run"]); command.add_argument("--prebuilt-spec"); command.add_argument("--implementation-enabled", action="store_true"); command.add_argument("--allow-proxy-data", action="store_true"); command.add_argument("--data-manifest", dest="data_manifest_path"); command.add_argument("--worktree-parent", dest="worktree_parent"); command.add_argument("--research-scenario", default="strong-stable"); command.add_argument("--prop-scenario", default="profitable"); command.add_argument("--portfolio-scenario", default="complementary"); command.add_argument("--product", default="Alpha Futures Zero 25K")
+    command = sub.add_parser("run", help="Phase F1/F2 end-to-end master pipeline"); command.add_argument("strategy_file"); command.add_argument("--repository-root", default="."); command.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=None); command.add_argument("--mode", choices=["dry_run", "real_run"]); command.add_argument("--prebuilt-spec"); command.add_argument("--run-id", dest="run_id_override"); command.add_argument("--implementation-enabled", action="store_true"); command.add_argument("--allow-proxy-data", action="store_true"); command.add_argument("--data-manifest", dest="data_manifest_path"); command.add_argument("--worktree-parent", dest="worktree_parent"); command.add_argument("--implementation-timeout-seconds", type=int, default=1800); command.add_argument("--research-scenario", default="strong-stable"); command.add_argument("--prop-scenario", default="profitable"); command.add_argument("--portfolio-scenario", default="complementary"); command.add_argument("--product", default="Alpha Futures Zero 25K")
     command = sub.add_parser("resume", help="resume a Phase F1 master run"); command.add_argument("run_id"); command.add_argument("--repository-root", default=".")
     command = sub.add_parser("approve", help="approve or reject a Phase F1 generated specification"); command.add_argument("run_id"); command.add_argument("--decision", choices=["APPROVE", "REJECT"], default="APPROVE"); command.add_argument("--note")
     command = sub.add_parser("report", help="show a Phase F1 final report"); command.add_argument("run_id")
@@ -172,6 +209,40 @@ def main(argv: list[str] | None = None) -> int:
             elif args.value_area_command == "import-calendar":
                 from .value_area_trap.alpha_zero import import_usd_calendar
                 _print(import_usd_calendar(args.source, args.output).model_dump(mode="json"))
+            elif args.value_area_command == "ingest-range":
+                from .value_area_trap.data import AggregateTradeImporter
+                importer = AggregateTradeImporter(args.cache_root)
+                manifest_path, manifest = importer.ingest_monthly_range(symbol=args.symbol, start_month=args.start_month, end_month=args.end_month, allow_network=args.allow_network, allow_gap_repair=args.allow_gap_repair)
+                _print({"manifest_path": str(manifest_path.resolve()), "manifest": manifest.model_dump(mode="json"), "network_used": args.allow_network, "gap_repair_enabled": args.allow_gap_repair, "months": importer.last_ingestion_diagnostics})
+            elif args.value_area_command == "validate-manifest":
+                from .value_area_trap.data import AggregateTradeImporter
+                manifest = AggregateTradeImporter(".").validate_monthly_manifest(args.manifest)
+                _print({"path": str(Path(args.manifest).resolve()), "valid": True, "dataset_hash": manifest.normalized_dataset_hash, "row_count": manifest.row_count, "partition_count": len(manifest.partitions), "errors": []})
+            elif args.value_area_command == "run-frozen":
+                from .value_area_trap.frozen import FrozenRunRequest, FrozenValueAreaTrapService
+                _print(FrozenValueAreaTrapService().run(FrozenRunRequest(variant=args.variant, data_manifest=str(Path(args.data_manifest).resolve()), artifact_root=str(Path(args.artifact_root).resolve()), registry_path=str(Path(args.registry).resolve()), repository_root=str(Path(args.repository_root).resolve()), auto_approve=args.auto_approve, reuse_verified_implementation=args.reuse_verified_implementation)).model_dump(mode="json"))
+            elif args.value_area_command == "ingest-cross-market":
+                from .value_area_trap.cross_market import CrossMarketIngestRequest, ingest_cross_market
+                _print(ingest_cross_market(CrossMarketIngestRequest(symbols=args.symbols, cache_root=str(Path(args.cache_root).resolve()), start_month=args.start_month, end_month=args.end_month, metadata_artifact=str(Path(args.metadata_artifact).resolve()) if args.metadata_artifact else None, allow_network=args.allow_network, allow_gap_repair=args.allow_gap_repair)))
+            elif args.value_area_command == "validate-cross-market":
+                from .value_area_trap.cross_market import validate_cross_market
+                _print(validate_cross_market(_symbol_manifest_map(args.manifest)))
+            elif args.value_area_command == "run-frozen-cross-market":
+                from .value_area_trap.cross_market import FrozenCrossMarketRequest, FrozenCrossMarketService
+                _print(FrozenCrossMarketService().run(FrozenCrossMarketRequest(manifests=_symbol_manifest_map(args.manifest), artifact_root=str(Path(args.artifact_root).resolve()), repository_root=str(Path(args.repository_root).resolve()))).model_dump(mode="json"))
+            elif args.value_area_command == "validate-equity-variant-study":
+                from .value_area_trap.equity_variants import validate_equity_variant_study
+                _print(validate_equity_variant_study(_symbol_manifest_map(args.manifest)))
+            elif args.value_area_command == "run-equity-variant-study":
+                from .value_area_trap.equity_variants import EquityVariantStudyRequest, EquityVariantStudyService
+                _print(EquityVariantStudyService().run(EquityVariantStudyRequest(manifests=_symbol_manifest_map(args.manifest), artifact_root=str(Path(args.artifact_root).resolve()), repository_root=str(Path(args.repository_root).resolve()))).model_dump(mode="json"))
+            elif args.value_area_command == "materialize-variants":
+                from .value_area_trap.variants import materialize_variants
+                _print(materialize_variants(
+                    repository_root=args.repository_root,
+                    data_manifest_path=args.data_manifest,
+                    artifact_root=args.artifact_root,
+                ))
             else:
                 from .value_area_trap.data import AggregateTradeManifest, PARQUET_SCHEMA
                 parquet = Path(args.parquet).resolve(); manifest_path = parquet.with_name("manifest.json")
@@ -232,8 +303,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "run":
             from .phase_f1.service import MasterPipelineService
             service = MasterPipelineService(args.registry, args.repository_root)
-            selected_mode = args.mode or ("dry_run" if args.dry_run else "real_run")
-            options = service.input_model(args.strategy_file, args.repository_root, registry_path=args.registry, dry_run=selected_mode == "dry_run", mode=selected_mode, allow_proxy_data=args.allow_proxy_data, data_manifest_path=args.data_manifest_path, worktree_parent=args.worktree_parent, implementation_enabled=args.implementation_enabled, research_scenario=args.research_scenario, prop_scenario=args.prop_scenario, portfolio_scenario=args.portfolio_scenario, prop_product=args.product)
+            if args.data_manifest_path:
+                if args.mode == "dry_run" or args.dry_run is True:
+                    raise ValueError("--data-manifest requires real_run; remove --dry-run or use --mode real_run")
+                selected_mode = "real_run"
+            else:
+                selected_mode = args.mode or ("real_run" if args.dry_run is False else "dry_run")
+            options = service.input_model(args.strategy_file, args.repository_root, registry_path=args.registry, dry_run=selected_mode == "dry_run", mode=selected_mode, allow_proxy_data=args.allow_proxy_data, data_manifest_path=args.data_manifest_path, worktree_parent=args.worktree_parent, implementation_enabled=args.implementation_enabled, implementation_timeout_seconds=args.implementation_timeout_seconds, research_scenario=args.research_scenario, prop_scenario=args.prop_scenario, portfolio_scenario=args.portfolio_scenario, prop_product=args.product, run_id_override=args.run_id_override)
             if args.prebuilt_spec: options = options.model_copy(update={"prebuilt_spec_path": str(Path(args.prebuilt_spec).resolve())})
             _print(service.start(options))
         elif args.command == "resume":
@@ -259,12 +335,19 @@ def main(argv: list[str] | None = None) -> int:
             elif args.implementation_command == "ingest": _print(jobs.ingest(args.run_id))
         elif args.command == "codex-executor":
             from .implementation.executor import ExternalCodexExecutor
+            from .implementation.jobs import ImplementationJobService
             service = ExternalCodexExecutor(args.registry)
             if args.executor_command == "status": _print(service.status(args.run_id))
+            elif args.executor_command == "retry":
+                _print(ImplementationJobService(args.registry).retry(args.run_id, stale_after_seconds=args.stale_after_seconds))
+            elif args.executor_command == "reconcile":
+                _print(ImplementationJobService(args.registry).reconcile(args.run_id))
+            elif args.executor_command == "reclassify-legacy-timeout":
+                _print(ImplementationJobService(args.registry).reclassify_legacy_timeout(args.run_id))
             else:
                 result = service.run(args.run_id)
                 _print(result)
-                if result.get("status") != "SUCCEEDED": return 3
+                if result.get("status") not in {"SUCCEEDED", "COMPLETED"}: return 3
         elif args.command == "specification-executor":
             from .specification_executor.executor import ExternalSpecificationExecutor
             from .specification_executor.jobs import SpecificationJobService

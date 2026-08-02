@@ -794,9 +794,24 @@ class Registry:
                 run_id,job_id,strategy_id,strategy_version,specification_hash,job_path,status,
                 request_hash,result_path,result_hash,error,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(run_id) DO UPDATE SET status=excluded.status,
-                result_path=COALESCE(excluded.result_path,implementation_jobs.result_path),
-                result_hash=COALESCE(excluded.result_hash,implementation_jobs.result_hash),
+                ON CONFLICT(run_id) DO UPDATE SET job_id=excluded.job_id,
+                strategy_id=excluded.strategy_id,strategy_version=excluded.strategy_version,
+                specification_hash=excluded.specification_hash,job_path=excluded.job_path,
+                status=excluded.status,request_hash=excluded.request_hash,
+                result_path=excluded.result_path,result_hash=excluded.result_hash,
+                error=excluded.error,
+                created_at=CASE WHEN implementation_jobs.job_id != excluded.job_id THEN excluded.created_at ELSE implementation_jobs.created_at END,
+                updated_at=excluded.updated_at""",
+                (run_id, request["job_id"], request["strategy_id"], request["strategy_version"],
+                 request["specification_hash"], job_path, status, request_hash, result_path,
+                 result_hash, error, timestamp, timestamp))
+            connection.execute("""INSERT INTO implementation_job_attempts(
+                run_id,job_id,strategy_id,strategy_version,specification_hash,job_path,status,
+                request_hash,result_path,result_hash,error,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(run_id,job_id) DO UPDATE SET status=excluded.status,
+                result_path=COALESCE(excluded.result_path,implementation_job_attempts.result_path),
+                result_hash=COALESCE(excluded.result_hash,implementation_job_attempts.result_hash),
                 error=excluded.error,updated_at=excluded.updated_at""",
                 (run_id, request["job_id"], request["strategy_id"], request["strategy_version"],
                  request["specification_hash"], job_path, status, request_hash, result_path,
@@ -807,6 +822,65 @@ class Registry:
         with self.database.session() as connection:
             row = connection.execute("SELECT * FROM implementation_jobs WHERE run_id=?", (run_id,)).fetchone()
             return dict(row) if row else None
+
+    def list_implementation_jobs(self, run_id: str) -> list[dict]:
+        with self.database.session() as connection:
+            rows = connection.execute(
+                "SELECT * FROM implementation_job_attempts WHERE run_id=? ORDER BY created_at, job_id",
+                (run_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def archive_implementation_job(self, record: dict) -> None:
+        """Backfill pre-history rows before a new immutable job becomes current."""
+
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT OR IGNORE INTO implementation_job_attempts(
+                run_id,job_id,strategy_id,strategy_version,specification_hash,job_path,status,
+                request_hash,result_path,result_hash,error,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (record["run_id"], record["job_id"], record["strategy_id"], record["strategy_version"],
+                 record["specification_hash"], record["job_path"], record["status"], record["request_hash"],
+                 record.get("result_path"), record.get("result_hash"), record.get("error"),
+                 record["created_at"], record["updated_at"]))
+
+    def set_current_implementation_job_status(self, run_id: str, status: str, *, error: str | None = None) -> dict:
+        """Update only the current projection; immutable attempt rows remain audit evidence."""
+
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE implementation_jobs SET status=?, error=?, updated_at=? WHERE run_id=?",
+                (status, error, now_iso(), run_id),
+            )
+        return self.get_implementation_job(run_id) or {}
+
+    def get_implementation_job_correction(self, run_id: str, job_id: str, correction_type: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute(
+                "SELECT * FROM implementation_job_status_corrections WHERE run_id=? AND job_id=? AND correction_type=?",
+                (run_id, job_id, correction_type),
+            ).fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["evidence_json"] = json.loads(result["evidence_json"])
+            return result
+
+    def save_implementation_job_correction(self, run_id: str, job_id: str, correction_type: str, *,
+                                           original_status: str, corrected_status: str, reason: str,
+                                           evidence: dict[str, Any]) -> dict:
+        existing = self.get_implementation_job_correction(run_id, job_id, correction_type)
+        if existing:
+            return existing
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO implementation_job_status_corrections(
+                    run_id,job_id,correction_type,original_status,corrected_status,reason,evidence_json,created_at
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (run_id, job_id, correction_type, original_status, corrected_status, reason,
+                 json.dumps(evidence, sort_keys=True), now_iso()),
+            )
+        return self.get_implementation_job_correction(run_id, job_id, correction_type) or {}
 
     def save_backtest_run(self, result: dict, master_run_id: str | None = None) -> None:
         with self.database.transaction() as connection:

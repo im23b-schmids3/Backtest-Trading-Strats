@@ -32,6 +32,7 @@ def test_codex_runner_missing_timeout_and_nonzero() -> None:
 
     timed = CodexRunner(executable="codex", run_process=timeout).run("prompt", ".", dry_run=False)
     assert timed.timed_out and timed.error_type == "TIMEOUT"
+    assert timed.exit_code == -1 and timed.termination_method == "timeout_no_process_handle"
 
     def failed(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args, 7, "1 failed", "compiler error")
@@ -41,6 +42,57 @@ def test_codex_runner_missing_timeout_and_nonzero() -> None:
 
     with pytest.raises(ValueError):
         CodexRunner(executable="codex").run("prompt", ".", sandbox="danger-full-access")
+
+
+class _FakePopen:
+    def __init__(self, *, stdout: str = "", stderr: str = "", returncode: int = 0, timeout_once: bool = False):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.final_returncode = returncode
+        self.returncode: int | None = None
+        self.timeout_once = timeout_once
+        self.communicate_calls = 0
+        self.terminated = False
+        self.killed = False
+        self.wait_called = False
+
+    def communicate(self, *, input: str | None = None, timeout: int | None = None):
+        self.communicate_calls += 1
+        if self.timeout_once and self.communicate_calls == 1:
+            raise subprocess.TimeoutExpired("codex", timeout or 0, output="partial stdout", stderr="partial stderr")
+        self.returncode = self.final_returncode
+        return self.stdout, self.stderr
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self) -> int:
+        self.wait_called = True
+        if self.returncode is None:
+            self.returncode = self.final_returncode
+        return self.returncode
+
+
+def test_codex_runner_drains_output_and_records_terminal_exit_code() -> None:
+    process = _FakePopen(stdout="x" * 250_000, stderr="diff --git a/file b/file\n" + "y" * 250_000)
+    runner = CodexRunner(executable="codex", popen_factory=lambda *args, **kwargs: process)
+    result = runner.run("prompt", ".", dry_run=False, timeout_seconds=2)
+    assert result.success and result.exit_code == 0 and result.timed_out is False
+    assert result.configured_timeout_seconds == 2 and process.wait_called
+    assert len(result.stdout) == 250_000 and "diff --git" in result.stderr
+
+
+def test_codex_runner_timeout_terminates_drains_and_records_exit_code() -> None:
+    process = _FakePopen(stdout="final stdout", stderr="final stderr", returncode=-15, timeout_once=True)
+    runner = CodexRunner(executable="codex", popen_factory=lambda *args, **kwargs: process)
+    result = runner.run("prompt", ".", dry_run=False, timeout_seconds=1)
+    assert result.timed_out and result.error_type == "TIMEOUT"
+    assert result.exit_code == -15 and result.termination_method == "terminate"
+    assert result.process_signal == 15 and process.terminated and process.wait_called
+    assert result.stdout == "final stdout" and result.stderr == "final stderr"
 
 
 def test_secret_redaction_applies_to_outputs_and_commands() -> None:

@@ -1,5 +1,8 @@
 # Preserve the Phase A/B registry schema version for backward compatibility.
 # Phase C extension tables have their own version marker below.
+# The retry-attempt table below is additive.  Keep the Phase A/B marker at 2
+# because existing callers use it as a compatibility contract, not a catalog
+# of every additive table.
 SCHEMA_VERSION = 2
 MAX_COMPATIBLE_SCHEMA_VERSION = 3
 
@@ -726,6 +729,34 @@ def apply_migrations(connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(run_id) REFERENCES master_runs(run_id)
+        );
+        CREATE TABLE IF NOT EXISTS implementation_job_attempts (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            specification_hash TEXT NOT NULL,
+            job_path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            result_path TEXT,
+            result_hash TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id),
+            FOREIGN KEY(run_id) REFERENCES master_runs(run_id)
+        );
+        CREATE TABLE IF NOT EXISTS implementation_job_status_corrections (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            correction_type TEXT NOT NULL,
+            original_status TEXT NOT NULL,
+            corrected_status TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id, correction_type)
         );
         CREATE TABLE IF NOT EXISTS specification_jobs (
             run_id TEXT NOT NULL,

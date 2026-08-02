@@ -112,6 +112,22 @@ class MasterRunInput(StrictModel):
     prebuilt_spec_path: str | None = None
     max_generation_attempts: int = Field(default=3, ge=1, le=3)
     max_repair_attempts: int = Field(default=2, ge=0, le=2)
+    implementation_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
+    run_id_override: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+class RealDataContext(StrictModel):
+    """Immutable provenance required to keep a master run in REAL_DATA mode."""
+
+    execution_mode: Literal["REAL_DATA"]
+    manifest_path: str
+    manifest_file_hash: str
+    manifest_hash: str
+    dataset_hash: str
+    provider: str
+    normalized_artifact_paths: dict[str, str]
+    row_count: int = Field(ge=0)
+    adapter_identity: str | None = None
 
 
 class ArtifactReference(StrictModel):
@@ -171,6 +187,8 @@ class FinalReport(StrictModel):
     futures_prop_summary: dict[str, Any] = Field(default_factory=dict)
     portfolio_eligibility: dict[str, Any] = Field(default_factory=dict)
     git_review: dict[str, Any] = Field(default_factory=dict)
+    execution_mode: Literal["FIXTURE", "REAL_DATA"] = "FIXTURE"
+    data_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class MasterStatus(StrictModel):

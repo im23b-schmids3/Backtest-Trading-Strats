@@ -10,11 +10,12 @@ from pydantic import Field
 
 from ..compliance import AccountState, ActionType, ComplianceDecision, ComplianceEvaluator, ExecutionCostConfig, ExecutionCostEngine, InstrumentCostConfig, MarketState, OrderType, PropFirmPolicy, ProposedAction, SessionPolicy, calculate_cost_config_hash, calculate_policy_hash, unconfigured_policy
 from ..schemas.strategy_spec import StrictModel
-from .profile import FiveMinuteBar, SessionProfile
+from .profile import FiveMinuteBar, SessionProfile, UTC_SESSION_LABEL
 
 
 class ValueAreaTrapConfig(StrictModel):
     symbol: str = "BTCUSDT"
+    session_definition: Literal["US_CASH_WINDOW_PROXY", "UTC_24H_SESSION", "US_CASH_SESSION"] = "US_CASH_WINDOW_PROXY"
     session_timezone: str = "America/New_York"
     value_area_fraction: Decimal = Decimal("0.70")
     breakout_volume_multiplier: Decimal = Decimal("1.5")
@@ -29,6 +30,8 @@ class ValueAreaTrapConfig(StrictModel):
     minimum_quantity: Decimal = Decimal("0.001")
     quantity_step: Decimal = Decimal("0.001")
     price_tick: Decimal = Decimal("0.10")
+    enforce_symbol_filters: bool = False
+    record_compliance_events: bool = False
     forced_flat_time: time = time(16, 0)
     variant: Literal["VALUE_AREA_RETURN_ONLY", "VALUE_AREA_STOP_RUN", "VALUE_AREA_CVD_DIVERGENCE", "FULL"] = "FULL"
 
@@ -54,7 +57,8 @@ class ValueAreaTrapResult(StrictModel):
 
 
 def default_value_area_costs(config: ValueAreaTrapConfig) -> ExecutionCostConfig:
-    raw = {"model_version": "binance-btcusdt-research-assumption-1", "instruments": {config.symbol: InstrumentCostConfig(tick_size=float(config.price_tick), tick_value=float(config.price_tick), commission_per_side=0.0, exchange_fee_per_side=0.0005, regulatory_fee_per_side=0.0, market_slippage_ticks=1, stop_slippage_ticks=2, limit_slippage_ticks=0, limit_fill_assumption="RESEARCH_ASSUMPTION").model_dump()}, "configuration_hash": "pending"}
+    model_version = "binance-btcusdt-research-assumption-1" if config.symbol == "BTCUSDT" and not config.enforce_symbol_filters else "binance-usdm-perpetual-research-assumption-1"
+    raw = {"model_version": model_version, "instruments": {config.symbol: InstrumentCostConfig(tick_size=float(config.price_tick), tick_value=float(config.price_tick), commission_per_side=0.0, exchange_fee_per_side=0.0005, regulatory_fee_per_side=0.0, market_slippage_ticks=1, stop_slippage_ticks=2, limit_slippage_ticks=0, limit_fill_assumption="RESEARCH_ASSUMPTION").model_dump()}, "configuration_hash": "pending"}
     candidate = ExecutionCostConfig.model_validate(raw, context={"skip_configuration_hash_validation": True})
     raw["configuration_hash"] = calculate_cost_config_hash(candidate)
     return ExecutionCostConfig.model_validate(raw)
@@ -68,13 +72,22 @@ def default_value_area_policy(config: ValueAreaTrapConfig) -> PropFirmPolicy:
     return PropFirmPolicy.model_validate(raw)
 
 
-def _swings(bars: list[FiveMinuteBar], current: int, *, side: str) -> tuple[int, FiveMinuteBar] | None:
-    i = current - 2
-    if i < 2 or current >= len(bars):
+def _swings(
+    bars: list[FiveMinuteBar],
+    current: int,
+    *,
+    side: str,
+    left_bars: int,
+    right_bars: int,
+) -> tuple[int, FiveMinuteBar] | None:
+    """Confirm a swing only after every configured right bar has closed."""
+
+    i = current - right_bars
+    if i < left_bars or current >= len(bars):
         return None
     centre = bars[i]
-    left, right = bars[i - 2:i], bars[i + 1:i + 3]
-    if len(left) != 2 or len(right) != 2:
+    left, right = bars[i - left_bars:i], bars[i + 1:i + 1 + right_bars]
+    if len(left) != left_bars or len(right) != right_bars:
         return None
     if side == "SHORT" and all(centre.high > item.high for item in left) and all(centre.high >= item.high for item in right):
         return i, centre
@@ -87,6 +100,14 @@ def _eligible_quantity(config: ValueAreaTrapConfig, value: Decimal | None = None
     quantity = value if value is not None else config.quantity
     rounded = (quantity / config.quantity_step).to_integral_value(rounding=ROUND_DOWN) * config.quantity_step
     return rounded if rounded >= config.minimum_quantity else None
+
+
+def _eligible_price(config: ValueAreaTrapConfig, value: Decimal) -> Decimal:
+    """Apply exchange tick filters only where the cross-market contract requires it."""
+
+    if not config.enforce_symbol_filters:
+        return value
+    return (value / config.price_tick).to_integral_value(rounding=ROUND_DOWN) * config.price_tick
 
 
 def _previous_profile(day, profiles: dict) -> SessionProfile | None:
@@ -135,7 +156,13 @@ def run_value_area_trap(
                     events.append({"session_date": str(day), "timestamp": bar.end_utc.isoformat(), "side": side, "state": "STOP_RUN_CONFIRMED", "median_excludes_current": str(median), "volume": str(bar.total_volume)})
                 if setup["state"] in {"STOP_RUN_CONFIRMED", "DIVERGENCE_CONFIRMED"}:
                     setup["extreme"] = max(setup["extreme"], bar.high) if side == "SHORT" else min(setup["extreme"], bar.low)
-                    swing = _swings(day_bars, index, side=side)
+                    swing = _swings(
+                        day_bars,
+                        index,
+                        side=side,
+                        left_bars=config.swing_left_bars,
+                        right_bars=config.swing_right_bars,
+                    )
                     if swing:
                         _, swing_bar = swing
                         outside_swing = swing_bar.high >= profile.vah if side == "SHORT" else swing_bar.low <= profile.val
@@ -146,22 +173,36 @@ def run_value_area_trap(
                         divergent = second["price"] > first["price"] and second["cvd"] < first["cvd"] if side == "SHORT" else second["price"] < first["price"] and second["cvd"] > first["cvd"]
                         if divergent:
                             setup["state"] = "DIVERGENCE_CONFIRMED"; divergences += 1
-                            events.append({"session_date": str(day), "side": side, "state": "DIVERGENCE_CONFIRMED", "first": {key: str(value) for key, value in first.items()}, "second": {key: str(value) for key, value in second.items()}, "magnitude": str(second["cvd"] - first["cvd"])})
+                            event = {"session_date": str(day), "side": side, "state": "DIVERGENCE_CONFIRMED", "first": {key: str(value) for key, value in first.items()}, "second": {key: str(value) for key, value in second.items()}, "magnitude": str(second["cvd"] - first["cvd"])}
+                            if config.session_definition != "US_CASH_WINDOW_PROXY" or config.swing_right_bars != 2:
+                                event.update({"confirmation_timestamp": bar.end_utc.isoformat(), "right_confirmation_bars": config.swing_right_bars, "entry_not_before": day_bars[index + 1].start_utc.isoformat() if index + 1 < len(day_bars) else None})
+                            events.append(event)
                 return_inside = profile.val <= bar.close < profile.vah if side == "SHORT" else profile.val < bar.close <= profile.vah
                 required = setup["state"] == "DIVERGENCE_CONFIRMED" if config.variant == "FULL" else setup["state"] in {"STOP_RUN_CONFIRMED", "DIVERGENCE_CONFIRMED"} if config.variant == "VALUE_AREA_STOP_RUN" else setup["state"] == "DIVERGENCE_CONFIRMED" if config.variant == "VALUE_AREA_CVD_DIVERGENCE" else True
                 if return_inside and required and not traded and index + 1 < len(day_bars):
                     returns += 1; proposed += 1
+                    if config.session_definition != "US_CASH_WINDOW_PROXY":
+                        events.append({"session_date": str(day), "timestamp": bar.end_utc.isoformat(), "side": side, "state": "RETURN_TRIGGER"})
+                        events.append({"session_date": str(day), "timestamp": bar.end_utc.isoformat(), "side": side, "state": "PROPOSED_SETUP"})
                     next_bar = day_bars[index + 1]
-                    if next_bar.session_date != day or next_bar.start_new_york.timetz().replace(tzinfo=None) >= config.forced_flat_time:
+                    session_closed = (
+                        config.session_definition != UTC_SESSION_LABEL
+                        and next_bar.start_new_york.timetz().replace(tzinfo=None) >= config.forced_flat_time
+                    )
+                    if next_bar.session_date != day or session_closed:
                         events.append({"session_date": str(day), "side": side, "state": "NO_EXECUTABLE_ENTRY"}); continue
                     quantity = _eligible_quantity(config)
                     stop = setup["extreme"] + profile.bucket_size * config.stop_buffer_buckets if side == "SHORT" else setup["extreme"] - profile.bucket_size * config.stop_buffer_buckets
-                    target = profile.poc; entry = next_bar.open
+                    stop = _eligible_price(config, stop)
+                    target = _eligible_price(config, profile.poc)
+                    entry = _eligible_price(config, next_bar.open)
                     valid = quantity is not None and ((target < entry < stop) if side == "SHORT" else (stop < entry < target))
                     if not valid:
                         events.append({"session_date": str(day), "side": side, "state": "INVALIDATED", "reason": "INVALID_TARGET_OR_STOP"}); continue
                     decision = evaluator.evaluate_backtest(timestamp=next_bar.start_utc, instrument=config.symbol, account_state=AccountState(account_id="value-area-trap", current_equity=float(equity)), market_state=market_state, proposed_action=ProposedAction(action=ActionType.ORDER_SUBMISSION, instrument=config.symbol, quantity=float(quantity), direction=side), policy=policy)
                     if not decision.allowed:
+                        if config.record_compliance_events:
+                            events.append({"session_date": str(day), "timestamp": next_bar.start_utc.isoformat(), "side": side, "state": "COMPLIANCE_BLOCKED", "classification": decision.classification.value})
                         blocked.append({"session_date": str(day), "side": side, "decision_hash": decision.decision_hash, "classification": decision.classification.value, "required_actions": decision.required_actions}); continue
                     exit_bar = day_bars[-1]; reason = "SESSION_FORCE_FLAT"; exit_price = exit_bar.close; ambiguity = False
                     for candidate in day_bars[index + 1:]:
@@ -174,7 +215,7 @@ def run_value_area_trap(
                         if hit_target:
                             exit_bar, exit_price, reason = candidate, target, "TARGET"; break
                     sign = Decimal("1") if side == "LONG" else Decimal("-1")
-                    entry_price = entry + sign * config.price_tick
+                    entry_price = _eligible_price(config, entry + sign * config.price_tick)
                     exit_type = OrderType.STOP if reason.startswith("STOP") else OrderType.LIMIT if reason == "TARGET" else OrderType.MARKET
                     result = engine.calculate(config.symbol, float(quantity), order_types=(OrderType.MARKET, exit_type))
                     gross = sign * (exit_price - entry_price) * quantity; net = gross - Decimal(str(result.total_cost)); equity += net
