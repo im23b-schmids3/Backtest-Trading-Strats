@@ -4,8 +4,8 @@
 // smithers-description: One agent authors .smithers/ui/<key>.tsx for a workflow that lacks one and verifies it against the live gateway. Triggered by the monitor's "Create UI" button.
 // smithers-tags: ui, monitor, system
 // smithers-system: true
-/** @jsxImportSource smithers-orchestrator */
-import { createSmithers } from "smithers-orchestrator";
+/** @jsxImportSource smthrs */
+import { createSmithers } from "smthrs";
 import { z } from "zod/v4";
 import { agents } from "../agents";
 
@@ -54,7 +54,7 @@ function prompt(target: string, gatewayUrl: string, exampleRunId: string): strin
     "2. Read ONE existing UI as the pattern: .smithers/ui/ticket-fleet.tsx (structure, styles, defensive row parsing).",
     "3. Write .smithers/ui/" + target + ".tsx. Contracts that WILL bite you if ignored:",
     "   - Pragma /** @jsxImportSource react */ and finish the file with createGatewayReactRoot(<App />).",
-    "   - Data comes ONLY from smithers-orchestrator/gateway-react hooks. useGatewayRun(runId) takes a STRING; useGatewayRunEvents(runId) returns { events, streaming, error }; useGatewayNodeOutput({runId,nodeId,iteration}).data is { status, row, schema } and the row lives at .row (render 'pending' when row is null — NEVER render the envelope); useGatewayRunTree(runId) gives { nodes } with per-node .status tones (ok/running/failed/waiting/queued).",
+    "   - Data comes ONLY from smthrs/gateway-react hooks. useGatewayRun(runId) takes a STRING; useGatewayRunEvents(runId) returns { events, streaming, error }; useGatewayNodeOutput({runId,nodeId,iteration}).data is { status, row, schema } and the row lives at .row (render 'pending' when row is null — NEVER render the envelope); useGatewayRunTree(runId) gives { nodes } with per-node .status tones (ok/running/failed/waiting/queued).",
     "   - Output rows are DB-shaped: booleans may be 0/1, arrays/objects may be JSON strings; parse defensively.",
     "   - Honor ?runId= from location.search and fall back to the latest run of this workflow from useGatewayRuns().",
     "   - Show per-node lifecycle from the run tree, pending approvals with approve/deny via useGatewayActions().submitApproval({runId, nodeId, iteration, decision: { approved }}), and each key output when produced.",

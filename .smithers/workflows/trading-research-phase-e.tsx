@@ -2,8 +2,8 @@
 // smithers-metadata-version: 1
 // smithers-display-name: Trading research Phase E multi-strategy portfolio
 // smithers-description: Durable deterministic portfolio construction, shared-account replay, risk, economics, and final classification.
-/** @jsxImportSource smithers-orchestrator */
-import { createSmithers, Sequence, Task } from "smithers-orchestrator";
+/** @jsxImportSource smthrs */
+import { createSmithers, Sequence, Task } from "smthrs";
 import { z } from "zod/v4";
 import { phaseEInput, outputs, phaseESummary, portfolioStatus, portfolioStep, roleReview } from "../schemas/trading-research/phase-e";
 
