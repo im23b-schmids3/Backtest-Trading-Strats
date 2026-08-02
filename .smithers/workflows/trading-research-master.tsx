@@ -2,8 +2,8 @@
 // smithers-metadata-version: 1
 // smithers-display-name: Trading research master Phase F2
 // smithers-description: Durable dry-run or real-mode strategy intake, approval, implementation verification, and research handoff.
-/** @jsxImportSource smithers-orchestrator */
-import { Approval, createSmithers, Sequence, Task, WaitForEvent } from "smithers-orchestrator";
+/** @jsxImportSource smthrs */
+import { Approval, createSmithers, Sequence, Task, WaitForEvent } from "smthrs";
 import { z } from "zod/v4";
 import { approvalDecision, externalExecution as externalExecutionSchema, masterStatus, masterSummary, outputs, phaseF1Input, specificationExternalExecution, specificationStatus } from "../schemas/trading-research/master";
 

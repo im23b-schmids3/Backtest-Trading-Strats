@@ -91,7 +91,7 @@ class ExternalSpecificationExecutor:
     @staticmethod
     def _notify_smithers(request: SpecificationJobRequest, completion: SpecificationCompletion) -> None:
         smithers_run_id = request.smithers_run_id
-        script = Path(request.repository_root) / ".smithers" / "node_modules" / "smithers-orchestrator" / "src" / "bin" / "smithers.js"
+        script = Path(request.repository_root) / ".smithers" / "node_modules" / "smthrs" / "src" / "bin" / "smithers.js"
         bun = shutil.which("bun")
         if not smithers_run_id or not bun or not script.is_file():
             return

@@ -2,8 +2,8 @@
 // smithers-metadata-version: 1
 // smithers-display-name: Trading research Phase B
 // smithers-description: Durable strategy specification, approval, isolated implementation, and technical verification.
-/** @jsxImportSource smithers-orchestrator */
-import { Approval, createSmithers, Ralph, Sequence, Task } from "smithers-orchestrator";
+/** @jsxImportSource smthrs */
+import { Approval, createSmithers, Ralph, Sequence, Task } from "smthrs";
 import { z } from "zod/v4";
 import {
   approvalDecision, approvalResult, codexExecution, finalSummary, generatedSpec, implementationPlan,

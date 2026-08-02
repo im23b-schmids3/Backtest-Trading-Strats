@@ -5,8 +5,8 @@
 // smithers-tags: system, init
 // smithers-system: true
 // smithers-disable-model-invocation: true
-/** @jsxImportSource smithers-orchestrator */
-import { createSmithers } from "smithers-orchestrator";
+/** @jsxImportSource smthrs */
+import { createSmithers } from "smthrs";
 import { resolve } from "node:path";
 import { z } from "zod/v4";
 
@@ -73,7 +73,7 @@ const { Workflow, Task, Sequence, smithers, outputs } = createSmithers({
 const cliModule = (name: string) =>
   process.env.SMITHERS_CLI_SRC_DIR
     ? `${process.env.SMITHERS_CLI_SRC_DIR}/${name}.js`
-    : `@smithers-orchestrator/cli/${name}`;
+    : `@smthrs/cli/${name}`;
 
 export default smithers((ctx) => {
   const force = ctx.input.force ?? false;

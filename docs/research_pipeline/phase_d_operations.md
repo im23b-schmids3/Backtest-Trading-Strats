@@ -24,9 +24,9 @@ Synthetic fixtures use `python -m research_pipeline prop dry-run ID --scenario
 SCENARIO`. Scenarios are `profitable`, `negative-economics`,
 `high-pass-zero-payout`, `unsupported-mapping`, and `noncompliant`.
 
-The Smithers graph is checked with `bunx smithers-orchestrator graph
+The Smithers graph is checked with `bunx smthrs graph
 .smithers/workflows/trading-research-phase-d.tsx`. A run is started with
-`bunx smithers-orchestrator up .smithers/workflows/trading-research-phase-d.tsx
---detach --input <JSON>`, inspected with `bunx smithers-orchestrator inspect
+`bunx smthrs up .smithers/workflows/trading-research-phase-d.tsx
+--detach --input <JSON>`, inspected with `bunx smthrs inspect
 <RUN_ID> --format json`, resumed with `... up ... --run-id <RUN_ID> --resume
-true`, and cancelled with `bunx smithers-orchestrator cancel <RUN_ID>`.
+true`, and cancelled with `bunx smthrs cancel <RUN_ID>`.

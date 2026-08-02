@@ -22,7 +22,7 @@ const input = {
 const result = spawnSync(
   process.execPath,
   [
-    ".smithers/node_modules/smithers-orchestrator/src/bin/smithers.js",
+    ".smithers/node_modules/smthrs/src/bin/smithers.js",
     "up",
     "trading-research-master",
     "--detach",
