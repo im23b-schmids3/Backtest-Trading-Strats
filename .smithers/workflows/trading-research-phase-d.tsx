@@ -2,8 +2,8 @@
 // smithers-metadata-version: 1
 // smithers-display-name: Trading research Phase D prop compatibility
 // smithers-description: Durable deterministic futures compatibility, prop lifecycle, sizing, economics, and compliance review.
-/** @jsxImportSource smithers-orchestrator */
-import { createSmithers, Sequence, Task } from "smithers-orchestrator";
+/** @jsxImportSource smthrs */
+import { createSmithers, Sequence, Task } from "smthrs";
 import { z } from "zod/v4";
 import { finalReview, outputs, phaseDInput, phaseDSummary, propStatus, propStep, roleReview } from "../schemas/trading-research/phase-d";
 

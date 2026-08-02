@@ -1,7 +1,7 @@
 // smithers-source: project-local
 // smithers-display-name: Trading research Phase B.5 technical integrity verification
-/** @jsxImportSource smithers-orchestrator */
-import { createSmithers, Sequence, Task } from "smithers-orchestrator";
+/** @jsxImportSource smthrs */
+import { createSmithers, Sequence, Task } from "smthrs";
 import { manifest, verificationInput, verificationResult } from "../schemas/trading-research/phase-b5";
 
 const { Workflow, outputs, smithers } = createSmithers({ input: verificationInput, manifest, result: verificationResult });

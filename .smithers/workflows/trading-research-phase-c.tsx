@@ -2,8 +2,8 @@
 // smithers-metadata-version: 1
 // smithers-display-name: Trading research Phase C deterministic research
 // smithers-description: Durable bounded baseline, parameter research, validation, holdout, stress, throughput, and final review.
-/** @jsxImportSource smithers-orchestrator */
-import { Branch, createSmithers, Ralph, Sequence, Task } from "smithers-orchestrator";
+/** @jsxImportSource smthrs */
+import { Branch, createSmithers, Ralph, Sequence, Task } from "smthrs";
 import { z } from "zod/v4";
 import {
   analystDecision, baseline, candidate, edgeGate, finalReview, holdout,
