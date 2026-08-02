@@ -1,0 +1,11 @@
+{
+  "strategy_name": "ValueAreaTrap",
+  "description": "Research-only ValueAreaTrap on Binance USD-M Futures BTCUSDT perpetual aggregate trades. Use a previous US_CASH_WINDOW_PROXY volume profile, significant stop run outside value, delayed confirmed CVD divergence, completed-bar return, and next-bar execution. All baseline parameters are fixed; no optimization and no live orders.",
+  "markets": [
+    "BTCUSDT"
+  ],
+  "timeframes": [
+    "5m"
+  ],
+  "optional_notes": "Use America/New_York 09:30-16:00. The validated dataset hash is 908a22b85825a2c58cdf60d748500d403c16e57b52648a2376290547088f2b10. BTCUSDT results do not establish CME or Alpha Futures performance."
+}

@@ -5,6 +5,7 @@
 data/value_area_trap/
 research_registry/
 research_runs/
+<<<<<<< HEAD
 job-002-recovery.patch
 random_open_artifacts.json
 random_open_report.json
@@ -13,3 +14,22 @@ value_area_trap_final_artifacts.json
 value_area_trap_final_report.json
 value_area_trap_report.json
 .phase-f2-real-*
+=======
+research_registry/*.log
+research_registry/*.sqlite3
+research_registry/b5-*/
+.phase-f2-real-*/
+data/value_area_trap/
+random_open_artifacts.json
+random_open_report.json
+value_area_trap_artifacts.json
+value_area_trap_report.jsonjob-002-recovery.patch
+value_area_trap_final_artifacts.json
+value_area_trap_final_report.json
+data/
+research_runs/
+*.parquet
+*.zip
+job-002-recovery.patch
+value_area_trap_report.json
+>>>>>>> origin/feature/prop-compliance

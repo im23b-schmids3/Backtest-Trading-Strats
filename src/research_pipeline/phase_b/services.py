@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import json
 import hashlib
 import os
@@ -11,6 +12,7 @@ from typing import Any
 
 import yaml
 from pydantic import ValidationError
+
 
 from ..controller.pipeline_controller import PipelineController
 from ..enums import ApprovalStatus, PipelineState
@@ -106,31 +108,87 @@ class PhaseBService:
             received_value=error.get("input"), expected_constraint=str(error.get("type", "valid value")), explanation=error.get("msg", "schema validation failed"),
             repair_hint="Return one complete specification matching the canonical StrategySpec fields and types.") for error in exc.errors()]
 
-    def _validate_payload(self, raw: dict[str, Any], workflow: WorkflowInput, provenance: SpecificationProvenance) -> tuple[StrategySpec | None, SpecificationValidationReport, SpecificationProvenance, dict[str, Any]]:
-        normalized, semantic, provenance = semantic_validate(raw, provenance=provenance)
+    def _validate_payload(
+        self,
+        raw: dict[str, Any],
+        workflow: WorkflowInput,
+        provenance: SpecificationProvenance,
+    ) -> tuple[
+        StrategySpec | None,
+        SpecificationValidationReport,
+        SpecificationProvenance,
+        dict[str, Any],
+    ]:
+        normalized, semantic, provenance = semantic_validate(
+            raw,
+            provenance=provenance,
+        )
         issues = list(semantic.errors)
         spec: StrategySpec | None = None
-        supplied_hash = normalized.get("specification_hash")
         try:
             data = dict(normalized)
             data["specification_hash"] = "pending"
-            candidate = StrategySpec.model_construct(**data)
+
+            # Validate and normalize all field types before calculating the
+            # canonical hash.
+            candidate = StrategySpec.model_validate(
+                data,
+                context={"skip_specification_hash_validation": True},
+            )
+
             expected_hash = calculate_specification_hash(candidate)
-            data["specification_hash"] = expected_hash
-            spec = StrategySpec.model_validate(data)
-            if supplied_hash not in {expected_hash, "pending"}:
-                issues.append(SpecificationValidationIssue(error_code="SPECIFICATION_HASH_MISMATCH", field_path="specification_hash", received_value=supplied_hash,
-                    expected_constraint="canonical hash of normalized material fields", explanation="The supplied hash does not match the canonical specification.", repair_hint="Set specification_hash to the canonical hash generated from the normalized fields."))
+
+            # Use the normalized representation for final validation.
+            validated_data = candidate.model_dump(mode="python")
+            validated_data["specification_hash"] = expected_hash
+
+            spec = StrategySpec.model_validate(validated_data)
+
         except ValidationError as exc:
             issues.extend(self._pydantic_issue(exc))
+
         except (TypeError, ValueError, KeyError) as exc:
-            issues.append(SpecificationValidationIssue(error_code="SPECIFICATION_PAYLOAD_INVALID", field_path="specification", received_value=raw,
-                expected_constraint="one complete StrategySpec mapping", explanation=str(exc), repair_hint="Return all required fields with valid values."))
-        report = SpecificationValidationReport(valid=not issues, pydantic_valid=spec is not None and not any(item.error_code.startswith("PYDANTIC") for item in issues),
-            semantic_valid=not semantic.errors, errors=issues, blocking_ambiguities=provenance.blocking_ambiguities,
-            normalized_payload_hash=semantic.normalized_payload_hash)
-        approval_blocked_only = bool(spec) and bool(issues) and all(item.error_code == "BLOCKING_AMBIGUITY" for item in issues)
-        return (spec if (not issues or approval_blocked_only) else None), report, provenance, normalized
+            issues.append(
+                SpecificationValidationIssue(
+                    error_code="SPECIFICATION_PAYLOAD_INVALID",
+                    field_path="specification",
+                    received_value=raw,
+                    expected_constraint="one complete StrategySpec mapping",
+                    explanation=str(exc),
+                    repair_hint="Return all required fields with valid values.",
+                )
+            )
+
+        report = SpecificationValidationReport(
+            valid=not issues,
+            pydantic_valid=(
+                spec is not None
+                and not any(
+                    item.error_code.startswith("PYDANTIC")
+                    for item in issues
+                )
+            ),
+            semantic_valid=not semantic.errors,
+            errors=issues,
+            blocking_ambiguities=provenance.blocking_ambiguities,
+            normalized_payload_hash=semantic.normalized_payload_hash,
+        )
+
+        approval_blocked_only = (
+            bool(spec)
+            and bool(issues)
+            and all(
+                item.error_code == "BLOCKING_AMBIGUITY"
+                for item in issues
+            )
+        )
+
+        return (
+            spec if (not issues or approval_blocked_only) else None,
+            report,
+            provenance,
+            normalized,
+        )
 
     def _approval_path(self, workflow: WorkflowInput, strategy_id: str, version: str, run_id: str) -> Path:
         draft_dir = Path(workflow.repository_root).resolve() / "research_registry" / "spec_drafts"
@@ -343,7 +401,48 @@ the repository-compatible 1-hour same-bar exit.
         return attempts[-1] if attempts else None
 
     def _dry_spec(self, workflow: WorkflowInput, strategy_id: str, version: str, ambiguities: list[str]) -> StrategySpec:
+        if strategy_id == "ValueAreaTrap":
+            raw_value_area: dict[str, Any] = {
+                "strategy_id": strategy_id, "version": version, "name": "ValueAreaTrap",
+                "description": "Research-only deterministic BTCUSDT aggregate-trade value-area trap baseline.",
+                "hypothesis": "Previous US cash-window value-area context plus a significant stop run, confirmed CVD divergence, and completed-bar return may identify a mean-reversion setup; no profitability claim is made.",
+                "strategy_family": "value_area_trap_reference", "markets": ["BTCUSDT"], "timeframes": ["5m"],
+                "long_rules": ["Confirm a stop run below prior VAL, bullish CVD divergence between delayed confirmed swing lows, then a completed close back inside value."],
+                "short_rules": ["Confirm a stop run above prior VAH, bearish CVD divergence between delayed confirmed swing highs, then a completed close back inside value."],
+                "entry_logic": "Propose a market entry only at the next available 5m bar open after the completed return bar; shared compliance evaluation may block it.",
+                "initial_stop_logic": "Use the full fakeout extreme plus or minus one configured profile bucket.",
+                "exit_logic": "Target prior-session POC; use versioned stop-first ambiguity handling and force flat at the US_CASH_WINDOW_PROXY boundary.",
+                "session_assumptions": ["Binance runs continuously; the research session label is US_CASH_WINDOW_PROXY, not CME RTH.", "America/New_York IANA time rules define 09:30-16:00 including daylight saving time.", "Previous valid-session profile levels remain fixed for the current session."],
+                "baseline_parameters": {"symbol": "BTCUSDT", "timeframe": "5m", "session_timezone": "America/New_York", "session_open": "09:30", "session_close": "16:00", "value_area_fraction": 0.70, "price_bucket_size": 10, "breakout_volume_multiplier": 1.5, "breakout_volume_lookback_bars": 10, "minimum_breakout_buckets": 1, "swing_left_bars": 2, "swing_right_bars": 2, "stop_buffer_buckets": 1, "target": "previous_session_poc", "maximum_trades_per_day": 1, "entry_execution": "next_bar_open", "same_bar_stop_target_policy": "stop_first", "quantity": "0.001", "minimum_quantity": "0.001", "quantity_step": "0.001", "price_tick": "0.10"},
+                "parameter_families": [{"name": "deterministic_baseline", "description": "All ValueAreaTrap baseline values are fixed research rules and cannot be optimized.", "baseline_value": "fixed", "value_type": "string", "allowed_min": None, "allowed_max": None, "allowed_values": ["fixed"], "optimization_order": 0, "maximum_rounds": 0, "mutable": False, "hypothesis_relevance": "Protects the non-optimized reference baseline."}],
+                "invariants": ["Previous-session profile levels are frozen intraday.", "No same-bar entry occurs at trigger close.", "Swings are confirmed only after two right bars close.", "CVD uses aggregate-trade aggressor classification.", "POC is the target and fakeout extreme plus/minus one bucket is the stop.", "All execution costs apply exactly once.", "No live orders or authenticated Binance access.", "Binance BTCUSDT results do not validate CME transferability.", "Alpha scenario output does not establish firm-rule compliance."],
+                "required_data": ["Manifest-backed Binance USD-M Futures BTCUSDT perpetual aggregate-trade parquet dataset; OHLCV substitution is prohibited."],
+                "known_limitations": ["Research-only BTCUSDT proxy study; no MES, MNQ, ES, or NQ claim.", "Alpha Zero 25K simulator is a configurable scenario model, not a broker or firm emulator.", *ambiguities],
+                "status": ApprovalStatus.DRAFT, "created_at": datetime.now(timezone.utc), "approved_at": None,
+            }
+            return self._validated_with_hash(raw_value_area)
         if strategy_id == "RandomOpenTest":
+            reference_variant = any(term in f"{workflow.natural_language_description} {workflow.optional_notes or ''}".lower() for term in ("profit target", "fixed target", "fixed quantity", "stop in ticks", "initial stop"))
+            if reference_variant:
+                raw_reference: dict[str, Any] = {
+                    "strategy_id": strategy_id, "version": version, "name": "RandomOpenTest",
+                    "description": "Deterministic RandomOpenTest reference adapter for complete pipeline integration.",
+                    "hypothesis": "This intentionally meaningless strategy is an integration test and is not expected to be profitable.",
+                    "strategy_family": "f2_random_open_reference", "markets": ["SPY"], "timeframes": ["1h"],
+                    "long_rules": ["At the first eligible session bar, deterministic seeded direction may select LONG."],
+                    "short_rules": ["At the first eligible session bar, deterministic seeded direction may select SHORT."],
+                    "entry_logic": "Select the first eligible bar after the configured America/New_York session open and submit one deterministic direction proposal.",
+                    "initial_stop_logic": "Fixed initial stop distance in configured ticks.",
+                    "exit_logic": "Exit at stop, target, or the shared session forced-flat boundary; no scaling or re-entry.",
+                    "session_assumptions": ["Session timestamps use IANA America/New_York rules, including daylight saving time.", "Existing SPY proxy data is used only as the repository fixture."],
+                    "baseline_parameters": {"initial_cash": 10000, "quantity": 1, "seed": "RandomOpenTest", "session_timezone": "America/New_York", "session_open_local": "09:30", "forced_flat_local": "16:00", "initial_stop_ticks": 4, "profit_target_ticks": 8, "tick_size": 0.01, "test_start_date": "2025-01-01", "test_end_date": "2026-01-01"},
+                    "parameter_families": [{"name": "reference_execution", "description": "Fixed integration-test execution parameters; never optimized.", "baseline_value": "fixed", "value_type": "string", "allowed_min": None, "allowed_max": None, "allowed_values": ["fixed"], "optimization_order": 0, "maximum_rounds": 0, "mutable": False, "hypothesis_relevance": "Defines the deterministic reference fixture."}],
+                    "invariants": ["Exactly one proposal per eligible trading day.", "Direction is derived only from seed, instrument, and local trading date using SHA-256.", "No re-entry, pyramiding, scaling, filters, optimization, or live broker orders.", "Entries are evaluated by the shared compliance evaluator.", "Open positions are closed by the shared forced-flat rule."],
+                    "required_data": ["Existing data/v11_5_proxy_raw/SPY_1h.parquet"],
+                    "known_limitations": ["Integration fixture only; profitability is not a pass condition.", "SPY is a repository proxy and not a verified futures mapping.", *ambiguities],
+                    "status": ApprovalStatus.DRAFT, "created_at": datetime.now(timezone.utc), "approved_at": None,
+                }
+                return self._validated_with_hash(raw_reference)
             raw: dict[str, Any] = {
                 "strategy_id": strategy_id, "version": version, "name": "RandomOpenTest",
                 "description": "Deterministic one-hour repository-compatible pipeline integration test.",
@@ -392,16 +491,37 @@ the repository-compatible 1-hour same-bar exit.
         return self._validated_with_hash(raw)
 
     @staticmethod
-    def _validated_with_hash(raw: dict[str, Any]) -> StrategySpec:
+    def _validated_with_hash(
+        raw: dict[str, Any],
+    ) -> StrategySpec:
         data = dict(raw)
-        data["parameter_families"] = [ParameterFamily.model_validate(item) for item in data["parameter_families"]]
-        data["status"] = ApprovalStatus(data.get("status", ApprovalStatus.DRAFT))
-        if isinstance(data.get("created_at"), str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
-        data["specification_hash"] = "pending"
-        candidate = StrategySpec.model_construct(**data)
-        data["specification_hash"] = calculate_specification_hash(candidate)
-        return StrategySpec.model_validate(data)
+
+        # StrategySpec benötigt das Feld bereits bei der ersten Validierung.
+        # Der Wert darf hier vorläufig sein, da die Hashprüfung per Context
+        # übersprungen wird.
+        data["specification_hash"] = str(
+            data.get("specification_hash") or "pending"
+        )
+
+        # Erst das komplette Modell validieren und alle verschachtelten Werte
+        # in ihre kanonischen Pydantic-Typen überführen.
+        candidate = StrategySpec.model_validate(
+            data,
+            context={
+                "skip_specification_hash_validation": True,
+            },
+        )
+
+        # Den Hash aus dem vollständig validierten Modell berechnen.
+        expected_hash = calculate_specification_hash(candidate)
+
+        # Nicht candidate.specification_hash direkt ändern:
+        # validate_assignment=True würde dabei sofort erneut validieren.
+        validated_data = candidate.model_dump(mode="python")
+        validated_data["specification_hash"] = expected_hash
+
+        # Abschließende normale Validierung einschließlich Hashprüfung.
+        return StrategySpec.model_validate(validated_data)
 
     @staticmethod
     def _ambiguities(workflow: WorkflowInput) -> list[str]:
@@ -418,7 +538,7 @@ the repository-compatible 1-hour same-bar exit.
             "mutable_parameter_families": [item.name for item in spec.parameter_families if item.mutable],
             "invariants": spec.invariants, "assumptions": spec.session_assumptions, "ambiguities": ambiguities,
             "provenance": (provenance or SpecificationProvenance()).model_dump(mode="json"),
-            "implementation_variant": "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else None,
+            "implementation_variant": "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else "RandomOpenTest deterministic fixed-quantity reference adapter" if spec.strategy_family == "f2_random_open_reference" else None,
             "specification_path": str(path), "specification_hash": spec.specification_hash}, indent=2, sort_keys=True)
         return GeneratedStrategySpec(strategy_id=spec.strategy_id, version=spec.version, specification_path=str(path), specification_hash=spec.specification_hash,
             assumptions=list(spec.session_assumptions), ambiguities=ambiguities, fields_requiring_confirmation=["entry_logic"] if ambiguities else [], manual_review_required=bool(ambiguities), approval_summary=summary,
@@ -434,10 +554,16 @@ the repository-compatible 1-hour same-bar exit.
             if not isinstance(raw, dict):
                 raise ValueError("specification YAML must contain one mapping")
             normalized, semantic_report, provenance = semantic_validate(raw, provenance=generated.provenance)
-            spec = StrategySpec.model_validate(raw)
-            expected_hash = calculate_specification_hash(StrategySpec.model_construct(**{**normalized, "specification_hash": "pending"}))
-            if expected_hash != spec.specification_hash:
-                structured.append(SpecificationValidationIssue(error_code="CANONICAL_NORMALIZATION_MISMATCH", field_path="specification_hash", received_value=spec.specification_hash,
+            candidate = StrategySpec.model_validate(
+                {**normalized, "specification_hash": "pending"},
+                context={"skip_specification_hash_validation": True},
+            )
+            expected_hash = calculate_specification_hash(candidate)
+            validated_data = candidate.model_dump(mode="python")
+            validated_data["specification_hash"] = expected_hash
+            spec = StrategySpec.model_validate(validated_data)
+            if raw.get("specification_hash") != expected_hash:
+                structured.append(SpecificationValidationIssue(error_code="CANONICAL_NORMALIZATION_MISMATCH", field_path="specification_hash", received_value=raw.get("specification_hash"),
                     expected_constraint="hash must be calculated after canonical normalization", explanation="The persisted specification hash does not represent the normalized payload.", repair_hint="Regenerate the canonical specification through the intake validator."))
             structured.extend(semantic_report.errors)
             if spec.specification_hash != generated.specification_hash:
@@ -490,14 +616,14 @@ the repository-compatible 1-hour same-bar exit.
             immutable_verified = True
         return ApprovalResult(decision=decision, approved=True, note=note, strategy_id=strategy_id, version=current["version"], current_phase=PipelineState(current["current_phase"]), immutable_verified=immutable_verified)
 
-    def implementation_plan(self, strategy_id: str, repository_root: str, *, dry_run: bool = True, worktree_suffix: str | None = None) -> ImplementationPlan:
+    def implementation_plan(self, strategy_id: str, repository_root: str, *, dry_run: bool = True, worktree_suffix: str | None = None, worktree_parent: str | Path | None = None) -> ImplementationPlan:
         current = self.registry.get_strategy(strategy_id)
         if current["current_phase"] != PipelineState.IMPLEMENTATION.value:
             raise InvalidTransitionError(
                 f"implementation planning requires IMPLEMENTATION, got {current['current_phase']}"
             )
         spec = self.registry.get_specification(strategy_id)
-        manager = WorktreeManager(repository_root)
+        manager = WorktreeManager(repository_root, worktree_parent)
         plan = manager.plan(spec.strategy_id, spec.version, dry_run=dry_run, worktree_suffix=worktree_suffix)
         return plan.model_copy(update={"invariants": spec.invariants, "required_tests":[
             ["python", "-m", "pytest", "-q", "tests/research_pipeline"],

@@ -1,5 +1,8 @@
 # Preserve the Phase A/B registry schema version for backward compatibility.
 # Phase C extension tables have their own version marker below.
+# The retry-attempt table below is additive.  Keep the Phase A/B marker at 2
+# because existing callers use it as a compatibility contract, not a catalog
+# of every additive table.
 SCHEMA_VERSION = 2
 MAX_COMPATIBLE_SCHEMA_VERSION = 3
 
@@ -727,6 +730,34 @@ def apply_migrations(connection) -> None:
             updated_at TEXT NOT NULL,
             FOREIGN KEY(run_id) REFERENCES master_runs(run_id)
         );
+        CREATE TABLE IF NOT EXISTS implementation_job_attempts (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            specification_hash TEXT NOT NULL,
+            job_path TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            result_path TEXT,
+            result_hash TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id),
+            FOREIGN KEY(run_id) REFERENCES master_runs(run_id)
+        );
+        CREATE TABLE IF NOT EXISTS implementation_job_status_corrections (
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            correction_type TEXT NOT NULL,
+            original_status TEXT NOT NULL,
+            corrected_status TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(run_id, job_id, correction_type)
+        );
         CREATE TABLE IF NOT EXISTS specification_jobs (
             run_id TEXT NOT NULL,
             job_id TEXT NOT NULL,
@@ -819,4 +850,49 @@ def apply_migrations(connection) -> None:
         connection.execute("INSERT INTO specification_schema_version(version) VALUES (1)")
     elif row[0] < 1:
         connection.execute("UPDATE specification_schema_version SET version=1")
+    # Provider-independent compliance artifacts.  These tables are additive;
+    # existing Phase A-D records and their semantics are unchanged.
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS compliance_policies (
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            policy_id TEXT NOT NULL,
+            policy_hash TEXT NOT NULL,
+            policy_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(strategy_id, strategy_version, policy_id)
+        );
+        CREATE TABLE IF NOT EXISTS compliance_decisions (
+            decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            decision_hash TEXT NOT NULL UNIQUE,
+            decision_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS compliance_artifacts (
+            artifact_key TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            artifact_type TEXT NOT NULL,
+            artifact_path TEXT,
+            artifact_hash TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS compliance_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_id TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_timestamp TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS compliance_schema_version (version INTEGER NOT NULL);
+        """
+    )
+    if connection.execute("SELECT version FROM compliance_schema_version LIMIT 1").fetchone() is None:
+        connection.execute("INSERT INTO compliance_schema_version(version) VALUES (1)")
     connection.commit()

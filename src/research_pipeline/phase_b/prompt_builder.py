@@ -34,14 +34,23 @@ Python validator calculates and verifies the canonical hash. Do not calculate
 or guess the SHA-256 value yourself.
 If SPY is requested, explicitly state that it is the repository proxy and that
 existing Phase D futures mappings do not support SPY; do not invent a mapping.
-For the named RandomOpenTest integration strategy, use strategy_family exactly
-"f2_random_open_test" so the existing repository-compatible adapter can be
-resolved. Do not invent another family name.
-For RandomOpenTest, baseline_parameters must include equity_fraction: 0.05,
-initial_cash: 10000, session_timezone: America/New_York, session_open_local:
-"09:30", test_start_date: "2025-01-01", and test_end_date: "2026-01-01".
-Describe the 5% rule as allocation from current account equity, never as risk
-per trade. Preserve the one-hour same-bar exit and explicit proxy disclosure.
+For ValueAreaTrap, use strategy_family exactly "value_area_trap_reference",
+market BTCUSDT and timeframe 5m. Require public Binance USD-M perpetual
+aggregate trades rather than substituting OHLCV. State that this is a
+US_CASH_WINDOW_PROXY research session, not CME RTH, and that all parameter
+families are immutable and not optimized.
+For the legacy one-hour same-bar RandomOpenTest compatibility description, use
+strategy_family exactly "f2_random_open_test". If the description explicitly
+requests fixed quantity, initial stop ticks, profit target ticks, or shared
+forced-flat behavior, use "f2_random_open_reference". Do not invent another
+family name.
+For the legacy one-hour variant, baseline_parameters must include
+equity_fraction: 0.05, initial_cash: 10000, session_timezone:
+America/New_York, session_open_local: "09:30", test_start_date: "2025-01-01",
+and test_end_date: "2026-01-01". Preserve its one-hour same-bar exit.
+For the reference variant, include quantity, initial_stop_ticks,
+profit_target_ticks, forced_flat_local, tick_size, seed, and the same date and
+timezone fields. In both variants explicitly disclose the SPY proxy.
 """
 
 

@@ -63,6 +63,19 @@ def test_ambiguous_intake_requires_clarification_before_approval(tmp_path: Path)
         current.approve(status["run_id"])
 
 
+def test_approval_does_not_continue_after_specification_generation_failure(tmp_path: Path):
+    intake = write_intake(tmp_path, name=f"F1 failed approval {tmp_path.name}")
+    current = service(tmp_path)
+    options = current.input_model(intake, Path.cwd(), registry_path=tmp_path / "registry.sqlite3", dry_run=True).model_copy(update={"max_generation_attempts": 1, "max_repair_attempts": 0})
+    pending = current.start(options)
+    current.registry.update_master_run(pending["run_id"], current_step="SPECIFICATION", outcome=MasterRunStatus.SPECIFICATION_GENERATION_FAILURE.value)
+
+    result = current.approve(pending["run_id"], note="must not approve failed specification")
+
+    assert result["current_step"] == "SPECIFICATION"
+    assert result["outcome"] == MasterRunStatus.SPECIFICATION_GENERATION_FAILURE.value
+
+
 def test_synthetic_end_to_end_generates_report_archive_and_hashes(tmp_path: Path):
     intake = write_intake(tmp_path, name=f"F1 end to end {tmp_path.name}")
     current = service(tmp_path)

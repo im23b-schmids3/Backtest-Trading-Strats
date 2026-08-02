@@ -15,6 +15,10 @@ from fib_backtester.backtest.metrics import calculate_metrics
 from fib_backtester.config import AssetConfig, RunConfig
 
 from ..prop.models import TradeSignal
+from ..compliance import ComplianceEvaluator, PropFirmPolicy
+from ..compliance.costs import ExecutionCostConfig
+from ..compliance.diagnostics import calculate_activity_diagnostics
+from ..strategies.random_open_test import RandomOpenTestConfig, RandomOpenTestRun, run_random_open_test
 from ..research.models import ResearchArtifact
 from ..schemas.splits import SplitDefinition
 from ..schemas.strategy_spec import StrategySpec
@@ -35,10 +39,15 @@ class NativeRepositoryAdapter:
     a library and none of its implementation or historical outputs are changed.
     """
 
-    def __init__(self, specification: StrategySpec, repository_root: str | Path = ".", source_symbols: dict[str, str] | None = None):
+    def __init__(self, specification: StrategySpec, repository_root: str | Path = ".", source_symbols: dict[str, str] | None = None,
+                 compliance_evaluator: ComplianceEvaluator | None = None, compliance_policy: PropFirmPolicy | None = None,
+                 execution_cost_config: ExecutionCostConfig | None = None):
         self.specification = specification
         self.root = Path(repository_root).resolve()
         self.source_symbols = source_symbols or {}
+        self.compliance_evaluator = compliance_evaluator
+        self.compliance_policy = compliance_policy
+        self.execution_cost_config = execution_cost_config
         self.gate = DataAvailabilityGate(self.root)
         self.identity = AdapterIdentity(strategy_id=specification.strategy_id, strategy_version=specification.version,
                                          implementation_module=__name__, entry_point=f"{__name__}:NativeRepositoryAdapter",
@@ -48,6 +57,12 @@ class NativeRepositoryAdapter:
                                                  parameter_families=[item.name for item in specification.parameter_families if item.mutable],
                                                  data_providers=["local_parquet"])
         self._last_run: BacktestRun | None = None
+        self._artifact_root: Path | None = None
+
+    def bind_artifact_root(self, root: str | Path) -> None:
+        """Restrict resume-time trade exports to one master-run artifact tree."""
+
+        self._artifact_root = Path(root).resolve()
 
     @staticmethod
     def _commit() -> str | None:
@@ -95,7 +110,12 @@ class NativeRepositoryAdapter:
         values = self._parameters(parameters)
         assets = list(self.specification.markets)
         asset_configs = {asset: AssetConfig(symbol=self.source_symbols.get(asset, asset), source="binance", fee_rate=float(values.get("fee_rate", .001)), slippage_rate=float(values.get("slippage_rate", .0002))) for asset in assets}
-        config = RunConfig(run_name=f"phase-f2-{self.specification.strategy_id}", seed=int(values.get("seed", 42)), initial_cash=float(values.get("initial_cash", 10_000)),
+        seed_value = values.get("seed", 42)
+        try:
+            numeric_seed = int(seed_value)
+        except (TypeError, ValueError):
+            numeric_seed = int.from_bytes(hashlib.sha256(str(seed_value).encode("utf-8")).digest()[:4], "big")
+        config = RunConfig(run_name=f"phase-f2-{self.specification.strategy_id}", seed=numeric_seed, initial_cash=float(values.get("initial_cash", 10_000)),
                            assets=assets, timeframes=list(self.specification.timeframes), swing_n=int(values.get("swing_n", 3)), min_pivot_distance=int(values.get("min_pivot_distance", 10)),
                            entry_max_age_bars=int(values["entry_max_age_bars"]) if values.get("entry_max_age_bars") is not None else None,
                            reentry=bool(values.get("reentry", False)), execution_policy=str(values.get("execution_policy", "conservative")),
@@ -120,26 +140,48 @@ class NativeRepositoryAdapter:
             if frame.empty: raise RuntimeError(f"no rows in {phase} window for {market}/{spec.timeframes[0]}")
             data[market] = frame
         config = self._config(parameters)
+        reference_run: RandomOpenTestRun | None = None
         if spec.strategy_family == "f2_native_demo":
             trades_frame, equity_frame = self._run_breakout(data, config, parameters)
         elif spec.strategy_family == "f2_random_open_test":
             trades_frame, equity_frame = self._run_random_open_test(data, config, parameters, spec.name)
+        elif spec.strategy_family == "f2_random_open_reference":
+            trades_frame, equity_frame, reference_run = self._run_random_open_reference(data, spec, parameters)
         else:
             trades_frame, equity_frame = BacktestEngine(config).run(data)
         metrics_raw = calculate_metrics(trades_frame, equity_frame, config.initial_cash)
         normalized = [self._normalize_trade(row, spec, availability) for row in trades_frame.to_dict(orient="records")]
         candidate_hash = stable_hash({"specification_hash": spec.specification_hash, "parameters": self._parameters(parameters), "split_hash": split.split_hash})
         metrics = self._metrics(metrics_raw, normalized, start, end)
+        metrics["activity_diagnostics"] = calculate_activity_diagnostics(normalized).model_dump(mode="json")
+        if self.compliance_policy is not None:
+            metrics["compliance_policy_hash"] = self.compliance_policy.policy_hash
+        if self.execution_cost_config is not None:
+            metrics["execution_cost_configuration_hash"] = self.execution_cost_config.configuration_hash
+        if reference_run is not None:
+            metrics.update({"proposed_entries": reference_run.proposed_entries, "accepted_entries": reference_run.accepted_entries,
+                            "blocked_entries": reference_run.blocked_entries, "forced_flat_trade_count": reference_run.forced_flat_trade_count,
+                            "commissions": reference_run.commissions, "fees": reference_run.fees,
+                            "total_costs": reference_run.commissions + reference_run.fees + reference_run.slippage_cost,
+                            "policy_hash": reference_run.policy_hash,
+                            "execution_cost_configuration_hash": reference_run.execution_cost_configuration_hash,
+                            "random_open_direction_inputs": reference_run.direction_inputs})
         if spec.strategy_family == "f2_random_open_test":
             metrics["implementation_variant"] = "1-hour repository-compatible test variant"
+        elif spec.strategy_family == "f2_random_open_reference":
+            metrics["implementation_variant"] = "RandomOpenTest deterministic fixed-quantity reference adapter"
         input_path = output_dir / "input.json"; metrics_path = output_dir / "metrics.json"
         trades_path = output_dir / "trades.jsonl"; equity_path = output_dir / "equity.json"
         payload = {"strategy_id": spec.strategy_id, "strategy_version": spec.version, "specification_hash": spec.specification_hash,
                    "split_hash": split.split_hash, "dataset_hash": split.source_data_hash, "parameters": self._parameters(parameters), "experiment_id": experiment_id,
                    "candidate_hash": candidate_hash, "phase": phase,
-                   "implementation_variant": "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else None}
+                   "implementation_variant": "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else "RandomOpenTest deterministic fixed-quantity reference adapter" if spec.strategy_family == "f2_random_open_reference" else None}
         input_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
         metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        reference_path: Path | None = None
+        if reference_run is not None:
+            reference_path = output_dir / "random_open_compliance.json"
+            reference_path.write_text(reference_run.model_dump_json(indent=2), encoding="utf-8")
         trades_path.write_text("".join(json.dumps(item.model_dump(mode="json"), sort_keys=True) + "\n" for item in normalized), encoding="utf-8")
         equity_path.write_text(equity_frame.to_json(orient="records", date_format="iso"), encoding="utf-8")
         diagnostic = self._diagnostics(normalized, metrics, availability, trades_path, equity_path, spec, output_dir)
@@ -149,6 +191,8 @@ class NativeRepositoryAdapter:
                                         approved_invariants_hash=spec.specification_hash, data_sources=[item.model_dump(mode="json") for item in availability])
         manifest_path = output_dir / "manifest.yaml"; manifest.save(manifest_path)
         files = [input_path, metrics_path, trades_path, equity_path, diagnostic_path, manifest_path]
+        if reference_path is not None:
+            files.append(reference_path)
         hashes = {path.name: file_hash(path) for path in files}
         run = BacktestRun(run_id=experiment_id, strategy_id=spec.strategy_id, strategy_version=spec.version, candidate_hash=candidate_hash,
                           dataset_hashes=[item.dataset_hash or "" for item in availability], code_commit=self.identity.code_commit,
@@ -209,6 +253,34 @@ class NativeRepositoryAdapter:
                 equity += net
                 equity_rows.append({"timestamp": exit_timestamp, "equity": equity, "asset_event": asset})
         return pd.DataFrame(rows), pd.DataFrame(equity_rows)
+
+    def _run_random_open_reference(self, data: dict[str, pd.DataFrame], spec: StrategySpec, parameters: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, RandomOpenTestRun]:
+        values = dict(spec.baseline_parameters)
+        values.update(parameters)
+        config = RandomOpenTestConfig(
+            instrument=spec.markets[0],
+            seed=str(values.get("seed", spec.name)),
+            timezone=str(values.get("session_timezone", "America/New_York")),
+            session_open=str(values.get("session_open_local", "09:30")),
+            forced_flat_time=str(values.get("forced_flat_local", "16:00")),
+            quantity=float(values.get("quantity", 1)),
+            initial_capital=float(values.get("initial_cash", 10_000)),
+            initial_stop_ticks=int(values.get("initial_stop_ticks", 4)),
+            profit_target_ticks=int(values.get("profit_target_ticks", 8)),
+            tick_size=float(values.get("tick_size", .01)),
+            test_start_date=values.get("test_start_date"),
+            test_end_date=values.get("test_end_date"),
+        )
+        run = run_random_open_test(data[spec.markets[0]], config, policy=self.compliance_policy,
+                                   cost_config=self.execution_cost_config, evaluator=self.compliance_evaluator)
+        rows = []
+        equity_rows = []
+        equity = config.initial_capital
+        for item in run.trades:
+            equity += float(item["net_pnl"])
+            rows.append({"asset": item["instrument"], "setup_id": item["trade_id"], "side": item["direction"].lower(), "signal_timestamp": item["entry_timestamp"], "fill_timestamp": item["entry_timestamp"], "exit_timestamp": item["exit_timestamp"], "entry_price": item["entry_price"], "average_exit_price": item["exit_price"], "quantity": item["quantity"], "initial_stop": item["initial_stop_price"], "targets": json.dumps([item["profit_target_price"]]), "gross_pnl": item["gross_pnl"], "fees": item["commissions"] + item["fees"], "slippage_cost": item["slippage_cost"], "net_pnl": item["net_pnl"], "exit_reason": item["exit_reason"], "targets_hit": int(item["exit_reason"] == "target"), "exit_events": json.dumps([{"timestamp": item["exit_timestamp"], "reason": item["exit_reason"], "quantity": item["quantity"], "fill_price": item["exit_price"]}]), "holding_hours": (pd.Timestamp(item["exit_timestamp"]) - pd.Timestamp(item["entry_timestamp"])).total_seconds() / 3600, "risk_budget": abs(item["entry_price"] - item["initial_stop_price"])})
+            equity_rows.append({"timestamp": item["exit_timestamp"], "equity": equity, "asset_event": item["instrument"]})
+        return pd.DataFrame(rows), pd.DataFrame(equity_rows), run
 
     @staticmethod
     def _run_breakout(data: dict[str, pd.DataFrame], config: RunConfig, parameters: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -287,7 +359,7 @@ class NativeRepositoryAdapter:
                                direction=str(row.get("side")), setup_time=pd.Timestamp(row.get("signal_timestamp")).to_pydatetime(),
                                entry_time=pd.Timestamp(row.get("fill_timestamp")).to_pydatetime(), exit_time=pd.Timestamp(row.get("exit_timestamp")).to_pydatetime(),
                                entry=float(row.get("entry_price", 0)), stop=float(row.get("initial_stop", 0)), targets=[float(item) for item in targets], legs=legs,
-                               quantity=float(row.get("quantity", 0)), fees=float(row.get("fees", 0)), slippage=0.0, gross_pnl=float(row.get("gross_pnl", 0)),
+                               quantity=float(row.get("quantity", 0)), fees=float(row.get("fees", 0)), slippage=float(row.get("slippage_cost", 0)) if spec.strategy_family == "f2_random_open_reference" else 0.0, gross_pnl=float(row.get("gross_pnl", 0)),
                                net_pnl=float(row.get("net_pnl", 0)), exit_reason=str(row.get("exit_reason", "unknown")), source_classification=source)
 
     def _diagnostics(self, trades: list[NormalizedTrade], metrics: dict[str, Any], availability: list[DataAvailability], trades_path: Path, equity_path: Path, spec: StrategySpec, output_dir: Path) -> dict[str, Any]:
@@ -306,7 +378,7 @@ class NativeRepositoryAdapter:
                              "remaining_quantity": remaining, "initial_quantity": item.quantity, "is_open": remaining > 1e-10})
             if not item.legs: legs.append({"trade_id": item.trade_id, "leg_number": 1, "leg_type": item.exit_reason, "leg_quantity": item.quantity, "price": item.entry, "gross_pnl": item.gross_pnl, "fees": item.fees, "net_pnl": item.net_pnl, "remaining_quantity": 0.0, "initial_quantity": item.quantity, "is_open": False})
         scaling = [{"quantity": 1.0, "pnl": 1.0}, {"quantity": 2.0, "pnl": 2.0}]
-        return {"implementation_variant": "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else None,
+        return {"implementation_variant": "1-hour repository-compatible test variant" if spec.strategy_family == "f2_random_open_test" else "RandomOpenTest deterministic fixed-quantity reference adapter" if spec.strategy_family == "f2_random_open_reference" else None,
                 "trades": rows, "exit_legs": legs, "scaling_samples": scaling, "fee_reconciliation": [{"trade_id": item.trade_id, "fees": item.fees, "expected_fees": item.fees} for item in trades],
                 "trade_counts": {"total_trades": len(trades), "completed_positions": len(trades), "order_versions": 0, "total_trades_definition": "one completed position per setup_id"},
                 "causality": {"lookahead_detected": False, "strategy_specific_checks": "PASS"}, "session_boundary": {"terminal_flatten_cluster": False, "terminal_flatten": True},
@@ -324,9 +396,21 @@ class NativeRepositoryAdapter:
     def collect_metrics(self, artifact): return artifact.metrics
     def normalized_last_run(self) -> BacktestRun | None: return self._last_run
 
+    def evaluate_compliance(self, **kwargs: Any):
+        """Optional backtest-side access to the shared compliance evaluator.
+
+        It is intentionally not implicit in the legacy engine: callers must
+        provide a policy and evaluator, so historical execution semantics do
+        not change merely by upgrading the package.
+        """
+        if self.compliance_evaluator is None or self.compliance_policy is None:
+            raise RuntimeError("no compliance policy/evaluator configured")
+        return self.compliance_evaluator.evaluate_backtest(policy=self.compliance_policy, **kwargs)
+
     def _load_last_run(self) -> BacktestRun | None:
         if self._last_run is not None: return self._last_run
-        candidates = sorted((self.root / "research_runs" / self.identity.strategy_id).rglob("normalized_backtest.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
+        search_root = self._artifact_root or (self.root / "research_runs" / self.identity.strategy_id)
+        candidates = sorted(search_root.rglob("normalized_backtest.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
         if candidates:
             self._last_run = BacktestRun.model_validate(json.loads(candidates[0].read_text(encoding="utf-8")))
         return self._last_run

@@ -38,13 +38,15 @@ class PhaseCService:
     here before a result is persisted.
     """
 
-    def __init__(self, registry_path: str | Path | None = None, adapter: StrategyResearchAdapter | None = None, repository_root: str | Path = ".", scenario: str = "strong-stable"):
+    def __init__(self, registry_path: str | Path | None = None, adapter: StrategyResearchAdapter | None = None, repository_root: str | Path = ".", scenario: str = "strong-stable", master_run_id: str | None = None, cache_context: dict[str, str] | None = None):
         self.registry_path = Path(registry_path or os.environ.get("RESEARCH_PIPELINE_REGISTRY", "research_registry/research_pipeline.sqlite3"))
         self.registry = Registry(Database(self.registry_path))
         self.controller = PipelineController(self.registry)
         self.repository_root = Path(repository_root).resolve()
         self.adapter = adapter or SyntheticFixtureAdapter(scenario)
         self.scenario = scenario
+        self.master_run_id = master_run_id
+        self.cache_context = dict(cache_context or {})
         self.gate_evaluator = GateEvaluator()
 
     def _strategy(self, strategy_id: str) -> dict:
@@ -59,11 +61,52 @@ class PhaseCService:
 
     def _root(self, strategy_id: str, phase: str, *parts: str) -> Path:
         strategy = self._strategy(strategy_id)
-        root = self.repository_root / "research_runs" / strategy_id / strategy["version"]
+        root = (self.repository_root / "research_runs" / strategy_id / self.master_run_id / "research"
+                if self.master_run_id else self.repository_root / "research_runs" / strategy_id / strategy["version"])
         path = root / phase
         for part in parts: path /= part
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _tag_artifact(self, artifact: ResearchArtifact) -> ResearchArtifact:
+        """Persist the master-run cache identity alongside every experiment input."""
+
+        if not self.cache_context:
+            return artifact
+        source = Path(artifact.input_path)
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload["pipeline_cache_context"] = self.cache_context
+        source.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        hashes = dict(artifact.report_hashes)
+        hashes[source.name] = hashlib.sha256(source.read_bytes()).hexdigest()
+        return artifact.model_copy(update={"report_hashes": hashes})
+
+    def _cached_baseline_matches_context(self, artifact: ResearchArtifact) -> bool:
+        if not self.cache_context:
+            return True
+        source = Path(artifact.input_path)
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        expected = self.cache_context
+        actual = payload.get("pipeline_cache_context", {})
+        if actual != expected:
+            return False
+        if expected.get("execution_mode") == "REAL_DATA":
+            command = " ".join(artifact.command)
+            if (artifact.dataset_hash != expected.get("dataset_hash")
+                    or artifact.metrics.get("execution_mode") != "REAL_DATA"
+                    or artifact.metrics.get("dataset_hash") != expected.get("dataset_hash")
+                    or "synthetic-fixture" in command
+                    or artifact.dataset_hash == "dataset-phase-c"):
+                return False
+            expected_root = (self.repository_root / "research_runs" / artifact.strategy_id / expected["run_id"] / "research").resolve()
+            try:
+                Path(artifact.experiment_dir).resolve().relative_to(expected_root)
+            except ValueError:
+                return False
+        return True
 
     def _record_artifact(self, artifact: ResearchArtifact) -> None:
         if any(row.get("experiment_id") == artifact.experiment_id for row in self.registry.history(artifact.strategy_id)["experiments"]):
@@ -99,11 +142,11 @@ class PhaseCService:
         existing = self.registry.get_baseline(strategy_id, strategy["version"])
         if existing:
             artifact = ResearchArtifact.model_validate(existing["artifact_json"])
-            if strategy["current_phase"] == PipelineState.BASELINE_BACKTEST.value:
+            if self._cached_baseline_matches_context(artifact) and strategy["current_phase"] == PipelineState.BASELINE_BACKTEST.value:
                 self.controller.transition(strategy_id, PipelineState.EDGE_GATE, "reuse verified baseline artifact")
-            return BaselineResult(artifact=artifact, verification_outcome=existing["verification_outcome"], gate_outcomes=existing["gate_outcomes_json"])
+                return BaselineResult(artifact=artifact, verification_outcome=existing["verification_outcome"], gate_outcomes=existing["gate_outcomes_json"])
         spec, split = self._spec_split(strategy_id)
-        artifact = self.adapter.run_baseline(spec, split, self._root(strategy_id, "baseline"))
+        artifact = self._tag_artifact(self.adapter.run_baseline(spec, split, self._root(strategy_id, "baseline")))
         self._record_artifact(artifact)
         if not artifact.diagnostic_manifest_path:
             self.controller.transition(strategy_id, PipelineState.TECHNICAL_FAILURE, "baseline adapter did not provide a B.5 diagnostic manifest")

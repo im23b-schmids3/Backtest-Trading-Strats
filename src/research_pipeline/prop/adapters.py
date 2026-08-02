@@ -6,6 +6,7 @@ from typing import Protocol
 
 from .models import TradeSignal
 from .synthetic import synthetic_trades
+from ..compliance import ComplianceEvaluator, PropFirmPolicy
 
 
 class TradeSignalAdapter(Protocol):
@@ -26,3 +27,14 @@ class SyntheticTradeSignalAdapter:
 
     def signals(self, strategy_id: str, scenario: str) -> Sequence[TradeSignal]:
         return synthetic_trades(scenario)
+
+
+class AlertComplianceAdapter:
+    """Alert-path facade using the same evaluator as the native backtest."""
+
+    def __init__(self, policy: PropFirmPolicy, evaluator: ComplianceEvaluator | None = None):
+        self.policy = policy
+        self.evaluator = evaluator or ComplianceEvaluator()
+
+    def evaluate(self, **kwargs):
+        return self.evaluator.evaluate_alert(policy=self.policy, **kwargs)

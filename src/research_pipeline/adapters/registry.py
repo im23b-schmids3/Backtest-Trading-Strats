@@ -9,9 +9,10 @@ from ..schemas.strategy_spec import StrategySpec
 from .errors import AdapterCompatibilityError, RealAdapterRequired
 from .models import AdapterCapabilities, AdapterHealth
 from .native_backtest import NativeRepositoryAdapter
+from .value_area_trap import ValueAreaTrapAdapter
 
 
-AdapterFactory = Callable[[StrategySpec, str | Path], object]
+AdapterFactory = Callable[..., object]
 
 
 class AdapterRegistry:
@@ -36,11 +37,11 @@ class AdapterRegistry:
             return target(specification=spec, repository_root=root)
         self.register_family(strategy_family, factory)
 
-    def resolve(self, specification: StrategySpec, repository_root: str | Path = "."):
+    def resolve(self, specification: StrategySpec, repository_root: str | Path = ".", **kwargs):
         factory = self._factories.get(specification.strategy_family)
         if factory is None:
             raise RealAdapterRequired(f"{RealAdapterRequired.code}: no registered adapter for strategy family {specification.strategy_family}")
-        adapter = factory(specification, repository_root)
+        adapter = factory(specification, repository_root, **kwargs)
         health = adapter.health(specification)
         if not health.importable or not health.compatible or not health.healthy:
             raise AdapterCompatibilityError("adapter health check failed: " + "; ".join(health.errors))
@@ -65,5 +66,7 @@ def default_adapter_registry() -> AdapterRegistry:
     registry = AdapterRegistry()
     registry.register_family("f2_native_demo", lambda spec, root: NativeRepositoryAdapter(spec, root, source_symbols={"SPX": "SPY"}))
     registry.register_family("f2_random_open_test", lambda spec, root: NativeRepositoryAdapter(spec, root, source_symbols={"SPY": "SPY"}))
+    registry.register_family("f2_random_open_reference", lambda spec, root: NativeRepositoryAdapter(spec, root, source_symbols={"SPY": "SPY"}))
+    registry.register_family("value_area_trap_reference", lambda spec, root, **kwargs: ValueAreaTrapAdapter(spec, root, **kwargs))
     registry.register_family("f2_native", lambda spec, root: NativeRepositoryAdapter(spec, root))
     return registry

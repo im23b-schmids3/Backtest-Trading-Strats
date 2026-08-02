@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,13 @@ from ..registry.database import Database
 from ..registry.repositories import Registry
 from ..repository.worktree_preflight import run_worktree_preflight
 from ..runners.codex_runner import CodexRunner
+from ..runners.isolated_environment import (
+    IsolationError,
+    build_isolated_environment,
+    import_origin_preflight,
+    prepare_required_fixtures,
+    sanitized_environment_report,
+)
 from ..runners.test_runner import DeterministicTestRunner
 from ..runners.worktree_manager import WorktreeError, WorktreeManager
 from .jobs import ImplementationJobService
@@ -55,6 +63,9 @@ class ExternalCodexExecutor:
             "scope_validation": result / "scope_validation.json",
             "test_results": result / "test_results.json",
             "codex_invocation": result / "codex_invocation.json",
+            "environment_preflight": result / "environment_preflight.json",
+            "import_origin": result / "import_origin.json",
+            "fixture_preflight": result / "fixture_preflight.json",
             "output_hash_manifest": result / "output_hash_manifest.json",
             "completion": result / "completion.json",
         }
@@ -71,7 +82,8 @@ class ExternalCodexExecutor:
             raise ValueError("approved worktree root is missing")
         repository = Path(request.repository_root).resolve()
         worktree = Path(request.approved_worktree_root).resolve()
-        expected_parent = (repository.parent / ".research_worktrees").resolve()
+        configured_parent = request.provenance.get("worktree_parent")
+        expected_parent = Path(configured_parent).resolve() if configured_parent else (repository.parent / ".research_worktrees").resolve()
         if worktree.parent != expected_parent or repository == worktree or expected_parent == repository:
             raise ValueError("unsafe isolated worktree path")
 
@@ -117,8 +129,19 @@ class ExternalCodexExecutor:
     def run(self, run_id: str) -> dict:
         request, job_dir = self.jobs.load_request(run_id)
         existing = self._existing_completion(job_dir)
-        if existing and existing.status == CodexCompletionStatus.SUCCEEDED:
+        if existing and existing.status in self.jobs.SUCCESSFUL_COMPLETION_STATUSES:
             return existing.model_dump(mode="json")
+        record = self.registry.get_implementation_job(run_id)
+        if not record or record["job_id"] != request.job_id:
+            raise RegistryError("implementation job identity changed; reload the current immutable job")
+        if record["status"] != "WAITING_EXTERNAL_CODEX":
+            raise RegistryError(f"implementation job is not executable in place: {record['status']}")
+        stale = self.jobs.stale_interruption(run_id)
+        if stale["partial_artifacts"] and not stale["completion_exists"]:
+            if stale["stale"]:
+                self.jobs.mark_interrupted(run_id)
+            raise RegistryError("partial implementation job must not be resumed; create a retry job")
+        self.jobs.mark_running(run_id)
         try:
             self._verify_inputs(request, job_dir)
         except ValueError as exc:
@@ -144,13 +167,51 @@ class ExternalCodexExecutor:
         except WorktreeError as exc:
             completion = self._finish(request, job_dir, CodexCompletionStatus.FAILED_WORKTREE_CREATION, stderr_summary=redact_secrets(str(exc)))
             return completion.model_dump(mode="json")
+        try:
+            environment, environment_report = build_isolated_environment(
+                plan.worktree_path,
+                repository_root=request.repository_root,
+            )
+            _write(self._paths(job_dir)["environment_preflight"], sanitized_environment_report(environment_report))
+            fixture_report = prepare_required_fixtures(request.repository_root, plan.worktree_path)
+            _write(self._paths(job_dir)["fixture_preflight"], fixture_report)
+            origin_report = import_origin_preflight(plan.worktree_path, environment=environment)
+            _write(self._paths(job_dir)["import_origin"], origin_report)
+        except (IsolationError, OSError, ValueError) as exc:
+            completion = self._finish(
+                request,
+                job_dir,
+                CodexCompletionStatus.FAILED_WORKTREE_PREFLIGHT,
+                stderr_summary=redact_secrets(str(exc)),
+                worktree_path=plan.worktree_path,
+                base_commit=request.base_commit,
+                resulting_commit=manager.current_commit(plan.worktree_path),
+                artifact_paths={key: str(path) for key, path in self._paths(job_dir).items() if key in {"environment_preflight", "fixture_preflight", "import_origin"} and path.is_file()},
+            )
+            return completion.model_dump(mode="json")
         started = time.monotonic()
         prompt = (job_dir / "prompt.md").read_text(encoding="utf-8")
-        codex = self.codex.run(prompt, plan.worktree_path, sandbox="workspace-write", timeout_seconds=request.timeout_seconds, dry_run=False)
+        try:
+            codex = self.codex.run(
+                prompt,
+                plan.worktree_path,
+                sandbox="workspace-write",
+                timeout_seconds=request.timeout_seconds,
+                dry_run=False,
+                environment=environment,
+                source_repository_root=request.repository_root,
+            )
+        except KeyboardInterrupt:
+            self.jobs.abort_by_user(run_id, reason="external executor interrupted by user")
+            raise
         invocation_path = self._paths(job_dir)["codex_invocation"]
         _write(invocation_path, codex.model_dump(mode="json"))
         if not codex.success:
-            completion = self._finish(request, job_dir, CodexCompletionStatus.FAILED_CODEX_EXECUTION, exit_code=codex.exit_code, stdout_summary=codex.stdout[-4000:], stderr_summary=codex.stderr[-4000:], duration_ms=int((time.monotonic() - started) * 1000), worktree_path=plan.worktree_path, base_commit=request.base_commit, resulting_commit=manager.current_commit(plan.worktree_path), artifact_paths={"codex_invocation": str(invocation_path)})
+            status = CodexCompletionStatus.TIMED_OUT if codex.timed_out else CodexCompletionStatus.FAILED_CODEX_EXECUTION
+            stderr_summary = codex.stderr[-4000:]
+            if codex.exit_code is None:
+                stderr_summary = "PROCESS_EXIT_CODE_UNAVAILABLE" + (f": {stderr_summary}" if stderr_summary else "")
+            completion = self._finish(request, job_dir, status, exit_code=codex.exit_code, stdout_summary=codex.stdout[-4000:], stderr_summary=stderr_summary, duration_ms=int((time.monotonic() - started) * 1000), timed_out=codex.timed_out, configured_timeout_seconds=codex.configured_timeout_seconds, termination_method=codex.termination_method, process_signal=codex.process_signal, worktree_path=plan.worktree_path, base_commit=request.base_commit, resulting_commit=manager.current_commit(plan.worktree_path), artifact_paths={"codex_invocation": str(invocation_path)})
             return completion.model_dump(mode="json")
         changed = manager.changed_files(plan)
         _write(self._paths(job_dir)["changed_files"], changed)
@@ -163,20 +224,34 @@ class ExternalCodexExecutor:
             scope_status = CodexCompletionStatus.FAILED_SCOPE_VALIDATION
         _write(self._paths(job_dir)["scope_validation"], scope)
         if scope_status != CodexCompletionStatus.SUCCEEDED:
-            completion = self._finish(request, job_dir, scope_status, exit_code=codex.exit_code, stdout_summary=codex.stdout[-4000:], stderr_summary=scope.get("error", ""), duration_ms=int((time.monotonic() - started) * 1000), worktree_path=plan.worktree_path, base_commit=request.base_commit, resulting_commit=manager.current_commit(plan.worktree_path), changed_files=changed)
+            completion = self._finish(request, job_dir, scope_status, exit_code=codex.exit_code, stdout_summary=codex.stdout[-4000:], stderr_summary=scope.get("error", ""), duration_ms=int((time.monotonic() - started) * 1000), timed_out=codex.timed_out, configured_timeout_seconds=codex.configured_timeout_seconds, termination_method=codex.termination_method, process_signal=codex.process_signal, worktree_path=plan.worktree_path, base_commit=request.base_commit, resulting_commit=manager.current_commit(plan.worktree_path), changed_files=changed)
             return completion.model_dump(mode="json")
         test_results = []
         for index, command in enumerate(request.required_tests):
-            test = self.tests.run(plan.worktree_path, command, dry_run=False, report_path=job_dir / "result" / f"test-{index}.txt")
+            # Keep pytest's temporary Git fixtures outside the long immutable
+            # research-run path.  On Windows, nested temporary repositories
+            # can otherwise make Git reject the synthetic test repo with
+            # '$GIT_DIR' too big even though the worktree itself is valid.
+            run_token = hashlib.sha256(request.run_id.encode("utf-8")).hexdigest()[:12]
+            basetemp = Path(tempfile.gettempdir()) / "research_pipeline_external" / f"{run_token}-{request.job_id}" / f"test-{index}"
+            test = self.tests.run(
+                plan.worktree_path,
+                command,
+                dry_run=False,
+                report_path=job_dir / "result" / f"test-{index}.txt",
+                source_repository_root=request.repository_root,
+                environment=environment,
+                basetemp=basetemp,
+            )
             test_results.append(test.model_dump(mode="json"))
         _write(self._paths(job_dir)["test_results"], test_results)
         passed = all(item["passed"] for item in test_results)
-        status = CodexCompletionStatus.SUCCEEDED if passed else CodexCompletionStatus.FAILED_REQUIRED_TESTS
+        status = CodexCompletionStatus.COMPLETED if passed else CodexCompletionStatus.FAILED_REQUIRED_TESTS
         manifest = {"job_id": request.job_id, "run_id": request.run_id, "base_commit": request.base_commit, "resulting_commit": manager.current_commit(plan.worktree_path), "worktree_path": plan.worktree_path, "changed_files": changed}
         _write(self._paths(job_dir)["implementation_manifest"], manifest)
         output_hashes = {path.name: _hash(path) for path in self._paths(job_dir).values() if path.name != "completion.json" and path.is_file()}
         _write(self._paths(job_dir)["output_hash_manifest"], output_hashes)
-        completion = self._finish(request, job_dir, status, exit_code=codex.exit_code, stdout_summary=codex.stdout[-4000:], stderr_summary="" if passed else "required implementation tests failed", duration_ms=int((time.monotonic() - started) * 1000), worktree_path=plan.worktree_path, base_commit=request.base_commit, resulting_commit=manager.current_commit(plan.worktree_path), changed_files=changed, artifact_paths={key: str(path) for key, path in self._paths(job_dir).items() if key != "completion"})
+        completion = self._finish(request, job_dir, status, exit_code=codex.exit_code, stdout_summary=codex.stdout[-4000:], stderr_summary="" if passed else "required implementation tests failed", duration_ms=int((time.monotonic() - started) * 1000), timed_out=codex.timed_out, configured_timeout_seconds=codex.configured_timeout_seconds, termination_method=codex.termination_method, process_signal=codex.process_signal, worktree_path=plan.worktree_path, base_commit=request.base_commit, resulting_commit=manager.current_commit(plan.worktree_path), changed_files=changed, artifact_paths={key: str(path) for key, path in self._paths(job_dir).items() if key != "completion"})
         return completion.model_dump(mode="json")
 
     def status(self, run_id: str) -> dict:

@@ -390,6 +390,56 @@ class Registry:
         with self.database.transaction() as connection:
             connection.execute("INSERT INTO prop_journal(strategy_id,strategy_version,phase,entry_json,entry_markdown,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, phase, json.dumps(entry, sort_keys=True), markdown, now_iso()))
 
+    # Compliance records are intentionally separate from the existing
+    # Alpha-specific Phase D tables.  They are generic and keyed by strategy
+    # version so policy and execution evidence can be reproduced together.
+    def save_compliance_policy(self, strategy_id: str, version: str, policy: dict) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO compliance_policies(strategy_id,strategy_version,policy_id,policy_hash,policy_json,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(strategy_id,strategy_version,policy_id) DO UPDATE SET policy_hash=excluded.policy_hash,policy_json=excluded.policy_json,created_at=excluded.created_at",
+                (strategy_id, version, policy["policy_id"], policy["policy_hash"], json.dumps(policy, sort_keys=True), now_iso()),
+            )
+
+    def get_compliance_policy(self, strategy_id: str, version: str | None = None, policy_id: str = "unconfigured") -> dict | None:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            row = connection.execute("SELECT * FROM compliance_policies WHERE strategy_id=? AND strategy_version=? AND policy_id=?", (strategy["strategy_id"], strategy["version"], policy_id)).fetchone()
+            if not row:
+                return None
+            result = dict(row); result["policy_json"] = json.loads(result["policy_json"]); return result
+
+    def save_compliance_decision(self, strategy_id: str, version: str, decision: dict) -> int:
+        with self.database.transaction() as connection:
+            existing = connection.execute("SELECT decision_id FROM compliance_decisions WHERE decision_hash=?", (decision["decision_hash"],)).fetchone()
+            if existing:
+                return int(existing[0])
+            cursor = connection.execute("INSERT INTO compliance_decisions(strategy_id,strategy_version,decision_hash,decision_json,created_at) VALUES(?,?,?,?,?)", (strategy_id, version, decision["decision_hash"], json.dumps(decision, sort_keys=True), now_iso()))
+            return int(cursor.lastrowid)
+
+    def list_compliance_decisions(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            return [{**dict(row), "decision_json": json.loads(row["decision_json"])} for row in connection.execute("SELECT * FROM compliance_decisions WHERE strategy_id=? AND strategy_version=? ORDER BY decision_id", (strategy["strategy_id"], strategy["version"]))]
+
+    def save_compliance_artifact(self, strategy_id: str, version: str, artifact_key: str, artifact_type: str, artifact_hash: str, result: dict, artifact_path: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            connection.execute("INSERT INTO compliance_artifacts(artifact_key,strategy_id,strategy_version,artifact_type,artifact_path,artifact_hash,result_json,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(artifact_key) DO UPDATE SET artifact_path=excluded.artifact_path,artifact_hash=excluded.artifact_hash,result_json=excluded.result_json,created_at=excluded.created_at", (artifact_key, strategy_id, version, artifact_type, artifact_path, artifact_hash, json.dumps(result, sort_keys=True), now_iso()))
+
+    def add_compliance_event(self, strategy_id: str, version: str, event_type: str, event_timestamp: str, result: dict) -> int:
+        with self.database.transaction() as connection:
+            cursor = connection.execute("INSERT INTO compliance_events(strategy_id,strategy_version,event_type,event_timestamp,result_json,created_at) VALUES(?,?,?,?,?,?)", (strategy_id, version, event_type, event_timestamp, json.dumps(result, sort_keys=True), now_iso()))
+            return int(cursor.lastrowid)
+
+    def list_compliance_artifacts(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            return [{**dict(row), "result_json": json.loads(row["result_json"])} for row in connection.execute("SELECT * FROM compliance_artifacts WHERE strategy_id=? AND strategy_version=? ORDER BY created_at", (strategy["strategy_id"], strategy["version"]))]
+
+    def list_compliance_events(self, strategy_id: str, version: str | None = None) -> list[dict]:
+        strategy = self.get_strategy(strategy_id, version)
+        with self.database.session() as connection:
+            return [{**dict(row), "result_json": json.loads(row["result_json"])} for row in connection.execute("SELECT * FROM compliance_events WHERE strategy_id=? AND strategy_version=? ORDER BY event_id", (strategy["strategy_id"], strategy["version"]))]
+
     # Phase E portfolio records. Large signal streams are referenced by path
     # and hash; SQLite stores deterministic summaries and decisions only.
     def portfolio_run(self, portfolio_id: str, version: str, phase: str, status: str, specification_hash: str, root_path: str) -> dict:
@@ -744,9 +794,24 @@ class Registry:
                 run_id,job_id,strategy_id,strategy_version,specification_hash,job_path,status,
                 request_hash,result_path,result_hash,error,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(run_id) DO UPDATE SET status=excluded.status,
-                result_path=COALESCE(excluded.result_path,implementation_jobs.result_path),
-                result_hash=COALESCE(excluded.result_hash,implementation_jobs.result_hash),
+                ON CONFLICT(run_id) DO UPDATE SET job_id=excluded.job_id,
+                strategy_id=excluded.strategy_id,strategy_version=excluded.strategy_version,
+                specification_hash=excluded.specification_hash,job_path=excluded.job_path,
+                status=excluded.status,request_hash=excluded.request_hash,
+                result_path=excluded.result_path,result_hash=excluded.result_hash,
+                error=excluded.error,
+                created_at=CASE WHEN implementation_jobs.job_id != excluded.job_id THEN excluded.created_at ELSE implementation_jobs.created_at END,
+                updated_at=excluded.updated_at""",
+                (run_id, request["job_id"], request["strategy_id"], request["strategy_version"],
+                 request["specification_hash"], job_path, status, request_hash, result_path,
+                 result_hash, error, timestamp, timestamp))
+            connection.execute("""INSERT INTO implementation_job_attempts(
+                run_id,job_id,strategy_id,strategy_version,specification_hash,job_path,status,
+                request_hash,result_path,result_hash,error,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(run_id,job_id) DO UPDATE SET status=excluded.status,
+                result_path=COALESCE(excluded.result_path,implementation_job_attempts.result_path),
+                result_hash=COALESCE(excluded.result_hash,implementation_job_attempts.result_hash),
                 error=excluded.error,updated_at=excluded.updated_at""",
                 (run_id, request["job_id"], request["strategy_id"], request["strategy_version"],
                  request["specification_hash"], job_path, status, request_hash, result_path,
@@ -757,6 +822,65 @@ class Registry:
         with self.database.session() as connection:
             row = connection.execute("SELECT * FROM implementation_jobs WHERE run_id=?", (run_id,)).fetchone()
             return dict(row) if row else None
+
+    def list_implementation_jobs(self, run_id: str) -> list[dict]:
+        with self.database.session() as connection:
+            rows = connection.execute(
+                "SELECT * FROM implementation_job_attempts WHERE run_id=? ORDER BY created_at, job_id",
+                (run_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def archive_implementation_job(self, record: dict) -> None:
+        """Backfill pre-history rows before a new immutable job becomes current."""
+
+        with self.database.transaction() as connection:
+            connection.execute("""INSERT OR IGNORE INTO implementation_job_attempts(
+                run_id,job_id,strategy_id,strategy_version,specification_hash,job_path,status,
+                request_hash,result_path,result_hash,error,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (record["run_id"], record["job_id"], record["strategy_id"], record["strategy_version"],
+                 record["specification_hash"], record["job_path"], record["status"], record["request_hash"],
+                 record.get("result_path"), record.get("result_hash"), record.get("error"),
+                 record["created_at"], record["updated_at"]))
+
+    def set_current_implementation_job_status(self, run_id: str, status: str, *, error: str | None = None) -> dict:
+        """Update only the current projection; immutable attempt rows remain audit evidence."""
+
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE implementation_jobs SET status=?, error=?, updated_at=? WHERE run_id=?",
+                (status, error, now_iso(), run_id),
+            )
+        return self.get_implementation_job(run_id) or {}
+
+    def get_implementation_job_correction(self, run_id: str, job_id: str, correction_type: str) -> dict | None:
+        with self.database.session() as connection:
+            row = connection.execute(
+                "SELECT * FROM implementation_job_status_corrections WHERE run_id=? AND job_id=? AND correction_type=?",
+                (run_id, job_id, correction_type),
+            ).fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            result["evidence_json"] = json.loads(result["evidence_json"])
+            return result
+
+    def save_implementation_job_correction(self, run_id: str, job_id: str, correction_type: str, *,
+                                           original_status: str, corrected_status: str, reason: str,
+                                           evidence: dict[str, Any]) -> dict:
+        existing = self.get_implementation_job_correction(run_id, job_id, correction_type)
+        if existing:
+            return existing
+        with self.database.transaction() as connection:
+            connection.execute(
+                """INSERT INTO implementation_job_status_corrections(
+                    run_id,job_id,correction_type,original_status,corrected_status,reason,evidence_json,created_at
+                ) VALUES(?,?,?,?,?,?,?,?)""",
+                (run_id, job_id, correction_type, original_status, corrected_status, reason,
+                 json.dumps(evidence, sort_keys=True), now_iso()),
+            )
+        return self.get_implementation_job_correction(run_id, job_id, correction_type) or {}
 
     def save_backtest_run(self, result: dict, master_run_id: str | None = None) -> None:
         with self.database.transaction() as connection:
