@@ -53,3 +53,5 @@ data/
 research_runs/
 *.parquet
 *.zip
+job-002-recovery.patch
+value_area_trap_report.json
