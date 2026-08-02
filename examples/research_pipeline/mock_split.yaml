@@ -1,0 +1,13 @@
+dataset_identifier: phase-a-mock-dataset
+source_data_hash: phase-a-mock-source-hash
+start_timestamp: "2020-01-01T00:00:00+00:00"
+end_timestamp: "2024-01-01T00:00:00+00:00"
+training_boundaries:
+  start_timestamp: "2020-01-01T00:00:00+00:00"
+  end_timestamp: "2022-01-01T00:00:00+00:00"
+validation_boundaries:
+  start_timestamp: "2022-01-01T00:00:00+00:00"
+  end_timestamp: "2023-01-01T00:00:00+00:00"
+holdout_boundaries:
+  start_timestamp: "2023-01-01T00:00:00+00:00"
+  end_timestamp: "2024-01-01T00:00:00+00:00"

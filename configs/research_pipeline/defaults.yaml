@@ -1,0 +1,33 @@
+registry_path: research_registry/research_pipeline.sqlite3
+report_size_limit_mb: 100
+budgets:
+  max_parameter_families: 6
+  max_rounds_per_family: 3
+  max_values_per_round: 5
+  max_total_backtests: 500
+  max_codex_repair_attempts: 3
+  max_runtime_minutes_per_phase: 180
+  max_report_size_mb: 100
+  max_holdout_accesses: 1
+allowed_timeframes: [1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w]
+allowed_terminal_states: [ACCEPTED, REJECTED, INSUFFICIENT_EVIDENCE, TECHNICAL_FAILURE, MANUAL_REVIEW_REQUIRED]
+logging:
+  path: research_registry/research_pipeline.log
+  level: INFO
+gates:
+  - {name: baseline_minimum_trades, category: baseline, metric: completed_trades, threshold: 30, comparison: ">="}
+  - {name: baseline_profit_factor, category: baseline, metric: profit_factor, threshold: 1.1, comparison: ">="}
+  - {name: baseline_expectancy_r, category: baseline, metric: expectancy_r, threshold: 0, comparison: ">="}
+  - {name: baseline_fee_share, category: baseline, metric: fee_share_of_gross_profit, threshold: 0.5, comparison: "<="}
+  - {name: baseline_drawdown, category: baseline, metric: max_drawdown, threshold: 0.25, comparison: "<="}
+  - {name: validation_profitable_fold_ratio, category: validation, metric: profitable_fold_ratio, threshold: 0.5, comparison: ">="}
+  - {name: validation_minimum_trades, category: validation, metric: validation_trades, threshold: 20, comparison: ">="}
+  - {name: validation_drawdown, category: validation, metric: validation_drawdown, threshold: 0.25, comparison: "<="}
+  - {name: validation_profit_factor, category: validation, metric: validation_profit_factor, threshold: 1.0, comparison: ">="}
+  - {name: holdout_minimum_trades, category: holdout, metric: holdout_trades, threshold: 20, comparison: ">="}
+  - {name: holdout_expectancy_r, category: holdout, metric: holdout_expectancy_r, threshold: 0, comparison: ">="}
+  - {name: holdout_drawdown, category: holdout, metric: holdout_drawdown, threshold: 0.25, comparison: "<="}
+  - {name: holdout_profit_factor, category: holdout, metric: holdout_profit_factor, threshold: 1.0, comparison: ">="}
+  - {name: throughput_trades_per_month, category: throughput, metric: executable_trades_per_month, threshold: 5, comparison: ">="}
+  - {name: throughput_median_days, category: throughput, metric: median_days_between_trades, threshold: 31, comparison: "<="}
+  - {name: throughput_zero_trade_months, category: throughput, metric: zero_trade_month_percentage, threshold: 0.5, comparison: "<="}

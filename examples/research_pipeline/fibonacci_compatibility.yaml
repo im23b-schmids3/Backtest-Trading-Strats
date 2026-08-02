@@ -1,0 +1,53 @@
+strategy_id: fibonacci-compatibility
+version: "phase-a-1"
+name: Fibonacci compatibility fixture
+description: Minimal schema compatibility fixture for the existing Fibonacci strategy.
+hypothesis: Retracement-based entries may provide a repeatable directional edge under the specified rules.
+strategy_family: fibonacci_retracement
+markets: [BTC]
+timeframes: [1h]
+long_rules:
+  - Use the existing long-side Fibonacci signal implementation.
+short_rules:
+  - Use the existing short-side Fibonacci signal implementation.
+entry_logic: Compatibility placeholder; no execution logic is changed by this fixture.
+initial_stop_logic: Compatibility placeholder; existing stop behavior remains authoritative.
+exit_logic: Compatibility placeholder; existing exit behavior remains authoritative.
+session_assumptions:
+  - Timestamps are interpreted chronologically.
+baseline_parameters:
+  swing_n: 5
+parameter_families:
+  - name: entry
+    description: Placeholder family for future entry research.
+    baseline_value: 5
+    value_type: integer
+    allowed_min: 2
+    allowed_max: 10
+    allowed_values: null
+    optimization_order: 1
+    maximum_rounds: 3
+    mutable: true
+    hypothesis_relevance: Directly tests the entry sensitivity hypothesis.
+  - name: lifecycle_invariant
+    description: Existing lifecycle behavior, intentionally immutable in Phase A.
+    baseline_value: existing
+    value_type: string
+    allowed_min: null
+    allowed_max: null
+    allowed_values: [existing]
+    optimization_order: 2
+    maximum_rounds: 0
+    mutable: false
+    hypothesis_relevance: Preserves compatibility with existing lifecycle behavior.
+invariants:
+  - Existing Fibonacci strategy logic is not modified.
+  - No lookahead is introduced by this specification.
+required_data:
+  - OHLCV candles
+known_limitations:
+  - This fixture is not a complete reconstruction of historical Fib parameters.
+status: DRAFT
+created_at: "2026-07-16T00:00:00+00:00"
+approved_at: null
+specification_hash: 9a507dcc2b0f22a8d194632ebb56496430e1e44683f71768eca15be21dcabde4
