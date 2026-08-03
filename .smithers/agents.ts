@@ -36,24 +36,57 @@ export { CodexAgent } from "./agents/codex";
 //   });
 // }
 
+const codexWorkerPath = [
+  String.raw`C:\Users\sandr\.vscode\extensions\openai.chatgpt-26.727.40816-win32-x64\bin\windows-x86_64`,
+  // Smithers 0.28 preflight invokes `which codex` even on Windows. Git for
+  // Windows supplies the POSIX-compatible `which.exe`; the actual Codex binary
+  // remains the first path entry above.
+  String.raw`C:\Program Files\Git\usr\bin`,
+  String.raw`C:\Users\sandr\AppData\Roaming\npm`,
+  process.env.PATH ?? "",
+].join(";");
+
+const codexWorkerEnv = {
+  PATH: codexWorkerPath,
+  Path: codexWorkerPath,
+};
+
 export const providers = {
-//   claude: new SmithersClaudeCodeAgent({ model: "claude-fable-5" }),
-  codex: new SmithersCodexAgent({ model: "gpt-5.6-luna", config: { model_reasoning_effort: "medium" }, skipGitRepoCheck: true }),
-//   openrouter: createOpenRouterAgent(),
-//   opencode: new SmithersOpenCodeAgent({ model: "anthropic/claude-fable-5" }),
-//   antigravity: new SmithersAntigravityAgent(),
-//   pi: new SmithersPiAgent({ provider: "openai", model: "gpt-5.6-luna" }),
-//   kimi: new SmithersKimiAgent({ model: "kimi-k2.7-code" }),
-//   amp: new SmithersAmpAgent(),
-//   vibe: new SmithersVibeAgent({ agent: "auto-approve" }),
-//   hermes: new SmithersHermesCliAgent(),
-//   openclaw: new SmithersOpenClawAgent(),
-//   pool: new SmithersPoolAgent(),
-  codexSol: new SmithersCodexAgent({ model: "gpt-5.6-sol", config: { model_reasoning_effort: "xhigh" }, skipGitRepoCheck: true }),
-  codexTerra: new SmithersCodexAgent({ model: "gpt-5.6-terra", config: { model_reasoning_effort: "medium" }, skipGitRepoCheck: true }),
-  codexLuna: new SmithersCodexAgent({ model: "gpt-5.6-luna", config: { model_reasoning_effort: "medium" }, skipGitRepoCheck: true }),
-//   claudeOpus: new SmithersClaudeCodeAgent({ model: "claude-opus-4-8" }),
-//   claudeSonnet: new SmithersClaudeCodeAgent({ model: "claude-sonnet-5" }),
+  codex: new SmithersCodexAgent({
+    model: "gpt-5.6-luna",
+    config: {
+      model_reasoning_effort: "medium",
+    },
+    skipGitRepoCheck: true,
+    env: codexWorkerEnv,
+  }),
+
+  codexSol: new SmithersCodexAgent({
+    model: "gpt-5.6-sol",
+    config: {
+      model_reasoning_effort: "xhigh",
+    },
+    skipGitRepoCheck: true,
+    env: codexWorkerEnv,
+  }),
+
+  codexTerra: new SmithersCodexAgent({
+    model: "gpt-5.6-terra",
+    config: {
+      model_reasoning_effort: "medium",
+    },
+    skipGitRepoCheck: true,
+    env: codexWorkerEnv,
+  }),
+
+  codexLuna: new SmithersCodexAgent({
+    model: "gpt-5.6-luna",
+    config: {
+      model_reasoning_effort: "medium",
+    },
+    skipGitRepoCheck: true,
+    env: codexWorkerEnv,
+  }),
 } as const;
 
 export const agents = {

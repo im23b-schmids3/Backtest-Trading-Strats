@@ -45,10 +45,38 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("init")
     value_area = sub.add_parser("value-area-trap", help="public BTCUSDT aggregate-trade research data utilities")
     value_area_sub = value_area.add_subparsers(dest="value_area_command", required=True)
+    acceptance = sub.add_parser("value-area-acceptance", help="standalone sealed BTC breakout-acceptance exploratory study")
+    acceptance_sub = acceptance.add_subparsers(dest="acceptance_command", required=True)
+    command = acceptance_sub.add_parser("run-btc-2024-study"); command.add_argument("--data-manifest", default="data/value_area_trap/normalized/BTCUSDT/c2028fdd21bb69943820d532a592f13cd43f4ab18cc7b170b1e2b091a00202fc/manifest.json"); command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--non-interactive", action="store_true")
+    imbalance = sub.add_parser("imbalance-vwap-ride", help="standalone sealed BTC footprint/VWAP exploratory study")
+    imbalance_sub = imbalance.add_subparsers(dest="imbalance_command", required=True)
+    command = imbalance_sub.add_parser("validate-source", help="validate the pinned immutable BTCUSDT manifest and Parquet files")
+    command.add_argument("--data-manifest", default="data/value_area_trap/normalized/BTCUSDT/c2028fdd21bb69943820d532a592f13cd43f4ab18cc7b170b1e2b091a00202fc/manifest.json")
+    command = imbalance_sub.add_parser("build-footprint", help="stream the pinned raw Parquet into a content-addressed local footprint dataset")
+    command.add_argument("--data-manifest", default="data/value_area_trap/normalized/BTCUSDT/c2028fdd21bb69943820d532a592f13cd43f4ab18cc7b170b1e2b091a00202fc/manifest.json"); command.add_argument("--cache-root", default="data/imbalance_vwap_ride/footprints"); command.add_argument("--batch-size", type=int, default=1_000_000)
+    command = imbalance_sub.add_parser("validate-footprint", help="validate content hashes, schemas, and row counts for a materialized footprint")
+    command.add_argument("footprint_root")
+    command = imbalance_sub.add_parser("run-btc-exploratory-study", help="run tests, compile/diff checks, then execute the sealed real-data study")
+    command.add_argument("--data-manifest", default="data/value_area_trap/normalized/BTCUSDT/c2028fdd21bb69943820d532a592f13cd43f4ab18cc7b170b1e2b091a00202fc/manifest.json"); command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--footprint-cache-root", default="data/imbalance_vwap_ride/footprints"); command.add_argument("--batch-size", type=int, default=1_000_000); command.add_argument("--non-interactive", action="store_true")
+    command = imbalance_sub.add_parser("run-btc-macro-bins-v2-study", help="run V2 preflight, then execute the separate post-hoc macro-bin study")
+    command.add_argument("--data-manifest", default="data/value_area_trap/normalized/BTCUSDT/c2028fdd21bb69943820d532a592f13cd43f4ab18cc7b170b1e2b091a00202fc/manifest.json"); command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--footprint-cache-root", default="data/imbalance_vwap_ride/footprints"); command.add_argument("--batch-size", type=int, default=1_000_000); command.add_argument("--non-interactive", action="store_true")
+    command = imbalance_sub.add_parser("run-btc-long-only-v3-study", help="download only the sealed six Binance months, validate/normalize, and execute V3")
+    command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--data-cache-root", default="data/value_area_trap"); command.add_argument("--footprint-cache-root", default="data/imbalance_vwap_ride/v3/footprints"); command.add_argument("--batch-size", type=int, default=1_000_000); command.add_argument("--non-interactive", action="store_true")
     command = value_area_sub.add_parser("download"); command.add_argument("month", help="YYYY-MM"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--allow-network", action="store_true")
     command = value_area_sub.add_parser("import-archive"); command.add_argument("archive"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap")
     command = value_area_sub.add_parser("import-calendar"); command.add_argument("source"); command.add_argument("output")
     command = value_area_sub.add_parser("validate-data"); command.add_argument("parquet")
+    command = value_area_sub.add_parser("audit-thesnowguru-data", help="read-only inventory and quality audit of local TheSnowGuru S&P/Nasdaq candidates")
+    command.add_argument("--source-root", default="external_data/thesnowguru"); command.add_argument("--staging-root", default="data/value_area_trap/staging"); command.add_argument("--repository-root", default=".")
+    command = value_area_sub.add_parser("import-thesnowguru-es", help="import only an audit-proven exact-CVD S&P futures tick candidate")
+    command.add_argument("--audit-path", required=True); command.add_argument("--cache-root", default="data/value_area_trap")
+    command = value_area_sub.add_parser("import-thesnowguru-es-tick-rule", help="import the explicitly exploratory 2018 ES tick-rule-CVD pilot")
+    command.add_argument("--audit-path", required=True); command.add_argument("--cache-root", default="data/value_area_trap")
+    command = value_area_sub.add_parser("run-thesnowguru-es-tick-rule-pilot", help="reserved runner for the explicitly exploratory ES pilot")
+    command.add_argument("--dataset-root", required=True)
+    command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default=".")
+    command = value_area_sub.add_parser("validate-thesnowguru-es-tick-rule-dataset", help="validate immutable exploratory ES tick-rule five-minute bars")
+    command.add_argument("--dataset-root", required=True)
     command = value_area_sub.add_parser("ingest-range", help="resumable download and normalization of immutable monthly BTCUSDT aggregate-trade partitions")
     command.add_argument("--start-month", required=True); command.add_argument("--end-month", required=True); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--allow-network", action="store_true"); command.add_argument("--allow-gap-repair", action="store_true", help="opt in to fetching only proven missing aggregate-trade IDs")
     command = value_area_sub.add_parser("validate-manifest", help="validate an immutable combined monthly aggregate-trade manifest")
@@ -190,8 +218,14 @@ def _print(value) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        controller = _controller(args.registry)
-        registry = controller.registry
+        # Data-only and repository-preflight commands must not create an
+        # unrelated SQLite registry as a side effect.  Their durable artifacts
+        # are explicitly controlled by their own output arguments.
+        controller = None
+        registry = None
+        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository"}:
+            controller = _controller(args.registry)
+            registry = controller.registry
         if args.command == "init":
             print(f"initialized registry: {Path(args.registry)}")
         elif args.command == "value-area-trap":
@@ -209,6 +243,21 @@ def main(argv: list[str] | None = None) -> int:
             elif args.value_area_command == "import-calendar":
                 from .value_area_trap.alpha_zero import import_usd_calendar
                 _print(import_usd_calendar(args.source, args.output).model_dump(mode="json"))
+            elif args.value_area_command == "audit-thesnowguru-data":
+                from .value_area_trap.thesnowguru import audit_thesnowguru_data
+                _print(audit_thesnowguru_data(repository_root=args.repository_root, source_root=args.source_root, staging_root=args.staging_root).model_dump(mode="json"))
+            elif args.value_area_command == "import-thesnowguru-es":
+                from .value_area_trap.thesnowguru import import_thesnowguru_es
+                _print(import_thesnowguru_es(audit_path=args.audit_path, cache_root=args.cache_root))
+            elif args.value_area_command == "import-thesnowguru-es-tick-rule":
+                from .value_area_trap.es_tick_rule import import_es_tick_rule
+                _print(import_es_tick_rule(audit_path=args.audit_path, cache_root=args.cache_root))
+            elif args.value_area_command == "run-thesnowguru-es-tick-rule-pilot":
+                from .value_area_trap.es_tick_rule import run_es_tick_rule_pilot
+                _print(run_es_tick_rule_pilot(dataset_root=args.dataset_root, artifact_root=args.artifact_root, repository_root=args.repository_root))
+            elif args.value_area_command == "validate-thesnowguru-es-tick-rule-dataset":
+                from .value_area_trap.es_tick_rule import validate_es_tick_rule_dataset
+                _print(validate_es_tick_rule_dataset(args.dataset_root))
             elif args.value_area_command == "ingest-range":
                 from .value_area_trap.data import AggregateTradeImporter
                 importer = AggregateTradeImporter(args.cache_root)
@@ -274,6 +323,38 @@ def main(argv: list[str] | None = None) -> int:
                     _print(report)
                     return 2
                 _print(report)
+        elif args.command == "value-area-acceptance":
+            from .value_area_acceptance import run_btc_2024_study
+            _print(run_btc_2024_study(data_manifest=args.data_manifest, artifact_root=args.artifact_root, repository_root=args.repository_root, non_interactive=args.non_interactive))
+        elif args.command == "imbalance-vwap-ride":
+            if args.imbalance_command == "validate-source":
+                from .imbalance_vwap_ride.footprint import validate_source_manifest
+                report = validate_source_manifest(args.data_manifest, require_pinned=True, verify_parquet_hashes=True)
+                _print({key: value for key, value in report.items() if key != "manifest"})
+                return 0 if report["valid"] else 2
+            if args.imbalance_command == "build-footprint":
+                from .imbalance_vwap_ride.footprint import build_footprint_dataset
+                _print(build_footprint_dataset(args.data_manifest, args.cache_root, batch_size=args.batch_size, require_pinned=True, verify_source_hashes=True))
+            elif args.imbalance_command == "validate-footprint":
+                from .imbalance_vwap_ride.footprint import validate_footprint_dataset
+                report = validate_footprint_dataset(args.footprint_root)
+                _print(report)
+                return 0 if report["valid"] else 2
+            elif args.imbalance_command == "run-btc-exploratory-study":
+                from .imbalance_vwap_ride.runner import verify_and_run_sealed_study
+                result = verify_and_run_sealed_study(data_manifest=args.data_manifest, artifact_root=args.artifact_root, repository_root=args.repository_root, footprint_cache_root=args.footprint_cache_root, batch_size=args.batch_size)
+                _print(result)
+                return 0 if result["status"] in {"COMPLETED", "DEVELOPMENT_EDGE_NOT_FOUND"} else 2
+            elif args.imbalance_command == "run-btc-macro-bins-v2-study":
+                from .imbalance_vwap_ride.v2_runner import verify_and_run_sealed_v2_study
+                result = verify_and_run_sealed_v2_study(data_manifest=args.data_manifest, artifact_root=args.artifact_root, repository_root=args.repository_root, footprint_cache_root=args.footprint_cache_root, batch_size=args.batch_size)
+                _print(result)
+                return 0 if result["status"] in {"COMPLETED", "DEVELOPMENT_EDGE_NOT_FOUND"} else 2
+            else:
+                from .imbalance_vwap_ride.v3_runner import verify_and_run_sealed_v3_study
+                result = verify_and_run_sealed_v3_study(artifact_root=args.artifact_root, repository_root=args.repository_root, data_cache_root=args.data_cache_root, footprint_cache_root=args.footprint_cache_root, batch_size=args.batch_size, allow_authorized_downloads=True)
+                _print(result)
+                return 0 if result["status"] in {"COMPLETED", "DEVELOPMENT_EDGE_NOT_FOUND"} else 2
         elif args.command == "repository":
             from .repository.worktree_preflight import run_worktree_preflight
             report = run_worktree_preflight(args.repository_root, max_path_length=args.max_path_length, probe=args.probe)

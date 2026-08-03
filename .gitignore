@@ -2,6 +2,8 @@
 .pytest_cache/
 .research_worktrees/
 .tmp/
+external_data/
+data/value_area_trap/staging/
 data/value_area_trap/
 research_registry/
 research_runs/
@@ -38,3 +40,18 @@ reports/
 smithers.db
 smithers.db-shm
 smithers.db-wal
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.class
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local test artifacts
+.test-tmp/
+
+# Local scratch prompts
+btc-study-prompt.txt
