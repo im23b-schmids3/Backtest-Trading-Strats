@@ -47,8 +47,22 @@ def phase_months(phase: str) -> tuple[str, ...]:
     raise ValueError(f"unsupported V4 data phase: {phase}")
 
 
-def authorized_archive_url(month: str, *, phase: str | None = None) -> str:
-    allowed = phase_months(phase) if phase is not None else PHASE_A_MONTHS + PHASE_B_MONTHS
+def authorized_archive_url(
+    month: str,
+    *,
+    phase: str | None = None,
+    expected_months: tuple[str, ...] | None = None,
+) -> str:
+    """Return an official archive URL constrained to one sealed month set.
+
+    ``expected_months`` is deliberately opt-in for successor studies.  V4
+    callers retain the historical phase allowlists unchanged.
+    """
+    if expected_months is not None and phase is not None:
+        raise ValueError("provide either phase or expected_months, not both")
+    allowed = expected_months if expected_months is not None else (
+        phase_months(phase) if phase is not None else PHASE_A_MONTHS + PHASE_B_MONTHS
+    )
     if month not in allowed:
         raise ValueError(f"month is outside the sealed V4 download allowlist: {month}")
     url = f"{OFFICIAL_ARCHIVE_ROOT}/BTCUSDT/BTCUSDT-aggTrades-{month}.zip"
@@ -68,10 +82,14 @@ def authorized_archive_url(month: str, *, phase: str | None = None) -> str:
 
 
 def validate_authorized_archive(
-    path: str | Path, month: str, *, phase: str | None = None
+    path: str | Path,
+    month: str,
+    *,
+    phase: str | None = None,
+    expected_months: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     archive = Path(path).resolve()
-    authorized_archive_url(month, phase=phase)
+    authorized_archive_url(month, phase=phase, expected_months=expected_months)
     expected_name = f"BTCUSDT-aggTrades-{month}.zip"
     expected_member = f"BTCUSDT-aggTrades-{month}.csv"
     if archive.name != expected_name:
@@ -92,7 +110,7 @@ def validate_authorized_archive(
         raise ValueError(f"corrupt Binance archive: {archive}") from exc
     return {
         "month": month,
-        "url": authorized_archive_url(month, phase=phase),
+        "url": authorized_archive_url(month, phase=phase, expected_months=expected_months),
         "archive_path": str(archive),
         "archive_name": archive.name,
         "archive_size_bytes": archive.stat().st_size,
@@ -685,6 +703,7 @@ def validate_v4_source_manifest(
     *,
     phase: str,
     verify_archives: bool = True,
+    expected_months: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     path = Path(manifest_path).resolve()
     errors: list[str] = []
@@ -694,7 +713,11 @@ def validate_v4_source_manifest(
         manifest = importer.validate_monthly_manifest(path)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {"valid": False, "errors": [str(exc)], "manifest_path": str(path)}
-    expected = phase_months(phase)
+    # V4 defaults to its immutable phase ranges.  Later studies may supply an
+    # explicitly sealed range, never an open-ended month selector.
+    expected = expected_months if expected_months is not None else phase_months(phase)
+    if not expected or len(set(expected)) != len(expected) or tuple(sorted(expected)) != expected:
+        return {"valid": False, "errors": ["expected_months must be a non-empty, unique chronological tuple"], "manifest_path": str(path)}
     actual = tuple(item.month for item in manifest.partitions)
     if actual != expected:
         errors.append(f"manifest months must equal the exact sealed {phase} range: {actual}")
@@ -724,7 +747,12 @@ def validate_v4_source_manifest(
         rows += partition.row_count
         if verify_archives:
             try:
-                report = validate_authorized_archive(partition.source_archive, partition.month, phase=phase)
+                report = validate_authorized_archive(
+                    partition.source_archive,
+                    partition.month,
+                    phase=None if expected_months is not None else phase,
+                    expected_months=expected_months,
+                )
                 if report["archive_sha256"] != partition.source_archive_hash:
                     raise ValueError("archive hash differs from partition provenance")
                 archives.append(report)

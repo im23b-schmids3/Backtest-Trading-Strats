@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from .v5_models import scaled_bin_size
+from .v5_models import PHASE_A_MONTHS
 from .artifacts import sha256_file, sha256_value
 from .v4_data import validate_v4_source_manifest
 from .footprint import RAW_COLUMNS, _batch_table, _utc_from_epoch_minute
@@ -65,7 +66,12 @@ def build_v5_phase_a_scaled_dataset(source_manifest_path: str | Path, bars_manif
     This consumes Arrow batches only; aggregate-trade rows never leave the process
     and every month is staged then atomically published.
     """
-    source_validation = validate_v4_source_manifest(source_manifest_path, phase="PHASE_A", verify_archives=True)
+    source_validation = validate_v4_source_manifest(
+        source_manifest_path,
+        phase="PHASE_A",
+        expected_months=PHASE_A_MONTHS,
+        verify_archives=True,
+    )
     if not source_validation["valid"]:
         raise ValueError("invalid official Phase A source: " + "; ".join(source_validation["errors"]))
     source = source_validation["manifest"]
@@ -87,9 +93,20 @@ def build_v5_phase_a_scaled_dataset(source_manifest_path: str | Path, bars_manif
     bar_files = {x["month"]: x for x in bars_manifest["parquet_files"] if x["kind"] == "bars"}
     output_files=[]; total_footprints=total_trades=0; previous_close=None; monthly=[]
     for partition in source.partitions:
-        month=partition.month; bar_table=pq.read_table(bars_root / bar_files[month]["relative_path"])
+        month=partition.month; month_opening_previous_close=previous_close; bar_table=pq.read_table(bars_root / bar_files[month]["relative_path"])
         bar_rows=bar_table.to_pylist(); size_by_bucket={int(row["bar_start_utc"].timestamp()//60): scaled_bin_size(previous_close if i == 0 else bar_rows[i-1]["close"]) for i,row in enumerate(bar_rows)}
         if bar_rows: previous_close=bar_rows[-1]["close"]
+        target=root / "footprints" / f"{month}.parquet"
+        checkpoint=target.with_suffix(".checkpoint.json")
+        checkpoint_identity={"month":month,"source_partition_hash":partition.parquet_hash,"bars_sha256":bar_files[month].get("sha256"),"previous_close":None if month_opening_previous_close is None else str(month_opening_previous_close)}
+        if target.exists() and checkpoint.exists():
+            prior=json.loads(checkpoint.read_text(encoding="utf-8"))
+            if prior.get("identity") == checkpoint_identity and sha256_file(target) == prior.get("sha256"):
+                item=prior["file"]
+                output_files.append(item); monthly.append(prior["monthly"])
+                total_footprints += int(item["row_count"]); total_trades += int(item["trade_count"])
+                continue
+            raise ValueError(f"immutable V5 monthly checkpoint collision: {month}")
         accum: dict[tuple[int,Decimal,Decimal],list[Any]] = {}; trade_total=0
         parquet=pq.ParquetFile(source_root / partition.file_name)
         for batch in parquet.iter_batches(batch_size=batch_size, columns=list(RAW_COLUMNS), use_threads=True):
@@ -102,9 +119,13 @@ def build_v5_phase_a_scaled_dataset(source_manifest_path: str | Path, bars_manif
         for (bucket,floor,size),(buy,sell,count) in sorted(accum.items()):
             start=_utc_from_epoch_minute(bucket); rows.append({"bar_start_utc":start,"bar_end_utc":_utc_from_epoch_minute(bucket+5),"month":month,"bin_size_usd":size,"bin_floor":floor,"bin_upper_exclusive":floor+size,"buy_volume_btc":buy,"sell_volume_btc":sell,"total_volume_btc":buy+sell,"delta_btc":buy-sell,"trade_count":count})
         if sum(x["trade_count"] for x in rows) != trade_total: raise AssertionError("V5 footprint trade reconciliation failed")
-        target=root / "footprints" / f"{month}.parquet"; target.parent.mkdir(parents=True,exist_ok=True); staging=target.with_suffix(".parquet.part"); pq.write_table(pa.Table.from_pylist(rows),staging,compression="zstd"); os.replace(staging,target)
-        output_files.append({"kind":"footprints","month":month,"relative_path":target.relative_to(root).as_posix(),"row_count":len(rows),"trade_count":trade_total,"sha256":sha256_file(target)})
-        monthly.append({"month":month,"bars":len(bar_rows),"footprint_rows":len(rows),"footprint_trade_count":trade_total,"bin_size_distribution":{str(k):sum(1 for x in rows if x["bin_size_usd"]==k) for k in sorted({x["bin_size_usd"] for x in rows})}}); total_footprints+=len(rows); total_trades+=trade_total
+        target.parent.mkdir(parents=True,exist_ok=True); staging=target.with_suffix(".parquet.part"); pq.write_table(pa.Table.from_pylist(rows),staging,compression="zstd"); os.replace(staging,target)
+        item={"kind":"footprints","month":month,"relative_path":target.relative_to(root).as_posix(),"row_count":len(rows),"trade_count":trade_total,"sha256":sha256_file(target)}
+        month_report={"month":month,"bars":len(bar_rows),"footprint_rows":len(rows),"footprint_trade_count":trade_total,"bin_size_distribution":{str(k):sum(1 for x in rows if x["bin_size_usd"]==k) for k in sorted({x["bin_size_usd"] for x in rows})}}
+        checkpoint_staging=checkpoint.with_suffix(".json.part")
+        checkpoint_staging.write_text(json.dumps({"identity":checkpoint_identity,"sha256":item["sha256"],"file":item,"monthly":month_report},sort_keys=True,indent=2)+"\n",encoding="utf-8")
+        os.replace(checkpoint_staging,checkpoint)
+        output_files.append(item); monthly.append(month_report); total_footprints+=len(rows); total_trades+=trade_total
     content_hash=sha256_value({x["relative_path"]:x["sha256"] for x in output_files})
     out={"identity":identity,"dataset_hash":source.normalized_dataset_hash,"footprint_dataset_hash":content_hash,"source_manifest_path":str(Path(source_manifest_path).resolve()),"bars_manifest_path":str(Path(bars_manifest_path).resolve()),"source_row_count":source.row_count,"footprint_trade_count":total_trades,"footprint_row_count":total_footprints,"parquet_files":output_files,"monthly_diagnostics":monthly,"raw_aggregate_rows_transmitted":False,"valid":True,"resumable":True}
     staging=manifest_path.with_suffix(".json.part"); staging.write_text(json.dumps(out,sort_keys=True,indent=2,default=str)+"\n",encoding="utf-8"); os.replace(staging,manifest_path)
