@@ -8,7 +8,7 @@ class ImmutableV5ArtifactStore:
   self.identity=identity; self.run_id=sha256_value(identity)[:24]; self.root=Path(root)/identity["strategy_id"]/self.run_id; self.root.mkdir(parents=True,exist_ok=True)
  def write_json(self,relative:str,payload:dict[str,Any],**_:Any):
   # A boolean compliance assertion is safe; the raw aggregate-row payload itself is not.
-  if '"raw_aggregate_rows":' in json.dumps(payload): raise ValueError("forbidden raw-row artifact")
+  if '"raw_aggregate_rows":' in json.dumps(payload,default=str): raise ValueError("forbidden raw-row artifact")
   p=self.root/relative;p.parent.mkdir(parents=True,exist_ok=True); rendered=json.dumps(payload,sort_keys=True,default=str,indent=2)+"\n"
   if p.exists() and p.read_text()!=rendered: raise ValueError("immutable artifact collision")
   p.write_text(rendered); return p

@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from .v5_models import scaled_bin_size
-from .v5_models import PHASE_A_MONTHS
+from .v5_models import PHASE_A_MONTHS, PHASE_B_MONTHS
 from .artifacts import sha256_file, sha256_value
 from .v4_data import validate_v4_source_manifest
 from .footprint import RAW_COLUMNS, _batch_table, _utc_from_epoch_minute
@@ -60,16 +60,19 @@ def maximal_stacked_zones(footprints: list[dict[str, Any]], *, minimum_volume: D
 
 V5_DATA_BUILDER_VERSION = "imbalance-vwap-ride-v5-scaled-streaming-2"
 
-def build_v5_phase_a_scaled_dataset(source_manifest_path: str | Path, bars_manifest_path: str | Path, cache_root: str | Path, *, batch_size: int = 1_000_000) -> dict[str, Any]:
+def build_v5_scaled_dataset(source_manifest_path: str | Path, bars_manifest_path: str | Path, cache_root: str | Path, *, phase: str, batch_size: int = 1_000_000) -> dict[str, Any]:
     """Build the V5 price-scaled footprints locally from a validated official source.
 
     This consumes Arrow batches only; aggregate-trade rows never leave the process
     and every month is staged then atomically published.
     """
+    expected_months = PHASE_A_MONTHS if phase == "PHASE_A" else PHASE_B_MONTHS if phase == "PHASE_B" else None
+    if expected_months is None:
+        raise ValueError("V5 phase must be PHASE_A or PHASE_B")
     source_validation = validate_v4_source_manifest(
         source_manifest_path,
-        phase="PHASE_A",
-        expected_months=PHASE_A_MONTHS,
+        phase=phase,
+        expected_months=expected_months,
         verify_archives=True,
     )
     if not source_validation["valid"]:
@@ -78,9 +81,9 @@ def build_v5_phase_a_scaled_dataset(source_manifest_path: str | Path, bars_manif
     bars_manifest = json.loads(Path(bars_manifest_path).read_text(encoding="utf-8"))
     if bars_manifest.get("source_row_count") != source.row_count or not bars_manifest.get("valid"):
         raise ValueError("validated 5m bar source does not reconcile to normalized source")
-    identity = {"builder_version": V5_DATA_BUILDER_VERSION, "phase": "PHASE_A", "symbol": "BTCUSDT", "months": [p.month for p in source.partitions], "normalized_dataset_hash": source.normalized_dataset_hash, "source_manifest_hash": source.manifest_hash, "bin_formula": "clamp(20,100,round_half_up(previous_close*0.001/5)*5)", "bar_interval": "5m", "aggressor_rule": "BUY_IFF_BUYER_IS_MAKER_FALSE", "daily_vwap_reset": "UTC_MIDNIGHT"}
+    identity = {"builder_version": V5_DATA_BUILDER_VERSION, "phase": phase, "symbol": "BTCUSDT", "months": [p.month for p in source.partitions], "normalized_dataset_hash": source.normalized_dataset_hash, "source_manifest_hash": source.manifest_hash, "bin_formula": "clamp(20,100,round_half_up(previous_close*0.001/5)*5)", "bar_interval": "5m", "aggressor_rule": "BUY_IFF_BUYER_IS_MAKER_FALSE", "daily_vwap_reset": "UTC_MIDNIGHT"}
     dataset_id = sha256_value(identity)
-    root = Path(cache_root).resolve() / "BTCUSDT" / "phase_a" / dataset_id
+    root = Path(cache_root).resolve() / "BTCUSDT" / phase.lower() / dataset_id
     manifest_path = root / "manifest.json"
     if manifest_path.exists():
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -130,3 +133,13 @@ def build_v5_phase_a_scaled_dataset(source_manifest_path: str | Path, bars_manif
     out={"identity":identity,"dataset_hash":source.normalized_dataset_hash,"footprint_dataset_hash":content_hash,"source_manifest_path":str(Path(source_manifest_path).resolve()),"bars_manifest_path":str(Path(bars_manifest_path).resolve()),"source_row_count":source.row_count,"footprint_trade_count":total_trades,"footprint_row_count":total_footprints,"parquet_files":output_files,"monthly_diagnostics":monthly,"raw_aggregate_rows_transmitted":False,"valid":True,"resumable":True}
     staging=manifest_path.with_suffix(".json.part"); staging.write_text(json.dumps(out,sort_keys=True,indent=2,default=str)+"\n",encoding="utf-8"); os.replace(staging,manifest_path)
     return out
+
+
+def build_v5_phase_a_scaled_dataset(source_manifest_path: str | Path, bars_manifest_path: str | Path, cache_root: str | Path, *, batch_size: int = 1_000_000) -> dict[str, Any]:
+    """Compatibility entry point for the sealed Phase-A footprint build."""
+    return build_v5_scaled_dataset(source_manifest_path, bars_manifest_path, cache_root, phase="PHASE_A", batch_size=batch_size)
+
+
+def build_v5_phase_b_scaled_dataset(source_manifest_path: str | Path, bars_manifest_path: str | Path, cache_root: str | Path, *, batch_size: int = 1_000_000) -> dict[str, Any]:
+    """Build the separately content-addressed sealed Phase-B footprint dataset."""
+    return build_v5_scaled_dataset(source_manifest_path, bars_manifest_path, cache_root, phase="PHASE_B", batch_size=batch_size)

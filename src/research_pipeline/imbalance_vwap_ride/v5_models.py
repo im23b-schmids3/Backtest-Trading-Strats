@@ -35,12 +35,15 @@ class ImbalanceVWAPRideV5Config(StrictModel):
     stop_buffer_bins: int = 2
     maximum_active_zones: int = 3
     maximum_trades_per_utc_day: int = 1
+    maximum_trades_per_zone: int = 1
     vwap_slope_bars: int = 24
+    entry_execution: str = "NEXT_BAR_OPEN_AFTER_CONFIRMED_RETEST"
     direction: str = "LONG_ONLY"
     symbol: str = "BTCUSDT"
     quantity_btc: Decimal = Decimal("0.001")
     price_tick: Decimal = Decimal("0.1")
     quantity_step: Decimal = Decimal("0.001")
+    minimum_quantity: Decimal = Decimal("0.001")
     taker_fee_rate: Decimal = Decimal("0.0005")
     market_slippage_ticks: int = 1
     stop_slippage_ticks: int = 2
@@ -49,7 +52,7 @@ class ImbalanceVWAPRideV5Config(StrictModel):
     def sealed(self):
         expected = dict(CANDIDATE_REGISTRY).get(self.candidate_id)
         if expected is None or self.target_r_multiple != expected: raise ValueError("sealed V5 candidate parameters do not match candidate_id")
-        if self.direction != "LONG_ONLY" or self.symbol != "BTCUSDT" or self.min_bin_volume_btc != 35 or self.min_imbalance_ratio != 3 or self.stacked_bins != 3 or self.vwap_slope_bars != 24: raise ValueError("sealed V5 invariant violation")
+        if self.direction != "LONG_ONLY" or self.symbol != "BTCUSDT" or self.min_bin_volume_btc != 35 or self.min_imbalance_ratio != 3 or self.stacked_bins != 3 or self.vwap_slope_bars != 24 or self.maximum_trades_per_zone != 1 or self.entry_execution != "NEXT_BAR_OPEN_AFTER_CONFIRMED_RETEST" or self.same_bar_policy != "STOP_FIRST": raise ValueError("sealed V5 invariant violation")
         return self
     def parameter_payload(self) -> dict[str, Any]: return self.model_dump(mode="json")
     def frozen_payload(self) -> dict[str, Any]: return {"candidate_id":self.candidate_id,"parameters":self.parameter_payload(),"bin_formula":"clamp(20,100,round_half_up(previous_close*0.001/5)*5)","phase_a_months":list(PHASE_A_MONTHS),"phase_b_months":list(PHASE_B_MONTHS)}
