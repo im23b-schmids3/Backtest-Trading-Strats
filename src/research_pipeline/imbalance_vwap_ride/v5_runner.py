@@ -17,6 +17,21 @@ PINNED_PHASE_A_FOOTPRINT_HASH="3afba9bceda58b0cd75f9d334e30e54cb5dcb551ced374f31
 def normalize_source_bar_timestamp(value):
  """Canonical UTC key shared by JSON footprint zones and Arrow bars."""
  return _ts(value)
+def deterministic_setup_id(zone: dict[str, Any]) -> str:
+ """Stable identity for a footprint zone, independent of candidate/re-arming."""
+ payload={key:str(zone[key]) for key in ("source_bar_start_utc","bottom","top","bin_size_usd","stacked_bins")}
+ return "v5-"+hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).hexdigest()[:20]
+def validate_v5_setup_audit(proposed_zones: list[dict[str, Any]], events: list[dict[str, Any]],
+                            trades: list[dict[str, Any]], outcomes: list[dict[str, Any]]) -> None:
+ """Reject audit trails that lose, duplicate, or orphan a logical setup."""
+ setup_ids=[zone["setup_id"] for zone in proposed_zones]
+ known=set(setup_ids)
+ if len(known)!=len(setup_ids): raise AssertionError("V5 proposed setups must have unique deterministic setup_id values")
+ if any(event.get("setup_id") not in known for event in events): raise AssertionError("V5 events must reference known setup IDs")
+ if any(trade.get("setup_id") not in known for trade in trades): raise AssertionError("V5 trades must reference known setup IDs")
+ if {outcome.get("setup_id") for outcome in outcomes} != known or len(outcomes)!=len(known): raise AssertionError("V5 setup outcomes must contain exactly one terminal disposition per setup")
+ executed={outcome["setup_id"] for outcome in outcomes if outcome["disposition"]=="TRADE_EXECUTED"}
+ if executed != {trade["setup_id"] for trade in trades}: raise AssertionError("V5 executed outcomes must reconcile to trades")
 def _absolute(value: str|Path, label: str) -> Path:
  path=Path(value)
  if not path.is_absolute(): raise ValueError(f"{label} must be an absolute path")
@@ -104,39 +119,66 @@ def execute_phase_a_selection_v5(*, repository_root=".", artifact_root="research
   rows=pq.read_table(fman.parent/x["relative_path"]).to_pylist()
   for row in rows: row["price_bin"]=row["bin_floor"]
   zones += maximal_stacked_zones(rows)
- unmatched_zones=0; indexed_zones=[]
+ unmatched_zones=[]; indexed_zones=[]
  for z in zones:
   # Zones intentionally serialize their source timestamp to keep footprint
   # artifacts JSON-safe.  Bars are Arrow datetimes: normalize both before the
   # join, otherwise every valid zone is silently classified INVALIDATED.
-  source=normalize_source_bar_timestamp(z.pop("source_bar_start_utc"))
-  if source not in bytime: unmatched_zones+=1; continue
+  source_raw=z.pop("source_bar_start_utc")
+  z["source_bar_start_utc"]=normalize_source_bar_timestamp(source_raw).isoformat()
+  z["setup_id"]=deterministic_setup_id(z)
+  source=normalize_source_bar_timestamp(source_raw)
+  if source not in bytime: unmatched_zones.append(z); continue
   z["source_index"]=bytime[source]; indexed_zones.append(z)
  zones=indexed_zones
  def run(c):
-  active=[]; trades=[]; events=[]; proposed=len(zones)+unmatched_zones; blocks=nonexec=0; invalid=unmatched_zones; used_days=set()
+  active=[]; trades=[]; events=[]; proposed_zones=[*zones,*unmatched_zones]; outcomes={}
+  def emit(event, z, bar_index, **extra):
+   events.append({"event":event,"setup_id":z["setup_id"],"bar_index":bar_index,"candidate_id":c.candidate_id,**extra})
+  def terminal(disposition, z, bar_index, **extra):
+   if z["setup_id"] in outcomes: raise AssertionError("V5 setup received more than one terminal disposition")
+   outcomes[z["setup_id"]]={"setup_id":z["setup_id"],"disposition":disposition,"bar_index":bar_index,"candidate_id":c.candidate_id,**extra}
+   emit(disposition,z,bar_index,**extra)
+  for z in proposed_zones: emit("PROPOSED_SETUP",z,z.get("source_index",-1))
+  for z in unmatched_zones: terminal("INVALIDATED",z,-1,reason="SOURCE_BAR_UNMATCHED")
+  blocks=nonexec=invalid=0; used_days=set()
   for i,b in enumerate(bars):
    active += [dict(z,armed=False) for z in zones if z["source_index"]==i]
-   active=[z for z in active if i-z["source_index"]<=c.zone_expiry_bars]
+   retained=[]
+   for z in active:
+    if i-z["source_index"]<=c.zone_expiry_bars: retained.append(z)
+    else:
+     invalid+=1; terminal("INVALIDATED",z,i,reason="ZONE_EXPIRY")
+   active=retained
    for z in list(active):
-    if not z["armed"] and i>z["source_index"] and Decimal(str(b["low"]))>z["top"]: z["armed"]=True; events.append({"event":"ARMED","bar_index":i,"bin_size_usd":str(z["bin_size_usd"])})
+    if not z["armed"] and i>z["source_index"] and Decimal(str(b["low"]))>z["top"]:
+     was_armed=z.get("was_armed",False); z["armed"]=True; z["was_armed"]=True; emit("REARMED" if was_armed else "ARMED",z,i,bin_size_usd=str(z["bin_size_usd"]))
     if z["armed"] and Decimal(str(b["low"]))<=z["top"] and Decimal(str(b["close"]))>=z["top"]:
      day=b["bar_start_utc"].date().isoformat(); regime=i>=24 and Decimal(str(b["close"]))>Decimal(str(b["daily_vwap"]))>Decimal(str(bars[i-24]["daily_vwap"]))
-     if not regime: events.append({"event":"RETEST_REGIME_REJECTED","bar_index":i}); z["armed"]=False; continue
-     if day in used_days or len(active)>c.maximum_active_zones: blocks+=1; events.append({"event":"COMPLIANCE_BLOCK","bar_index":i}); z["armed"]=False; continue
+     if not regime: emit("RETEST_REGIME_REJECTED",z,i); z["armed"]=False; continue
+     if day in used_days or len(active)>c.maximum_active_zones: blocks+=1; emit("COMPLIANCE_BLOCK",z,i); z["armed"]=False; continue
      state,t=simulate_v5_long_trade(zone={**z,"direction":"LONG"},signal_bar=b,entry_index=i+1,bars=bars,config=c)
-     if t is None: nonexec+=1; events.append({"event":state,"bar_index":i}); z["armed"]=False; continue
+     if t is None:
+      nonexec+=1; terminal(state,z,i); active.remove(z); continue
      t["month"]=t["entry_timestamp"][:7]
      exit_time=__import__('datetime').datetime.fromisoformat(t["exit_timestamp"])
      t["mfe_r"]=str(max(((Decimal(str(q["high"]))-Decimal(t["entry_price"]))/Decimal(t["actual_risk_distance"]) for q in bars[i+1:] if q["bar_start_utc"] < exit_time), default=Decimal()))
-     trades.append(t); used_days.add(day); events.append({"event":"EXECUTED","bar_index":i,"candidate_id":c.candidate_id}); active.remove(z)
+     trades.append(t); used_days.add(day); terminal("TRADE_EXECUTED",z,i,trade_setup_id=t["setup_id"]); active.remove(z)
+  for z in active:
+   invalid+=1; terminal("INVALIDATED",z,len(bars),reason="END_OF_DATA")
+  if len(outcomes)!=len(proposed_zones): raise AssertionError("V5 proposed setups must all have terminal outcomes")
+  validate_v5_setup_audit(proposed_zones,events,trades,list(outcomes.values()))
+  outcome_counts=defaultdict(int)
+  for outcome in outcomes.values(): outcome_counts[outcome["disposition"]]+=1
   months={m:{"executed_trades":0,"net_pnl":Decimal()} for m in PHASE_A_MONTHS}
   for t in trades: months[t["month"]]["executed_trades"]+=1; months[t["month"]]["net_pnl"]+=Decimal(t["net_pnl"])
   net=sum((Decimal(t["net_pnl"]) for t in trades),Decimal()); gross=sum((Decimal(t["gross_pnl"]) for t in trades),Decimal()); wins=sum((max(Decimal(t["net_pnl"]),Decimal()) for t in trades),Decimal()); losses=-sum((min(Decimal(t["net_pnl"]),Decimal()) for t in trades),Decimal()); positive=sum((max(x["net_pnl"],Decimal()) for x in months.values()),Decimal()); contrib=sorted((max(x["net_pnl"],Decimal()) for x in months.values()),reverse=True)
-  return {"executed_trades":len(trades),"net_pnl":net,"gross_pnl":gross,"net_profit_factor":wins/losses if losses else Decimal("Infinity"),"average_net_r":sum((Decimal(t["net_r"]) for t in trades),Decimal())/len(trades) if trades else Decimal(),"target_hits":sum(t["exit_reason"]=="TARGET" for t in trades),"target_hit_rate":Decimal(sum(t["exit_reason"]=="TARGET" for t in trades))/len(trades) if trades else Decimal(),"mfe_at_least_1r_rate":Decimal(sum(Decimal(t["mfe_r"])>=1 for t in trades))/len(trades) if trades else Decimal(),"maximum_drawdown":float(min((sum((Decimal(t["net_pnl"]) for t in trades[:j]),Decimal()) for j in range(len(trades)+1)),default=Decimal())),"best_five_positive_pnl_contribution":sum(contrib[:5],Decimal())/positive if positive else Decimal(1),"months":months,"funnel_reconciliation":{"proposed_setups":proposed,"invalid_setups":invalid,"non_executable_setups":nonexec,"compliance_blocks":blocks,"executed_trades":len(trades),"reconciles":proposed==invalid+nonexec+blocks+len(trades)},"long_only_reconciliation":{"short_trades":0,"short_setups":0,"short_pnl":0,"reconciles":True},"costs_valid":True,"hashes_valid":True,"trades":trades,"events":events,"zones_created":len(zones),"stacked_sequences":len(zones)}
+  executed=len(trades)
+  reconciliation={"proposed_setups":len(proposed_zones),"terminal_outcomes":len(outcomes),"invalid_setups":outcome_counts["INVALIDATED"],"non_executable_setups":sum(count for state,count in outcome_counts.items() if state not in {"INVALIDATED","TRADE_EXECUTED"}),"compliance_blocks":blocks,"executed_trades":executed,"outcomes_reconcile":len(proposed_zones)==len(outcomes),"trades_reconcile":executed==outcome_counts["TRADE_EXECUTED"]==len({t["setup_id"] for t in trades}),"reconciles":len(proposed_zones)==len(outcomes) and executed==outcome_counts["TRADE_EXECUTED"]}
+  return {"executed_trades":executed,"net_pnl":net,"gross_pnl":gross,"net_profit_factor":wins/losses if losses else Decimal("Infinity"),"average_net_r":sum((Decimal(t["net_r"]) for t in trades),Decimal())/len(trades) if trades else Decimal(),"target_hits":sum(t["exit_reason"]=="TARGET" for t in trades),"target_hit_rate":Decimal(sum(t["exit_reason"]=="TARGET" for t in trades))/len(trades) if trades else Decimal(),"mfe_at_least_1r_rate":Decimal(sum(Decimal(t["mfe_r"])>=1 for t in trades))/len(trades) if trades else Decimal(),"maximum_drawdown":float(min((sum((Decimal(t["net_pnl"]) for t in trades[:j]),Decimal()) for j in range(len(trades)+1)),default=Decimal())),"best_five_positive_pnl_contribution":sum(contrib[:5],Decimal())/positive if positive else Decimal(1),"months":months,"funnel_reconciliation":reconciliation,"long_only_reconciliation":{"short_trades":0,"short_setups":0,"short_pnl":0,"reconciles":True},"costs_valid":True,"hashes_valid":True,"trades":trades,"events":events,"setup_outcomes":sorted(outcomes.values(),key=lambda x:x["setup_id"]),"zones_created":len(zones),"stacked_sequences":len(zones)}
  results=[]
  for c in preregistered_candidates():
-  m=run(c); public={k:v for k,v in m.items() if k not in ("trades","events")}; store.write_json(f"phase_a/candidates/{c.candidate_id}/configuration.json",{"candidate_id":c.candidate_id,"configuration_hash":candidate_configuration_hash(c),"parameters":c.parameter_payload(),"execution_count":1,"status":"EXECUTED"}); store.write_json(f"phase_a/candidates/{c.candidate_id}/trades.json",{"trades":m["trades"],"raw_aggregate_rows_transmitted":False}); store.write_json(f"phase_a/candidates/{c.candidate_id}/events.json",{"events":m["events"],"raw_aggregate_rows_transmitted":False}); store.write_json(f"phase_a/candidates/{c.candidate_id}/report.json",public); results.append((c,m))
+  m=run(c); public={k:v for k,v in m.items() if k not in ("trades","events","setup_outcomes")}; store.write_json(f"phase_a/candidates/{c.candidate_id}/configuration.json",{"candidate_id":c.candidate_id,"configuration_hash":candidate_configuration_hash(c),"parameters":c.parameter_payload(),"execution_count":1,"status":"EXECUTED"}); store.write_json(f"phase_a/candidates/{c.candidate_id}/trades.json",{"trades":m["trades"],"raw_aggregate_rows_transmitted":False}); store.write_json(f"phase_a/candidates/{c.candidate_id}/events.json",{"events":m["events"],"raw_aggregate_rows_transmitted":False}); store.write_json(f"phase_a/candidates/{c.candidate_id}/setup_outcomes.json",{"setup_outcomes":m["setup_outcomes"],"raw_aggregate_rows_transmitted":False}); store.write_json(f"phase_a/candidates/{c.candidate_id}/report.json",public); results.append((c,m))
  gates={c.candidate_id:phase_a_gate(m) for c,m in results}; ranks=rank_phase_a_candidates(results); selected=ranks[0] if ranks else None
  store.write_json("phase_a/gates.json",{"status":"EVALUATED","candidates":gates}); store.write_json("phase_a/selection_report.json",{"status":"PHASE_A_SELECTED" if selected else "PHASE_A_NO_ROBUST_CANDIDATE","candidate_execution_counts":{c.candidate_id:1 for c,_ in results},"ranking":[{k:v for k,v in x.items() if k not in ("config","metrics")} for x in ranks],"tie_trace":[x["rank_trace"] for x in ranks]})
  if selected:
