@@ -4,6 +4,7 @@ from research_pipeline.imbalance_vwap_ride.v5_data import annotate_price_scaled_
 from research_pipeline.imbalance_vwap_ride.v5_adapter import ImbalanceVWAPRideV5Adapter
 from research_pipeline.imbalance_vwap_ride.v5_strategy import simulate_v5_long_trade
 from research_pipeline.imbalance_vwap_ride.v5_runner import normalize_source_bar_timestamp
+from research_pipeline.imbalance_vwap_ride import v5_runner
 from datetime import datetime, timedelta, timezone
 def test_v5_identity_registry_and_rounding():
  assert STRATEGY_ID=="ImbalanceVWAPRide.BTC_LONG_ONLY_V5_PRICE_SCALED_BINS"; assert [x.candidate_id for x in preregistered_candidates()]==[x[0] for x in CANDIDATE_REGISTRY]; assert scaled_bin_size("99999")==Decimal("100") and scaled_bin_size("100000")==Decimal("100") and scaled_bin_size("10000")==Decimal("20") and scaled_bin_size("123456")==Decimal("100")
@@ -34,3 +35,19 @@ def test_v5_stop_uses_the_source_zone_bin_and_wins_ambiguous_bar():
  entry={"bar_start_utc":start+timedelta(minutes=5),"bar_end_utc":start+timedelta(minutes=10),"open":"200","high":"700","low":"99","close":"200"}
  state,trade=simulate_v5_long_trade(zone={"direction":"LONG","bottom":"150","top":"200","bin_size_usd":"25"},signal_bar=signal,entry_index=1,bars=[signal,entry],config=ImbalanceVWAPRideV5Config())
  assert state=="TRADE_EXECUTED" and trade["initial_stop_price"]=="100" and trade["exit_reason"]=="STOP_FIRST_AMBIGUITY" and trade["source_bar_bin_size_usd"]=="25"
+
+def test_v5_candidate_cli_requires_absolute_paths_before_any_execution(tmp_path):
+ try:
+  v5_runner.run_v5_candidate_cli(phase_a_manifest="relative.json",artifact_root=tmp_path)
+ except ValueError as exc:
+  assert "clean committed git tree" in str(exc)
+ else:
+  raise AssertionError("a dirty test worktree must prevent V5 execution")
+
+def test_v5_phase_a_manifest_rejects_non_absolute_path():
+ try:
+  v5_runner.validate_pinned_v5_phase_a_manifest("relative.json")
+ except ValueError as exc:
+  assert "absolute path" in str(exc)
+ else:
+  raise AssertionError("relative manifests must be rejected")

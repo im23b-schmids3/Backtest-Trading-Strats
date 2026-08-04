@@ -5,7 +5,9 @@ from typing import Any
 from .artifacts import sha256_value
 class ImmutableV5ArtifactStore:
  def __init__(self,root:str|Path,identity:dict[str,Any]):
-  self.identity=identity; self.run_id=sha256_value(identity)[:24]; self.root=Path(root)/identity["strategy_id"]/self.run_id; self.root.mkdir(parents=True,exist_ok=True)
+  self.identity=identity; self.run_id=sha256_value(identity)[:24]; self.root=Path(root)/identity["strategy_id"]/self.run_id
+  if self.root.exists(): raise FileExistsError(f"immutable V5 output directory already exists: {self.root}")
+  self.root.mkdir(parents=True, exist_ok=False)
  def write_json(self,relative:str,payload:dict[str,Any],**_:Any):
   # A boolean compliance assertion is safe; the raw aggregate-row payload itself is not.
   if '"raw_aggregate_rows":' in json.dumps(payload,default=str): raise ValueError("forbidden raw-row artifact")

@@ -12,9 +12,50 @@ from .v5_data import maximal_stacked_zones
 from .v5_strategy import simulate_v5_long_trade
 from .strategy import _ts
 FOCUSED_TESTS=("tests/research_pipeline/test_imbalance_vwap_ride_v5.py",)
+PINNED_PHASE_A_DATASET_HASH="b52cb51befdd7da894ed3249865be22166ec7c2447420f8a7391ced3fd9f1f72"
+PINNED_PHASE_A_FOOTPRINT_HASH="3afba9bceda58b0cd75f9d334e30e54cb5dcb551ced374f31dff25a12bbd9d4c"
 def normalize_source_bar_timestamp(value):
  """Canonical UTC key shared by JSON footprint zones and Arrow bars."""
  return _ts(value)
+def _absolute(value: str|Path, label: str) -> Path:
+ path=Path(value)
+ if not path.is_absolute(): raise ValueError(f"{label} must be an absolute path")
+ return path.resolve()
+def _git_identity(root: Path) -> dict[str,str]:
+ for command in (("status","--porcelain"),("diff","--quiet"),("diff","--cached","--quiet")):
+  check=subprocess.run(["git",*command],cwd=root,text=True,capture_output=True)
+  if (command[0]=="status" and check.stdout.strip()) or (command[0]!="status" and check.returncode): raise ValueError("V5 candidate run requires a clean committed git tree")
+ commit=subprocess.run(["git","rev-parse","HEAD"],cwd=root,text=True,capture_output=True)
+ if commit.returncode or not commit.stdout.strip(): raise ValueError("V5 candidate run requires a committed HEAD")
+ return {"git_commit":commit.stdout.strip()}
+def validate_pinned_v5_phase_a_manifest(phase_a_manifest: str|Path) -> tuple[Path,dict[str,Any],Path,dict[str,Any]]:
+ manifest_path=_absolute(phase_a_manifest,"--phase-a-manifest")
+ if not manifest_path.is_file(): raise ValueError("MISSING_V5_PHASE_A_MANIFEST")
+ footprint=json.loads(manifest_path.read_text())
+ identity=footprint.get("identity",{})
+ if footprint.get("valid") is not True or tuple(identity.get("months",()))!=PHASE_A_MONTHS or identity.get("phase")!="PHASE_A": raise ValueError("INVALID_V5_PHASE_A_MANIFEST")
+ if identity.get("normalized_dataset_hash")!=PINNED_PHASE_A_DATASET_HASH or footprint.get("footprint_dataset_hash")!=PINNED_PHASE_A_FOOTPRINT_HASH: raise ValueError("V5_PHASE_A_HASH_MISMATCH")
+ files=footprint.get("parquet_files",())
+ if len(files)!=13 or {x.get("month") for x in files}!=set(PHASE_A_MONTHS): raise ValueError("V5_PHASE_A_FILE_SET_INVALID")
+ for item in files:
+  path=(manifest_path.parent/item["relative_path"]).resolve()
+  if not path.is_file() or sha256_file(path)!=item.get("sha256"): raise ValueError(f"V5_PHASE_A_PARQUET_INVALID:{item.get('month')}")
+ bars_path=Path(footprint.get("bars_manifest_path","")).resolve()
+ if not bars_path.is_file(): raise ValueError("MISSING_V5_PHASE_A_BARS_MANIFEST")
+ bars=json.loads(bars_path.read_text()); bars_identity=bars.get("identity",{})
+ if bars.get("valid") is not True or tuple(bars_identity.get("months",()))!=PHASE_A_MONTHS or bars_identity.get("normalized_dataset_hash")!=PINNED_PHASE_A_DATASET_HASH: raise ValueError("INVALID_V5_PHASE_A_BARS_MANIFEST")
+ for item in bars.get("parquet_files",()):
+  path=(bars_path.parent/item["relative_path"]).resolve()
+  if not path.is_file() or sha256_file(path)!=item.get("sha256"): raise ValueError(f"V5_PHASE_A_BARS_PARQUET_INVALID:{item.get('month')}")
+ return manifest_path,footprint,bars_path,bars
+def run_v5_candidate_cli(*,phase_a_manifest: str|Path,artifact_root: str|Path)->dict[str,Any]:
+ """The sole deterministic entry point for the sealed Phase-A V5 execution."""
+ root=Path.cwd().resolve(); _git_identity(root)
+ output_root=_absolute(artifact_root,"--artifact-root")
+ manifest_path,footprint,bars_path,bars=validate_pinned_v5_phase_a_manifest(phase_a_manifest)
+ result=execute_phase_a_selection_v5(repository_root=root,artifact_root=output_root,bars_manifest_path=bars_path,footprint_manifest_path=manifest_path,git_identity=_git_identity(root))
+ run_path=Path(result["freshRunPath"])
+ return {**result,"phaseAManifest":str(manifest_path),"freshRunPath":str(run_path),"metricsPath":str(run_path/"phase_a"),"gatesPath":str(run_path/"phase_a/gates.json"),"rankingPath":str(run_path/"phase_a/selection_report.json"),"candidateExecutions":{candidate.candidate_id:1 for candidate in preregistered_candidates()},"model":"gpt-5.6-terra"}
 def preservation_snapshot(repository_root: str|Path)->dict[str,Any]:
  root=Path(repository_root).resolve(); package=root/"src/research_pipeline/imbalance_vwap_ride"
  protected=[p for p in package.glob("*.py") if not p.name.startswith("v5_") and p.name!="__init__.py"]
@@ -41,23 +82,19 @@ def run_sealed_v5_study(*,artifact_root="research_runs",repository_root=".",pref
 def verify_and_run_sealed_v5_study(**kwargs):
  p=execute_v5_preflight(kwargs.get("repository_root",".")); return run_sealed_v5_study(**kwargs,preflight_evidence=p) if p["tests_passed"] else {"status":"FAILED","summary":"V5 preflight failed","testsPassed":False,"studyExecuted":False}
 
-def execute_phase_a_selection_v5(*, repository_root=".", artifact_root="research_runs"):
+def execute_phase_a_selection_v5(*, repository_root=".", artifact_root="research_runs", bars_manifest_path: str|Path|None=None, footprint_manifest_path: str|Path|None=None, git_identity: dict[str,str]|None=None):
  """Execute the already-materialized Phase-A study once; inputs are aggregated only."""
  import pyarrow.parquet as pq
  root=Path(repository_root).resolve(); before=preservation_snapshot(root)
- bman=next((p for p in (root/"data/imbalance_vwap_ride/v5/bars/BTCUSDT/phase_a").rglob("manifest.json") if len(json.loads(p.read_text())["identity"]["months"])==13),None)
- fman=next((p for p in (root/"data/imbalance_vwap_ride/v5/footprints/BTCUSDT/phase_a").rglob("manifest.json") if len(json.loads(p.read_text())["identity"]["months"])==13 and json.loads(p.read_text()).get("footprint_row_count",0)>0),None)
- if not bman or not fman: raise ValueError("committed validated 13-month V5 Phase A datasets are required")
+ if bars_manifest_path is None or footprint_manifest_path is None: raise ValueError("V5 candidate execution requires explicit validated Phase-A manifests")
+ bman=Path(bars_manifest_path).resolve(); fman=Path(footprint_manifest_path).resolve()
  bars_meta=json.loads(bman.read_text()); foot_meta=json.loads(fman.read_text())
  if not bars_meta.get("valid") or not foot_meta.get("valid"): raise ValueError("invalid Phase A data manifest")
- identity={"strategy_id":STRATEGY_ID,"adapter_id":ADAPTER_ID,"specification_hash":sha256_file(root/".smithers/specs/imbalance-vwap-ride-btc-long-only-v5.md"),"candidate_registry_hash":candidate_registry_hash(),"code_hash":code_hash(root),"bars_manifest_hash":sha256_file(bman),"footprint_manifest_hash":sha256_file(fman)}
+ identity={"strategy_id":STRATEGY_ID,"adapter_id":ADAPTER_ID,"specification_hash":sha256_file(root/".smithers/specs/imbalance-vwap-ride-btc-long-only-v5.md"),"candidate_registry_hash":candidate_registry_hash(),"code_hash":code_hash(root),"bars_manifest_hash":sha256_file(bman),"footprint_manifest_hash":sha256_file(fman),**(git_identity or {})}
  store=ImmutableV5ArtifactStore(artifact_root,identity)
- # An existing completed run is immutable: never silently rerun any candidate.
- done=store.root/"final_report.json"
- if done.exists(): return json.loads(done.read_text())
  store.write_json("study-manifest.json",{**identity,"evidence":EVIDENCE,"confirmation_evidence":False,"optimization_claimed":False,"external_confirmation_required":True,"phase_a_execution":"SEALED_ONCE"})
  store.write_json("candidate_registry.json",{"sealed_before_results":True,"cartesian_search":False,"registry_hash":candidate_registry_hash(),"registry":candidate_registry_payload()})
- store.write_json("phase_a/source_manifest.json",{"status":"VALIDATED_REUSED","months":list(PHASE_A_MONTHS),"source_row_count":bars_meta["source_row_count"],"bars_manifest_sha256":sha256_file(bman),"raw_aggregate_rows_transmitted":False})
+ store.write_json("phase_a/source_manifest.json",{"status":"VALIDATED_PINNED","months":list(PHASE_A_MONTHS),"source_row_count":bars_meta["source_row_count"],"bars_manifest_sha256":sha256_file(bman),"utc_mapping":"UTC_MIDNIGHT / 5m source timestamps","raw_aggregate_rows_transmitted":False})
  store.write_json("phase_a/normalized_manifest.json",{"status":"VALIDATED_REUSED","dataset_hash":bars_meta["identity"]["normalized_dataset_hash"],"raw_aggregate_rows_transmitted":False})
  store.write_json("phase_a/scaled_footprint_manifest.json",{"status":"VALIDATED_REUSED","footprint_dataset_hash":foot_meta["footprint_dataset_hash"],"footprint_row_count":foot_meta["footprint_row_count"],"bin_formula":"clamp(20,100,round_half_up(previous_close*0.001/5)*5)","raw_aggregate_rows_transmitted":False})
  bars=[]
@@ -105,6 +142,7 @@ def execute_phase_a_selection_v5(*, repository_root=".", artifact_root="research
  if selected:
   frozen=sha256_value({"frozen":selected["config"].frozen_payload(),"registry_hash":candidate_registry_hash(),"result_hash":sha256_value(selected["metrics"])}); store.write_json("phase_a/freeze.json",{"candidate_id":selected["candidate_id"],"frozen_candidate_hash":frozen,"registry_hash":candidate_registry_hash(),"configuration_hash":candidate_configuration_hash(selected["config"])}); status="PHASE_A_SELECTED"; cid=selected["candidate_id"]
  else: frozen=None; status="PHASE_A_NO_ROBUST_CANDIDATE"; cid=None
- store.write_json("phase_a/status.json",{"status":status,"selected_candidate_id":cid}); store.write_json("phase_b/status.json",{"status":"NOT_OPENED","reason":status,"execution_count":0}); store.write_json("alpha/status.json",{"status":"NOT_EXECUTED","reason":status}); after=preservation_snapshot(root)
+ phase_b_status="NOT_OPENED" if not selected else "PENDING_CONDITIONAL_FINALIZER"; phase_b_reason=status if not selected else "PHASE_A_SELECTED_REQUIRES_LOCKED_FINALIZER"
+ store.write_json("phase_a/status.json",{"status":status,"selected_candidate_id":cid}); store.write_json("phase_b/status.json",{"status":phase_b_status,"reason":phase_b_reason,"execution_count":0}); store.write_json("alpha/status.json",{"status":"NOT_EXECUTED","reason":phase_b_reason,"alpha_executed":False}); after=preservation_snapshot(root)
  if after!=before: raise RuntimeError("V1-V4 preservation violation")
- store.write_json("preservation_manifest.json",{"before":before,"after":after,"preserved":True}); final={"status":status,"summary":"Three sealed Phase A candidates executed once against committed validated price-scaled data.","selectedCandidateId":cid,"frozenCandidateHash":frozen}; store.write_json("final_report.json",final); store.seal_integrity_manifest(); return final
+ store.write_json("preservation_manifest.json",{"before":before,"after":after,"preserved":True}); final={"status":status,"summary":"Three sealed Phase A candidates executed once against committed validated price-scaled data.","selectedCandidateId":cid,"frozenCandidateHash":frozen,"phaseBStatus":phase_b_status,"alphaStatus":"NOT_EXECUTED","freshRunPath":str(store.root)}; store.write_json("final_report.json",final); store.seal_integrity_manifest(); return final
