@@ -1,4 +1,5 @@
 // smithers-source: generated
+/// <reference types="node" />
 import { type AgentLike } from "smithers-orchestrator";
 import { CodexAgent as SmithersCodexAgent } from "smithers-orchestrator";
 // import { ClaudeCodeAgent as SmithersClaudeCodeAgent } from "smithers-orchestrator";
