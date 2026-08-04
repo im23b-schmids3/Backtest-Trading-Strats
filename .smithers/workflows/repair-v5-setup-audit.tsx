@@ -1,0 +1,7 @@
+/** @jsxImportSource smithers-orchestrator */
+import { createSmithers, Task } from "smithers-orchestrator";
+import { z } from "zod/v4";
+import { agents } from "../agents";
+const result=z.object({status:z.string(),summary:z.string(),testsPassed:z.boolean(),model:z.literal("gpt-5.6-terra")});
+const {Workflow,outputs,smithers}=createSmithers({result});
+export default smithers(()=> <Workflow name="repair-v5-setup-audit"><Task id="repair-v5-setup-audit" output={outputs.result} agent={agents.midTier} retries={1} timeoutMs={4*60*60_000} heartbeatTimeoutMs={20*60_000}>{`Work only in C:/Users/sandr/Trading-Bot-Fib. Repair only V5 per-setup audit trail/funnel reconciliation. Read completed diagnostic run cd7cebe39170a32538277db9 read-only; never mutate it. Do not change strategy parameters, entries/exits, gates/ranking, Phase B/Alpha behavior, and do not run any real study. Assign deterministic setup_id to every proposed zone; include it in events/trades; write setup_outcomes.json with exactly one terminal existing-behavior disposition per setup. ARMED/re-armed are transitions only. Reconcile proposed setups to terminal outcomes; executed outcomes to trades/report; events/trades must reference known setup IDs. Use synthetic tests proving rearming does not duplicate a setup and all three candidates reconcile while trading outcomes remain unchanged. Run focused V4/V5 tests, full research_pipeline tests using repository-local basetemp, compileall, diff check. Return schema-valid JSON model gpt-5.6-terra.`}</Task></Workflow>);
