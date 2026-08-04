@@ -19,6 +19,10 @@ from .v3_adapter import ImbalanceVWAPRideV3Adapter
 from .v3_models import ImbalanceVWAPRideV3Config
 from .v3_runner import run_sealed_v3_study
 from .v3_strategy import run_imbalance_vwap_ride_v3
+from .v4_adapter import ImbalanceVWAPRideV4Adapter
+from .v4_models import ImbalanceVWAPRideV4Config, preregistered_candidates
+from .v4_runner import run_sealed_v4_study
+from .v4_strategy import run_imbalance_vwap_ride_v4
 
 __all__ = [
     "ADAPTER_ID",
@@ -38,4 +42,9 @@ __all__ = [
     "ImbalanceVWAPRideV3Config",
     "run_imbalance_vwap_ride_v3",
     "run_sealed_v3_study",
+    "ImbalanceVWAPRideV4Adapter",
+    "ImbalanceVWAPRideV4Config",
+    "preregistered_candidates",
+    "run_imbalance_vwap_ride_v4",
+    "run_sealed_v4_study",
 ]

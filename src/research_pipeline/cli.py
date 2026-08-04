@@ -62,6 +62,16 @@ def _parser() -> argparse.ArgumentParser:
     command.add_argument("--data-manifest", default="data/value_area_trap/normalized/BTCUSDT/c2028fdd21bb69943820d532a592f13cd43f4ab18cc7b170b1e2b091a00202fc/manifest.json"); command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--footprint-cache-root", default="data/imbalance_vwap_ride/footprints"); command.add_argument("--batch-size", type=int, default=1_000_000); command.add_argument("--non-interactive", action="store_true")
     command = imbalance_sub.add_parser("run-btc-long-only-v3-study", help="download only the sealed six Binance months, validate/normalize, and execute V3")
     command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--data-cache-root", default="data/value_area_trap"); command.add_argument("--footprint-cache-root", default="data/imbalance_vwap_ride/v3/footprints"); command.add_argument("--batch-size", type=int, default=1_000_000); command.add_argument("--non-interactive", action="store_true")
+    command = imbalance_sub.add_parser("run-btc-long-only-v4-study", help="execute the sealed V4 Phase-A selection and conditional locked test")
+    command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--data-cache-root", default="data/value_area_trap"); command.add_argument("--footprint-cache-root", default="data/imbalance_vwap_ride/v4/footprints"); command.add_argument("--batch-size", type=int, default=1_000_000); command.add_argument("--alpha-rules-artifact"); command.add_argument("--non-interactive", action="store_true")
+    command = imbalance_sub.add_parser("validate-btc-long-only-v4-source", help="validate one exact V4 phase manifest without exposing aggregate rows")
+    command.add_argument("manifest"); command.add_argument("--phase", choices=["PHASE_A", "PHASE_B"], required=True); command.add_argument("--skip-archive-verification", action="store_true")
+    command = imbalance_sub.add_parser("validate-btc-long-only-v4-artifacts", help="verify immutable V4 artifact identities and content hashes")
+    command.add_argument("artifact_root")
+    command = imbalance_sub.add_parser("run-btc-long-only-v5-study", help="execute V5 local-only price-scaled-bin preflight and artifacts")
+    command.add_argument("--artifact-root", default="research_runs"); command.add_argument("--repository-root", default="."); command.add_argument("--non-interactive", action="store_true")
+    command = imbalance_sub.add_parser("validate-btc-long-only-v5-artifacts", help="verify immutable V5 artifact identities and content hashes")
+    command.add_argument("artifact_root")
     command = value_area_sub.add_parser("download"); command.add_argument("month", help="YYYY-MM"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--allow-network", action="store_true")
     command = value_area_sub.add_parser("import-archive"); command.add_argument("archive"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap")
     command = value_area_sub.add_parser("import-calendar"); command.add_argument("source"); command.add_argument("output")
@@ -350,11 +360,35 @@ def main(argv: list[str] | None = None) -> int:
                 result = verify_and_run_sealed_v2_study(data_manifest=args.data_manifest, artifact_root=args.artifact_root, repository_root=args.repository_root, footprint_cache_root=args.footprint_cache_root, batch_size=args.batch_size)
                 _print(result)
                 return 0 if result["status"] in {"COMPLETED", "DEVELOPMENT_EDGE_NOT_FOUND"} else 2
-            else:
+            elif args.imbalance_command == "run-btc-long-only-v3-study":
                 from .imbalance_vwap_ride.v3_runner import verify_and_run_sealed_v3_study
                 result = verify_and_run_sealed_v3_study(artifact_root=args.artifact_root, repository_root=args.repository_root, data_cache_root=args.data_cache_root, footprint_cache_root=args.footprint_cache_root, batch_size=args.batch_size, allow_authorized_downloads=True)
                 _print(result)
                 return 0 if result["status"] in {"COMPLETED", "DEVELOPMENT_EDGE_NOT_FOUND"} else 2
+            elif args.imbalance_command == "run-btc-long-only-v4-study":
+                from .imbalance_vwap_ride.v4_runner import verify_and_run_sealed_v4_study
+                result = verify_and_run_sealed_v4_study(artifact_root=args.artifact_root, repository_root=args.repository_root, data_cache_root=args.data_cache_root, footprint_cache_root=args.footprint_cache_root, batch_size=args.batch_size, allow_authorized_downloads=True, alpha_rules_artifact=args.alpha_rules_artifact)
+                _print(result)
+                return 0 if result["status"] in {"PHASE_A_NO_ROBUST_CANDIDATE", "LOCKED_TEST_FAILED", "LOCKED_TEST_PASSED"} else 2
+            elif args.imbalance_command == "validate-btc-long-only-v4-source":
+                from .imbalance_vwap_ride.v4_data import validate_v4_source_manifest
+                report = validate_v4_source_manifest(args.manifest, phase=args.phase, verify_archives=not args.skip_archive_verification)
+                _print({key: value for key, value in report.items() if key != "manifest"})
+                return 0 if report["valid"] else 2
+            elif args.imbalance_command == "validate-btc-long-only-v4-artifacts":
+                from .imbalance_vwap_ride.v4_artifacts import validate_v4_artifact_tree
+                report = validate_v4_artifact_tree(args.artifact_root)
+                _print(report)
+                return 0 if report["valid"] else 2
+            elif args.imbalance_command == "run-btc-long-only-v5-study":
+                from .imbalance_vwap_ride.v5_runner import verify_and_run_sealed_v5_study
+                result = verify_and_run_sealed_v5_study(artifact_root=args.artifact_root, repository_root=args.repository_root)
+                _print(result)
+                return 0 if result["status"] == "PHASE_A_NO_ROBUST_CANDIDATE" else 2
+            elif args.imbalance_command == "validate-btc-long-only-v5-artifacts":
+                from .imbalance_vwap_ride.v5_artifacts import validate_v5_artifact_tree
+                _print(validate_v5_artifact_tree(args.artifact_root))
+                return 0
         elif args.command == "repository":
             from .repository.worktree_preflight import run_worktree_preflight
             report = run_worktree_preflight(args.repository_root, max_path_length=args.max_path_length, probe=args.probe)

@@ -55,3 +55,9 @@ htmlcov/
 
 # Local scratch prompts
 btc-study-prompt.txt
+
+# Smithers runtime state
+.smithers/*.db-shm
+.smithers/*.db-wal
+.smithers/*-logs.txt
+.smithers/*-inspect.json

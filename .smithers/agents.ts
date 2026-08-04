@@ -156,7 +156,7 @@ export const agents = {
   ],
   // Codex runs first. Later entries are runtime fallbacks and are invoked only if every Codex attempt fails.
   smart: [
-    providers.codexSol,
+    providers.codexTerra,
     // providers.claude,
     // providers.claudeOpus,
     // providers.opencode,
@@ -168,7 +168,7 @@ export const agents = {
   ],
   // Codex runs first. Later entries are runtime fallbacks and are invoked only if every Codex attempt fails.
   review: [
-    providers.codexSol,
+    providers.codexTerra,
     // providers.claude,
     // providers.claudeOpus,
     // providers.claudeSonnet,
@@ -180,7 +180,7 @@ export const agents = {
   ],
   // Codex runs first. Later entries are runtime fallbacks and are invoked only if every Codex attempt fails.
   planning: [
-    providers.codexSol,
+    providers.codexTerra,
     // providers.claude,
     // providers.claudeOpus,
     // providers.claudeSonnet,
@@ -191,7 +191,7 @@ export const agents = {
   ],
   // Codex runs first. Later entries are runtime fallbacks and are invoked only if every Codex attempt fails.
   orchestrator: [
-    providers.codexSol,
+    providers.codexTerra,
     // providers.claude,
     // providers.claudeOpus,
     // providers.kimi,

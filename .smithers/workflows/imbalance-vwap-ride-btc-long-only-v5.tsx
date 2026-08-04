@@ -1,0 +1,19 @@
+/** @jsxImportSource smithers-orchestrator */
+import { createSmithers, Sequence, Task } from "smithers-orchestrator";
+import { z } from "zod/v4";
+import { agents } from "../agents";
+
+const implementation = z.object({ status: z.string(), summary: z.string(), testsPassed: z.boolean(), model: z.literal("gpt-5.6-terra") });
+const phaseAData = z.object({ status: z.string(), summary: z.string(), archiveCount: z.number().int(), datasetHash: z.string().nullable(), footprintHash: z.string().nullable(), model: z.literal("gpt-5.6-terra") });
+const selection = z.object({ status: z.string(), summary: z.string(), selectedCandidateId: z.string().nullable(), frozenCandidateHash: z.string().nullable(), model: z.literal("gpt-5.6-terra") });
+const finalResult = z.object({ status: z.string(), summary: z.string(), finalReportPath: z.string().nullable(), phaseBStatus: z.string().nullable(), alphaStatus: z.string().nullable(), model: z.literal("gpt-5.6-terra") });
+const { Workflow, outputs, smithers } = createSmithers({ implementation, phaseAData, selection, finalResult });
+const root = "C:/Users/sandr/Trading-Bot-Fib";
+const spec = `${root}/.smithers/specs/imbalance-vwap-ride-btc-long-only-v5.md`;
+
+export default smithers(() => <Workflow name="imbalance-vwap-ride-btc-long-only-v5"><Sequence>
+  <Task id="implement-and-verify-v5" output={outputs.implementation} agent={agents.midTier} retries={1} timeoutMs={4 * 60 * 60_000} heartbeatTimeoutMs={20 * 60_000}>{`You are a Codex Terra Medium V5 implementation node. Read ${spec} completely. Work only in ${root}. Implement V5 code, CLI, artifacts, and focused tests. Do not use external market data or real execution in this node. Preserve V1-V4, especially completed V4 artifacts. Run focused V5 tests, full research_pipeline tests, compileall, and diff check; repair only V5/relevant integration defects. Do not send raw rows/secrets. Return schema-valid JSON with model exactly gpt-5.6-terra.`}</Task>
+  <Task id="acquire-and-validate-phase-a-v5" output={outputs.phaseAData} agent={agents.midTier} retries={1} timeoutMs={12 * 60 * 60_000} heartbeatTimeoutMs={30 * 60_000}>{`You are a Codex Terra Medium V5 Phase A data node. Read ${spec}. Work only in ${root}. After verifying V5 gates remain valid, acquire/reuse/validate/normalize atomically only official BTCUSDT USD-M months 2023-01..2024-01 and build V5 scaled 5m/footprint data. Do not run candidates or Phase B. Do not modify V1-V4 or transmit raw rows. Persist resumable checkpoints. Return schema-valid JSON with model exactly gpt-5.6-terra.`}</Task>
+  <Task id="execute-phase-a-select-freeze-v5" output={outputs.selection} agent={agents.midTier} retries={1} timeoutMs={12 * 60 * 60_000} heartbeatTimeoutMs={30 * 60_000}>{`You are a Codex Terra Medium V5 selection node. Read ${spec}. Work only in ${root} with committed V5 Phase A data. Run exactly three sealed V5 candidates once over the 13-month Phase A period, persist required artifacts, apply literal gates/ranking, and freeze at most one. If none pass, write PHASE_A_NO_ROBUST_CANDIDATE and do not open Phase B/Alpha. Preserve V1-V4 and do not transmit raw rows. Return schema-valid JSON with model exactly gpt-5.6-terra.`}</Task>
+  <Task id="phase-b-alpha-finalize-v5" output={outputs.finalResult} agent={agents.midTier} retries={1} timeoutMs={12 * 60 * 60_000} heartbeatTimeoutMs={30 * 60_000}>{`You are a Codex Terra Medium V5 terminal node. Read ${spec}. Work only in ${root}. If Phase A selected no candidate, validate/finalize without Phase B/Alpha. If frozen, acquire/reuse/validate only 2024-02..2024-07, execute the frozen candidate exactly once, enforce locked gates, and only on pass refresh official Alpha/MBT rules and run the Phase-B-only proxy. Persist final and preservation artifacts. No V1-V4 mutation, raw-row disclosure, secrets, or live orders. Return schema-valid JSON with model exactly gpt-5.6-terra.`}</Task>
+</Sequence></Workflow>);
