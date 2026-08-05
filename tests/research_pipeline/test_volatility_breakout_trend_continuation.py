@@ -187,6 +187,38 @@ def test_17_every_event_and_trade_reference_a_valid_setup():
     assert all(item["terminal_disposition"] == "TRADE_EXECUTED" for item in setups if item["trade_id"])
 
 
+def test_17a_non_executed_setup_has_exactly_proposed_and_terminal_events():
+    rows = _bars()
+    for row in rows:
+        row.update(open="100", high="100.2", low="99.8", close="100")
+    setups, events, trades = runner.evaluate_bars(rows, "VBTC-V1-1P5R", Decimal("1.5"))
+    summary = runner.reconciliation_summary(setups, events, trades)
+    assert not trades and summary["actual_events"] == 2 * summary["proposed_setups"]
+    first = events[0]["setup_id"]
+    assert Counter(item["type"] for item in events if item["setup_id"] == first) == Counter({"PROPOSED_SETUP": 1, "TREND_FILTER_REJECTED": 1})
+
+
+def test_17b_executed_setup_has_one_additional_entry_event():
+    setups, events, trade = _executed(_bars())
+    summary = runner.reconciliation_summary(setups, events, [trade])
+    types = Counter(item["type"] for item in events if item["setup_id"] == trade["setup_id"])
+    assert types == Counter({"PROPOSED_SETUP": 1, "ENTRY": 1, "TRADE_EXECUTED": 1})
+    assert summary["formula"] == "events == 2 * proposed_setups + executed_trades"
+
+
+def test_17c_aggregate_event_formula_matches_complete_audit_trail():
+    setups, events, trade = _executed(_bars())
+    summary = runner.reconciliation_summary(setups, events, [trade])
+    assert summary["actual_events"] == summary["expected_events"] == 2 * len(setups) + 1
+
+
+@pytest.mark.parametrize("mutate", [lambda events: events[:-1], lambda events: events + [dict(events[0])]])
+def test_17d_missing_or_duplicate_events_fail_reconciliation(mutate):
+    setups, events, trade = _executed(_bars())
+    with pytest.raises(ValueError, match="RECONCILIATION"):
+        runner.reconciliation_summary(setups, mutate(events), [trade])
+
+
 def test_18_long_and_short_accounting_have_signed_pnl():
     long_trade = _executed(_bars("LONG"))[2]; short_trade = _executed(_bars("SHORT"))[2]
     assert Decimal(long_trade["net_pnl"]) != 0 and Decimal(short_trade["net_pnl"]) != 0

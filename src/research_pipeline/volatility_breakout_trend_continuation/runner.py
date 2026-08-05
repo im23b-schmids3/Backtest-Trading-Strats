@@ -175,12 +175,56 @@ def evaluate_bars(bars: list[dict[str,Any]], candidate_id: str, target_r: Decima
             setups.append(base)
     validate_reconciliation(setups,events,trades); return setups,events,trades
 
-def validate_reconciliation(setups,events,trades):
-    ids=[x["setup_id"] for x in setups]; known=set(ids)
-    event_ids=[x["event_id"] for x in events]; trade_ids=[x["trade_id"] for x in trades]
-    if len(ids)!=len(known) or len(event_ids)!=len(set(event_ids)) or len(trade_ids)!=len(set(trade_ids)) or any(x["terminal_disposition"] not in DISPOSITIONS for x in setups) or any(x["setup_id"] not in known for x in events+trades): raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
-    executed={x["setup_id"] for x in setups if x["terminal_disposition"]=="TRADE_EXECUTED"}
-    if executed!={x["setup_id"] for x in trades} or any(x.get("trade_id") not in set(trade_ids) for x in setups if x["terminal_disposition"]=="TRADE_EXECUTED") or any(not any(event["type"]==setup["terminal_disposition"] for event in events if event["setup_id"]==setup["setup_id"]) for setup in setups): raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
+def reconciliation_summary(setups: list[dict[str, Any]], events: list[dict[str, Any]], trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Validate the sealed VBTC event audit trail and return its exact formula.
+
+    Every proposed setup emits exactly two events: ``PROPOSED_SETUP`` and its
+    sole terminal disposition.  A setup that executes emits one additional
+    ``ENTRY`` event.  Price exits are fields of the trade, not setup events.
+    """
+    setup_ids = [item["setup_id"] for item in setups]
+    known_setups = set(setup_ids)
+    event_ids = [item["event_id"] for item in events]
+    trade_ids = [item["trade_id"] for item in trades]
+    if len(setup_ids) != len(known_setups) or len(event_ids) != len(set(event_ids)) or len(trade_ids) != len(set(trade_ids)):
+        raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
+    if any(item.get("terminal_disposition") not in DISPOSITIONS for item in setups) or any(item.get("setup_id") not in known_setups for item in events + trades):
+        raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
+
+    terminal_by_setup = {item["setup_id"]: item["terminal_disposition"] for item in setups}
+    executed_setups = {setup_id for setup_id, disposition in terminal_by_setup.items() if disposition == "TRADE_EXECUTED"}
+    trades_by_setup = {item["setup_id"]: item for item in trades}
+    if executed_setups != set(trades_by_setup) or len(trades_by_setup) != len(trades):
+        raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
+    if any(item.get("trade_id") != trades_by_setup[item["setup_id"]].get("trade_id") for item in setups if item["terminal_disposition"] == "TRADE_EXECUTED"):
+        raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
+    if any(item.get("trade_id") is not None for item in setups if item["terminal_disposition"] != "TRADE_EXECUTED"):
+        raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
+
+    events_by_setup: dict[str, list[dict[str, Any]]] = {setup_id: [] for setup_id in known_setups}
+    for event in events:
+        events_by_setup[event["setup_id"]].append(event)
+    for setup_id, terminal in terminal_by_setup.items():
+        types = [event["type"] for event in events_by_setup[setup_id]]
+        expected = ["PROPOSED_SETUP", terminal] + (["ENTRY"] if terminal == "TRADE_EXECUTED" else [])
+        if Counter(types) != Counter(expected):
+            raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
+
+    expected_events = 2 * len(setups) + len(trades)
+    if len(events) != expected_events:
+        raise ValueError("VBTC_V1_RECONCILIATION_FAILURE")
+    return {
+        "formula": "events == 2 * proposed_setups + executed_trades",
+        "proposed_setups": len(setups),
+        "executed_trades": len(trades),
+        "expected_events": expected_events,
+        "actual_events": len(events),
+        "reconciles": True,
+    }
+
+
+def validate_reconciliation(setups, events, trades) -> None:
+    reconciliation_summary(setups, events, trades)
 
 def _load_phase_a_bars(manifest_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Read only files declared by the already-hashed Phase-A manifest."""
@@ -279,7 +323,9 @@ def run_phase_a(*,phase_a_bars_manifest:str|Path,artifact_root:str|Path,reposito
     results=[]
     for candidate_id,target_r in CANDIDATES:
         setups,events,trades=evaluate_bars(bars,candidate_id,target_r)
-        metrics=_metrics(trades,setups); reconciles=(len(setups)==sum(metrics["outcome_counts"].values()) and metrics["outcome_counts"].get("TRADE_EXECUTED",0)==len(trades) and len(events)==len(trades))
+        metrics=_metrics(trades,setups)
+        event_reconciliation=reconciliation_summary(setups,events,trades)
+        reconciles=(len(setups)==sum(metrics["outcome_counts"].values()) and metrics["outcome_counts"].get("TRADE_EXECUTED",0)==len(trades) and event_reconciliation["reconciles"])
         gates=_gates(metrics,trades,reconciles)
         configuration={**common,"candidate_id":candidate_id,"target_r":str(target_r),"execution_assumption_hash":execution_hash,"code_revision":revision,"formula":"sealed VBTC V1 EMA20/EMA50/ATR14 next-open design","configuration_hash":_hash({"candidate_id":candidate_id,"target_r":str(target_r),"execution_assumption_hash":execution_hash,"specification_sha256":SPEC_SHA256})}
         store.write("configuration.json",configuration,candidate_id)
@@ -287,7 +333,7 @@ def run_phase_a(*,phase_a_bars_manifest:str|Path,artifact_root:str|Path,reposito
         store.write("trades.json",{**common,"candidate_id":candidate_id,"trades":trades},candidate_id)
         store.write("setup_outcomes.json",{**common,"candidate_id":candidate_id,"setup_outcomes":setups},candidate_id)
         store.write("monthly_metrics.json",{**common,"candidate_id":candidate_id,"monthly_results":metrics["monthly_results"],"zero_trade_months":sum(Decimal(value)==0 for value in metrics["monthly_net_pnl"].values())},candidate_id)
-        store.write("report.json",{**common,"candidate_id":candidate_id,**{key:value for key,value in metrics.items() if key != "net_r"},"funnel_reconciliation":{"proposed_setups":len(setups),"disposition_sum":sum(metrics["outcome_counts"].values()),"executed":metrics["outcome_counts"].get("TRADE_EXECUTED",0),"trades":len(trades),"events":len(events),"reconciles":reconciles}},candidate_id)
+        store.write("report.json",{**common,"candidate_id":candidate_id,**{key:value for key,value in metrics.items() if key != "net_r"},"funnel_reconciliation":{"proposed_setups":len(setups),"disposition_sum":sum(metrics["outcome_counts"].values()),"executed":metrics["outcome_counts"].get("TRADE_EXECUTED",0),"trades":len(trades),"events":len(events),"event_lifecycle":event_reconciliation,"reconciles":reconciles}},candidate_id)
         store.write("gates.json",{**common,"candidate_id":candidate_id,**gates},candidate_id)
         results.append((candidate_id,configuration,metrics,gates))
     passing=sorted((item for item in results if item[3]["passed"]),key=lambda item:(-Decimal(item[2]["average_net_r"]),-Decimal(item[2]["net_profit_factor"]),Decimal(item[2]["maximum_drawdown_r"]),item[0]))
