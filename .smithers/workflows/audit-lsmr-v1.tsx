@@ -1,0 +1,7 @@
+/** @jsxImportSource smithers-orchestrator */
+import { createSmithers, Task } from "smithers-orchestrator";
+import { z } from "zod/v4";
+import { agents } from "../agents";
+const result=z.object({status:z.string(),summary:z.string(),testsPassed:z.boolean(),phaseBManifest:z.string().nullable(),model:z.literal("gpt-5.6-terra")});
+const {Workflow,outputs,smithers}=createSmithers({result});
+export default smithers(()=> <Workflow name="audit-lsmr-v1"><Task id="audit-lsmr-v1" output={outputs.result} agent={agents.midTier} retries={1} timeoutMs={3*60*60_000} heartbeatTimeoutMs={20*60_000}>{`Read C:/Users/sandr/Trading-Bot-Fib/.smithers/specs/liquidity-sweep-mean-reversion-v1.md completely; fail MISSING_SEALED_LSMR_SPECIFICATION if invalid. Audit and complete only existing src/research_pipeline/liquidity_sweep_mean_reversion implementation, src/research_pipeline/cli.py, and .smithers/workflows/liquidity-sweep-mean-reversion-v1-candidate.tsx. Never execute real Phase A/B/Alpha/candidates and never read, acquire, or modify market data. Preserve every sealed parameter and gate. Expand test_liquidity_sweep_mean_reversion.py from 2 tests to cover all 28 explicit scenarios in the current user request, using synthetic bars/fixtures only. Fix only defects found by those tests. Run the exact focused/full pytest commands requested, compileall, diff check, and candidate workflow graph validation. Return schema-valid JSON model gpt-5.6-terra.`}</Task></Workflow>);

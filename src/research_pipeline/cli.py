@@ -73,6 +73,9 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("v5-candidate-run", help="execute the sealed V5 Phase-A candidates exactly once")
     command.add_argument("--phase-a-manifest", required=True)
     command.add_argument("--artifact-root", required=True)
+    command = sub.add_parser("lsmr-v1-materialize", help="materialize the sealed LSMR V1 synthetic-only contract; never executes candidates")
+    command.add_argument("--artifact-root", required=True)
+    command.add_argument("--repository-root", default=".")
     command = imbalance_sub.add_parser("validate-btc-long-only-v5-artifacts", help="verify immutable V5 artifact identities and content hashes")
     command.add_argument("artifact_root")
     command = value_area_sub.add_parser("download"); command.add_argument("month", help="YYYY-MM"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--allow-network", action="store_true")
@@ -236,12 +239,15 @@ def main(argv: list[str] | None = None) -> int:
         # are explicitly controlled by their own output arguments.
         controller = None
         registry = None
-        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository", "v5-candidate-run"}:
+        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository", "v5-candidate-run", "lsmr-v1-materialize"}:
             controller = _controller(args.registry)
             registry = controller.registry
         if args.command == "v5-candidate-run":
             from .imbalance_vwap_ride.v5_runner import run_v5_candidate_cli
             _print(run_v5_candidate_cli(phase_a_manifest=args.phase_a_manifest, artifact_root=args.artifact_root))
+        elif args.command == "lsmr-v1-materialize":
+            from .liquidity_sweep_mean_reversion.runner import materialize_lsmr_v1_contract
+            _print(materialize_lsmr_v1_contract(artifact_root=args.artifact_root, repository_root=args.repository_root))
         elif args.command == "init":
             print(f"initialized registry: {Path(args.registry)}")
         elif args.command == "value-area-trap":
