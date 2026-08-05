@@ -77,11 +77,25 @@ def validate_synthetic_bars(bars:list[dict[str,Any]])->None:
             raise ValueError("VBTC_V2_SYNTHETIC_CHRONOLOGY_INVALID")
         previous=stamp
 
-def evaluate_bars(bars:list[dict[str,Any]],candidate_id:str="VBTC-V2-2P5R",target_r:Decimal=Decimal('2.5')) -> tuple[list[dict[str,Any]],list[dict[str,Any]],list[dict[str,Any]]]:
+def validate_real_phase_a_bars(bars:list[dict[str,Any]])->None:
+    """Validate loaded V5 bars without imposing synthetic gap-free cadence."""
+    previous:datetime|None=None
+    allowed=set(PHASE_A_MONTHS)
+    for bar in bars:
+        stamp=_timestamp(bar["timestamp"])
+        if stamp.strftime("%Y-%m") not in allowed:
+            raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
+        if previous is not None and stamp <= previous:
+            raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
+        previous=stamp
+    if not previous:
+        raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
+
+def evaluate_bars(bars:list[dict[str,Any]],candidate_id:str="VBTC-V2-2P5R",target_r:Decimal=Decimal('2.5'), *, synthetic:bool=True) -> tuple[list[dict[str,Any]],list[dict[str,Any]],list[dict[str,Any]]]:
     """Pure in-memory V2 evaluator.  It never opens manifests or market data."""
     if candidate_id not in dict(CANDIDATES):raise ValueError("VBTC_V2_UNREGISTERED_CANDIDATE")
     if target_r != dict(CANDIDATES)[candidate_id]: raise ValueError("VBTC_V2_TARGET_REGISTRY_MISMATCH")
-    validate_synthetic_bars(bars)
+    (validate_synthetic_bars if synthetic else validate_real_phase_a_bars)(bars)
     closes=[_d(b['close']) for b in bars]; e20,e50,atr=_ema(closes,20),_ema(closes,50),_atr(bars)
     setups=[];events=[];trades=[];claimed=set();active_until=-1;cooldown={"LONG":-1,"SHORT":-1}; qty=(_cfg.quantity_btc/_cfg.quantity_step).to_integral_value(rounding=ROUND_FLOOR)*_cfg.quantity_step
     for t in range(50,len(bars)-1):
@@ -245,7 +259,16 @@ def _load_phase_a_bars(manifest_path:Path)->tuple[dict[str,Any],list[dict[str,An
             rows.append(row)
     rows.sort(key=lambda x:_timestamp(x["timestamp"])); stamps=[_timestamp(x["timestamp"]) for x in rows]
     if not stamps or any(a>=b for a,b in zip(stamps,stamps[1:])): raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
+    validate_real_phase_a_bars(rows)
     return manifest,rows
+
+def phase_a_gap_diagnostic(manifest_path:Path)->dict[str,Any]:
+    """Read-only diagnostics for the already-validated V5 Phase-A bars."""
+    _,rows=_load_phase_a_bars(manifest_path)
+    stamps=[_timestamp(row["timestamp"]) for row in rows]
+    deltas=[later-earlier for earlier,later in zip(stamps,stamps[1:])]
+    gaps=[delta for delta in deltas if delta>timedelta(minutes=5)]
+    return {"total_loaded_rows":len(rows),"minimum_timestamp":_stamp(stamps[0]),"maximum_timestamp":_stamp(stamps[-1]),"duplicate_timestamp_count":0,"non_increasing_timestamp_count":0,"adjacent_gaps_greater_than_five_minutes":len(gaps),"largest_adjacent_gap":str(max(gaps,default=timedelta()))}
 
 def _metrics(trades:list[dict[str,Any]],setups:list[dict[str,Any]])->dict[str,Any]:
     pnl=[_d(x["net_pnl"]) for x in trades]; nr=[_d(x["net_r"]) for x in trades]; positive=sum((x for x in pnl if x>0),Decimal()); negative=-sum((x for x in pnl if x<0),Decimal())
@@ -279,7 +302,7 @@ def run_phase_a(*,phase_a_bars_manifest:str|Path,artifact_root:str|Path,reposito
     store.write("sealed-specification.json",{**common,"text":(root/SPEC_PATH).read_text(encoding="utf-8"),"seal_status":"SEALED"}); store.write("candidate-registry.json",{**common,"candidates":[{"candidate_id":x,"target_r":str(y)} for x,y in CANDIDATES],"only_target_differs":True}); store.write("data-manifest.json",{**common,"identity":payload["identity"],"validated":True,"phase_b":"NOT_OPENED"})
     results=[]
     for cid,target in CANDIDATES:
-        setups,events,trades=evaluate_bars(bars,cid,target); rec=reconciliation_summary(setups,events,trades); metrics=_metrics(trades,setups); gates=_gates(metrics,trades,rec["reconciles"]); config={**common,"candidate_id":cid,"target_r":str(target),"execution_assumption_hash":_hash(EXECUTION_ASSUMPTIONS),"code_revision":revision}
+        setups,events,trades=evaluate_bars(bars,cid,target,synthetic=False); rec=reconciliation_summary(setups,events,trades); metrics=_metrics(trades,setups); gates=_gates(metrics,trades,rec["reconciles"]); config={**common,"candidate_id":cid,"target_r":str(target),"execution_assumption_hash":_hash(EXECUTION_ASSUMPTIONS),"code_revision":revision}
         for name,data in (("configuration.json",config),("events.json",{**common,"candidate_id":cid,"events":events}),("trades.json",{**common,"candidate_id":cid,"trades":trades}),("setup_outcomes.json",{**common,"candidate_id":cid,"setup_outcomes":setups}),("monthly_metrics.json",{**common,"candidate_id":cid,"monthly_net_pnl":metrics["monthly_net_pnl"]}),("report.json",{**common,"candidate_id":cid,**metrics,"event_reconciliation":rec}),("gates.json",{**common,"candidate_id":cid,**gates})): store.write(name,data,cid)
         results.append((cid,config,metrics,gates))
     passing=sorted((x for x in results if x[3]["passed"]),key=lambda x:(-Decimal(x[2]["average_net_r"]),-Decimal(x[2]["net_profit_factor"]),Decimal(x[2]["maximum_drawdown_r"]),x[0])); chosen=passing[0] if passing else None

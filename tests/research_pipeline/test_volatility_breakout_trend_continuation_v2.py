@@ -220,6 +220,22 @@ def test_synthetic_bar_integrity_rejections(mutation):
     with pytest.raises(ValueError): v2.validate_synthetic_bars(data)
 
 
+def test_real_phase_a_style_gaps_are_allowed_but_synthetic_gaps_are_not():
+    data=bars(3); data[2]["timestamp"]="2023-01-01T00:20:00Z"
+    v2.validate_real_phase_a_bars(data)
+    with pytest.raises(ValueError, match="SYNTHETIC_CHRONOLOGY"): v2.validate_synthetic_bars(data)
+
+
+@pytest.mark.parametrize("mutation", ["duplicate", "decreasing", "non_utc", "outside_phase_a"])
+def test_real_phase_a_chronology_fails_closed(mutation):
+    data=bars(3)
+    if mutation == "duplicate": data[2]["timestamp"]=data[1]["timestamp"]
+    elif mutation == "decreasing": data[2]["timestamp"]="2023-01-01T00:00:00Z"
+    elif mutation == "non_utc": data[2]["timestamp"]="2023-01-01T00:10:00+01:00"
+    else: data[2]["timestamp"]="2024-02-01T00:00:00Z"
+    with pytest.raises(ValueError): v2.validate_real_phase_a_bars(data)
+
+
 def test_synthetic_materialization_never_uses_market_paths(tmp_path, monkeypatch):
     root=tmp_path/"repo"; spec=root/v2.SPEC_PATH; spec.parent.mkdir(parents=True)
     source=Path(__file__).parents[2]/v2.SPEC_PATH; spec.write_bytes(source.read_bytes())
@@ -276,9 +292,9 @@ def test_temporary_parquet_fixture_validates_schema_without_real_data(tmp_path, 
     pa=pytest.importorskip("pyarrow"); pq=pytest.importorskip("pyarrow.parquet")
     fixture=tmp_path/"one.parquet"; stamps=[datetime(2023,1,1,tzinfo=timezone.utc), datetime(2023,1,1,0,5,tzinfo=timezone.utc)]
     pq.write_table(pa.table({"bar_start_utc":stamps,"open":[1.,1.],"high":[2.,2.],"low":[.5,.5],"close":[1.5,1.5],"volume":[1.,1.],"daily_vwap":[1.,1.]}), fixture)
-    manifest={"valid":True,"identity":{"phase":"PHASE_A","symbol":"BTCUSDT","bar_interval":"5m","months":["X"]},"parquet_files":[{"kind":"bars","month":"X","relative_path":"one.parquet","row_count":2,"sha256":v2._file_hash(fixture)}]}
+    manifest={"valid":True,"identity":{"phase":"PHASE_A","symbol":"BTCUSDT","bar_interval":"5m","months":["2023-01"]},"parquet_files":[{"kind":"bars","month":"2023-01","relative_path":"one.parquet","row_count":2,"sha256":v2._file_hash(fixture)}]}
     manifest_path=tmp_path/"manifest.json"; manifest_path.write_text(json.dumps(manifest))
-    monkeypatch.setattr(v2, "PHASE_A_MONTHS", ("X",)); monkeypatch.setattr(v2, "PHASE_A_START", stamps[0]); monkeypatch.setattr(v2, "PHASE_A_LAST", stamps[-1])
+    monkeypatch.setattr(v2, "PHASE_A_MONTHS", ("2023-01",)); monkeypatch.setattr(v2, "PHASE_A_START", stamps[0]); monkeypatch.setattr(v2, "PHASE_A_LAST", stamps[-1])
     _, loaded=v2._load_phase_a_bars(manifest_path)
     assert len(loaded) == 2 and loaded[0]["timestamp"].endswith("Z")
 
