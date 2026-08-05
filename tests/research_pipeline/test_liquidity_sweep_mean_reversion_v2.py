@@ -1,12 +1,17 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import hashlib
+import json
+import subprocess
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from research_pipeline.cli import main
 from research_pipeline.liquidity_sweep_mean_reversion.artifacts import validate_artifact_tree
 from research_pipeline.liquidity_sweep_mean_reversion_v2.models import LSMRV2Config, TERMINAL_DISPOSITIONS, preregistered_candidates
-from research_pipeline.liquidity_sweep_mean_reversion_v2.runner import materialize_lsmr_v2_strict_contract
+from research_pipeline.liquidity_sweep_mean_reversion_v2.runner import _load_phase_a_bars, materialize_lsmr_v2_strict_contract, run_lsmr_v2_phase_a
 from research_pipeline.liquidity_sweep_mean_reversion_v2.strategy import detect_setups, terminal_disposition, validate_setup_audit
 
 
@@ -64,3 +69,87 @@ def test_v2_synthetic_cli_is_deterministic_and_never_executes_a_study(tmp_path, 
     assert result["realStudyExecuted"] is False and validate_artifact_tree(result["artifactRoot"])["valid"]
     assert main(["lsmr-v2-strict-materialize", "--repository-root", str(root), "--artifact-root", str(tmp_path / "cli-runs")]) == 0
     assert '"realStudyExecuted": false' in capsys.readouterr().out
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _phase_a_manifest(tmp_path):
+    """Synthetic 5-minute OHLCV/VWAP data only; no repository market data is read."""
+    root = tmp_path / "bars"; root.mkdir()
+    start = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 31, 23, 55, tzinfo=timezone.utc)
+    rows_by_month = {}
+    stamp = start
+    while stamp <= end:
+        rows_by_month.setdefault(stamp.strftime("%Y-%m"), []).append({"timestamp": stamp, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 10.0, "daily_vwap": 100.0})
+        stamp += timedelta(minutes=5)
+    # Synthetic fixture mirrors the authorized count and documented source gaps:
+    # September has 8,637 rows, but timestamps remain strictly increasing.
+    rows_by_month["2023-09"] = [row for index, row in enumerate(rows_by_month["2023-09"]) if index not in {100, 200, 300}]
+    rows_by_month["2023-01"] = [row for index, row in enumerate(rows_by_month["2023-01"]) if index not in set(range(100, 388))]
+    files = []
+    for month, rows in rows_by_month.items():
+        path = root / f"{month}.parquet"; pq.write_table(pa.Table.from_pylist(rows), path)
+        files.append({"month": month, "relative_path": path.name, "row_count": len(rows), "sha256": _sha256(path)})
+    manifest = {"valid": True, "identity": {"phase": "PHASE_A", "symbol": "BTCUSDT", "bar_interval": "5m", "months": list(rows_by_month), "five_minute_bar_count": 113757, "study_start": start.isoformat(), "study_end": end.isoformat()}, "parquet_files": files}
+    path = root / "manifest.json"; path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path
+
+
+def _sealed_clean_repository(tmp_path):
+    root = tmp_path / "repo"; spec = root / ".smithers/specs/liquidity-sweep-mean-reversion-v2-strict.md"; spec.parent.mkdir(parents=True)
+    spec.write_text("# LiquiditySweepMeanReversion.BTC_LONG_SHORT_V2_STRICT_SELECTION\n", encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "tests@example.invalid"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Tests"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True); subprocess.run(["git", "commit", "-m", "sealed spec"], cwd=root, check=True, capture_output=True)
+    return root
+
+
+def test_v2_phase_a_manifest_is_gap_tolerant_but_strictly_ordered(tmp_path):
+    manifest = _phase_a_manifest(tmp_path)
+    _, _, bars, diagnostics = _load_phase_a_bars(manifest.resolve())
+    assert len(bars) == 113757 and diagnostics["partition_row_counts"]["2023-09"] == 8637
+    assert diagnostics["gap_count"] == 4 and all(bars[index]["timestamp"] < bars[index + 1]["timestamp"] for index in range(len(bars) - 1))
+
+
+@pytest.mark.parametrize("mutation, error", [
+    (lambda payload: payload["parquet_files"].pop(), "FILE_SET_INVALID"),
+    (lambda payload: payload["parquet_files"].append(dict(payload["parquet_files"][-1])), "FILE_SET_INVALID"),
+    (lambda payload: payload["parquet_files"].__setitem__(0, {**payload["parquet_files"][0], "month": "2022-12"}), "FILE_SET_INVALID"),
+    (lambda payload: payload["parquet_files"].reverse(), "FILE_SET_INVALID"),
+    (lambda payload: payload["parquet_files"].__setitem__(0, {**payload["parquet_files"][0], "sha256": "0" * 64}), "PARQUET_INVALID"),
+])
+def test_v2_phase_a_manifest_rejects_missing_duplicate_extra_and_hash_invalid_partitions(tmp_path, mutation, error):
+    manifest = _phase_a_manifest(tmp_path); payload = json.loads(manifest.read_text())
+    mutation(payload); manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match=error): _load_phase_a_bars(manifest.resolve())
+
+
+def test_v2_phase_a_workflow_validates_the_true_runtime_result_without_launching_it():
+    workflow = (__import__("pathlib").Path(__file__).parents[2] / ".smithers/workflows/liquidity-sweep-mean-reversion-v2-strict-phase-a.tsx").read_text(encoding="utf-8")
+    assert "realStudyExecuted: z.literal(true)" in workflow and "return result.parse(JSON.parse(stdout))" in workflow
+    assert "candidateExecutions: z.record(z.string(), z.literal(1))" in workflow and "Bun.spawn" in workflow
+
+
+def test_v2_synthetic_contract_has_required_unexecuted_artifacts_and_immutable_collision(tmp_path):
+    root = tmp_path / "repo"; spec = root / ".smithers/specs/liquidity-sweep-mean-reversion-v2-strict.md"; spec.parent.mkdir(parents=True)
+    spec.write_text("\n".join(["LiquiditySweepMeanReversion.BTC_LONG_SHORT_V2_STRICT_SELECTION", "LSMR-V2-2P0R=2R LSMR-V2-2P5R=2.5R LSMR-V2-3P0R=3R", "SESSION_CONTEXT_UNAVAILABLE TRADE_EXECUTED"]), encoding="utf-8")
+    result = materialize_lsmr_v2_strict_contract(repository_root=root, artifact_root=tmp_path / "runs")
+    artifact = __import__("pathlib").Path(result["artifactRoot"])
+    report = json.loads((artifact / "phase_a/candidates/LSMR-V2-2P0R/report.json").read_text())
+    assert result["realStudyExecuted"] is False and report["status"] == "NOT_EXECUTED"
+    assert {"terminal_dispositions", "annualized_trades", "long_trade_count", "short_trade_count", "monthly_results", "concentration_metrics", "bootstrap_summary", "sensitivity", "hard_gates", "overfrequency_warning"} <= set(report)
+    assert json.loads((artifact / "phase_b/locked-data-manifest.json").read_text())["status"] == "NOT_OPENED"
+    with pytest.raises(FileExistsError): materialize_lsmr_v2_strict_contract(repository_root=root, artifact_root=tmp_path / "runs")
+
+
+def test_v2_phase_a_rejects_relative_paths_and_manifest_tampering(tmp_path):
+    manifest = _phase_a_manifest(tmp_path)
+    with pytest.raises(ValueError, match="absolute path"):
+        _load_phase_a_bars("relative.json")
+    payload = json.loads(manifest.read_text()); payload["parquet_files"][0]["sha256"] = "0" * 64; manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="PARQUET_INVALID"):
+        _load_phase_a_bars(manifest.resolve())
