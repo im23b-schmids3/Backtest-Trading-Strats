@@ -6,7 +6,7 @@ const root = "C:/Users/sandr/Trading-Bot-Fib";
 const result = z.object({
   status: z.string(), selectedCandidateId: z.string().nullable(),
   phaseBStatus: z.literal("NOT_OPENED"), alphaStatus: z.literal("NOT_EXECUTED"),
-  artifactRoot: z.string(),
+  artifactRoot: z.string(), studyExecuted: z.literal(true),
 }).strict();
 const { outputs, smithers } = createSmithers({ result });
 
