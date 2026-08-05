@@ -195,14 +195,37 @@ def _assert_output_absent(artifact_root:Path)->None:
     intended=artifact_root/"research"/"volatility_breakout_trend_continuation"/"v2"/"phase_a"/f"study-{SPEC_SHA256}"
     if intended.exists(): raise FileExistsError("VBTC_V2_IMMUTABLE_OUTPUT_COLLISION")
 
+def _validate_phase_a_manifest_contract(manifest:dict[str,Any])->list[dict[str,Any]]:
+    """Validate V2's sealed 13-month manifest contract without inventing dates.
+
+    The V5 bars manifest deliberately defines chronology by its ordered month
+    identities and monthly parquet partitions; it has no top-level timestamps.
+    """
+    identity=manifest.get("identity")
+    if (not isinstance(identity,dict) or manifest.get("valid") is not True or
+        identity.get("phase")!="PHASE_A" or identity.get("symbol")!="BTCUSDT" or
+        identity.get("bar_interval")!="5m" or tuple(identity.get("months",()))!=PHASE_A_MONTHS):
+        raise ValueError("VBTC_V2_PHASE_A_MANIFEST_SCHEMA_INVALID")
+    files=manifest.get("parquet_files")
+    if not isinstance(files,list) or len(files)!=len(PHASE_A_MONTHS):
+        raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
+    months=[]
+    for item in files:
+        if (not isinstance(item,dict) or item.get("kind")!="bars" or
+            not isinstance(item.get("month"),str) or not isinstance(item.get("relative_path"),str) or
+            not isinstance(item.get("row_count"),int) or item["row_count"] < 0 or
+            not isinstance(item.get("sha256"),str) or len(item["sha256"])!=64):
+            raise ValueError("VBTC_V2_PHASE_A_MANIFEST_SCHEMA_INVALID")
+        months.append(item["month"])
+    if tuple(months)!=PHASE_A_MONTHS:
+        raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
+    return files
+
 def _load_phase_a_bars(manifest_path:Path)->tuple[dict[str,Any],list[dict[str,Any]]]:
     """Hash verification is performed by the caller before this function reads a bar."""
     try: manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError,json.JSONDecodeError) as exc: raise ValueError("VBTC_V2_PHASE_A_MANIFEST_SCHEMA_INVALID") from exc
-    identity=manifest.get("identity")
-    if not isinstance(identity,dict) or manifest.get("valid") is not True or identity.get("phase")!="PHASE_A" or identity.get("symbol")!="BTCUSDT" or identity.get("bar_interval")!="5m" or tuple(identity.get("months",()))!=PHASE_A_MONTHS: raise ValueError("VBTC_V2_PHASE_A_MANIFEST_SCHEMA_INVALID")
-    files=[x for x in manifest.get("parquet_files",[]) if isinstance(x,dict) and x.get("kind","bars")=="bars"]
-    if len(files)!=len(PHASE_A_MONTHS) or {x.get("month") for x in files}!=set(PHASE_A_MONTHS): raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
+    files=_validate_phase_a_manifest_contract(manifest)
     import pyarrow.parquet as pq
     rows=[]; required={"bar_start_utc","open","high","low","close","volume","daily_vwap"}
     for item in sorted(files,key=lambda x:x["month"]):
@@ -221,7 +244,7 @@ def _load_phase_a_bars(manifest_path:Path)->tuple[dict[str,Any],list[dict[str,An
             if any(not x.is_finite() for x in values.values()) or any(values[k]<=0 for k in ("open","high","low","close","daily_vwap")) or values["volume"]<0 or values["high"]<max(values["open"],values["close"]) or values["low"]>min(values["open"],values["close"]) or values["high"]<values["low"]: raise ValueError("VBTC_V2_PHASE_A_BAR_SCHEMA_INVALID")
             rows.append(row)
     rows.sort(key=lambda x:_timestamp(x["timestamp"])); stamps=[_timestamp(x["timestamp"]) for x in rows]
-    if not stamps or stamps[0]!=PHASE_A_START or stamps[-1]!=PHASE_A_LAST or any(a>=b or b-a!=timedelta(minutes=5) for a,b in zip(stamps,stamps[1:])): raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
+    if not stamps or any(a>=b for a,b in zip(stamps,stamps[1:])): raise ValueError("VBTC_V2_PHASE_A_CHRONOLOGY_INVALID")
     return manifest,rows
 
 def _metrics(trades:list[dict[str,Any]],setups:list[dict[str,Any]])->dict[str,Any]:

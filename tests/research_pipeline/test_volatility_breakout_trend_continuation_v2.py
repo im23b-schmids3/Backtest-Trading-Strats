@@ -244,11 +244,39 @@ def test_phase_a_requires_all_absolute_paths(tmp_path):
         v2.run_phase_a(phase_a_bars_manifest="relative", artifact_root=tmp_path, repository_root=tmp_path)
 
 
+def _phase_a_manifest(*, identity_months=None, file_months=None, **overrides):
+    months=list(identity_months or v2.PHASE_A_MONTHS)
+    files=[{"kind":"bars", "month":month, "relative_path":f"bars/{month}.parquet", "row_count":1, "sha256":"a"*64} for month in (file_months or months)]
+    manifest={"valid":True, "identity":{"phase":"PHASE_A", "symbol":"BTCUSDT", "bar_interval":"5m", "months":months}, "parquet_files":files}
+    manifest.update(overrides)
+    return manifest
+
+
+def test_v5_phase_a_manifest_month_contract_accepts_real_schema_shape():
+    assert [item["month"] for item in v2._validate_phase_a_manifest_contract(_phase_a_manifest())] == list(v2.PHASE_A_MONTHS)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "extra", "wrong_order", "wrong_phase", "wrong_symbol", "wrong_interval", "invalid", "non_bars", "disagree"])
+def test_v5_phase_a_manifest_month_contract_fails_closed(mutation):
+    manifest=_phase_a_manifest()
+    if mutation == "missing": manifest["parquet_files"]=manifest["parquet_files"][:-1]
+    elif mutation == "duplicate": manifest["parquet_files"][1]["month"]=manifest["parquet_files"][0]["month"]
+    elif mutation == "extra": manifest["parquet_files"].append({"kind":"bars","month":"2024-02","relative_path":"bars/2024-02.parquet","row_count":1,"sha256":"b"*64})
+    elif mutation == "wrong_order": manifest["parquet_files"][0],manifest["parquet_files"][1]=manifest["parquet_files"][1],manifest["parquet_files"][0]
+    elif mutation == "wrong_phase": manifest["identity"]["phase"]="PHASE_B"
+    elif mutation == "wrong_symbol": manifest["identity"]["symbol"]="ETHUSDT"
+    elif mutation == "wrong_interval": manifest["identity"]["bar_interval"]="1h"
+    elif mutation == "invalid": manifest["valid"]=False
+    elif mutation == "non_bars": manifest["parquet_files"][0]["kind"]="footprints"
+    else: manifest["identity"]["months"]=list(v2.PHASE_A_MONTHS[:-1])
+    with pytest.raises(ValueError): v2._validate_phase_a_manifest_contract(manifest)
+
+
 def test_temporary_parquet_fixture_validates_schema_without_real_data(tmp_path, monkeypatch):
     pa=pytest.importorskip("pyarrow"); pq=pytest.importorskip("pyarrow.parquet")
     fixture=tmp_path/"one.parquet"; stamps=[datetime(2023,1,1,tzinfo=timezone.utc), datetime(2023,1,1,0,5,tzinfo=timezone.utc)]
     pq.write_table(pa.table({"bar_start_utc":stamps,"open":[1.,1.],"high":[2.,2.],"low":[.5,.5],"close":[1.5,1.5],"volume":[1.,1.],"daily_vwap":[1.,1.]}), fixture)
-    manifest={"valid":True,"identity":{"phase":"PHASE_A","symbol":"BTCUSDT","bar_interval":"5m","months":["X"]},"parquet_files":[{"kind":"bars","month":"X","relative_path":"one.parquet","sha256":v2._file_hash(fixture)}]}
+    manifest={"valid":True,"identity":{"phase":"PHASE_A","symbol":"BTCUSDT","bar_interval":"5m","months":["X"]},"parquet_files":[{"kind":"bars","month":"X","relative_path":"one.parquet","row_count":2,"sha256":v2._file_hash(fixture)}]}
     manifest_path=tmp_path/"manifest.json"; manifest_path.write_text(json.dumps(manifest))
     monkeypatch.setattr(v2, "PHASE_A_MONTHS", ("X",)); monkeypatch.setattr(v2, "PHASE_A_START", stamps[0]); monkeypatch.setattr(v2, "PHASE_A_LAST", stamps[-1])
     _, loaded=v2._load_phase_a_bars(manifest_path)
