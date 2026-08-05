@@ -62,3 +62,4 @@ btc-study-prompt.txt
 .smithers/*-logs.txt
 .smithers/*-inspect.json
 .smithers/workflows/implement-lsmr-v1-phase-a.tsx
+.smithers/workflows/implement-lsmr-v2-strict.tsx
