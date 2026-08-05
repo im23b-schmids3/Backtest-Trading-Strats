@@ -6,7 +6,8 @@ import pytest
 from research_pipeline.cli import main
 from research_pipeline.liquidity_sweep_mean_reversion.artifacts import validate_artifact_tree
 from research_pipeline.liquidity_sweep_mean_reversion.models import LSMRConfig, TERMINAL_DISPOSITIONS, preregistered_candidates
-from research_pipeline.liquidity_sweep_mean_reversion.runner import materialize_lsmr_v1_contract
+from research_pipeline.liquidity_sweep_mean_reversion.runner import PHASE_A_BARS, materialize_lsmr_v1_contract, run_lsmr_v1_phase_a
+from research_pipeline.imbalance_vwap_ride.artifacts import sha256_file
 from research_pipeline.liquidity_sweep_mean_reversion.strategy import detect_setups, simulate_trade, terminal_disposition, validate_setup_audit
 
 
@@ -183,3 +184,49 @@ def test_28_synthetic_materialization_is_immutable_and_cli_safe(tmp_path, capsys
     with pytest.raises(FileExistsError): materialize_lsmr_v1_contract(repository_root=root, artifact_root=tmp_path / "runs")
     assert main(["lsmr-v1-materialize", "--repository-root", str(root), "--artifact-root", str(tmp_path / "cli-runs")]) == 0
     assert '"studyExecuted": false' in capsys.readouterr().out
+
+
+def _sealed_spec(root):
+    path = root / ".smithers/specs/liquidity-sweep-mean-reversion-v1.md"; path.parent.mkdir(parents=True)
+    path.write_text("\n".join(["LiquiditySweepMeanReversion.BTC_LONG_SHORT_V1_SPECIFICATION", "Phase A: 2023-01-01T00:00:00Z", "Phase B: 2024-02-01T00:00:00Z", "Same-bar ambiguity Stop first", "LSMR-V1-1P5R LSMR-V1-2P0R LSMR-V1-2P5R"]), encoding="utf-8")
+
+
+def _pinned_synthetic_phase_a_manifest(root):
+    import json
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    manifest_path = root / PHASE_A_BARS; manifest_path.parent.mkdir(parents=True)
+    files=[]
+    months=[f"2023-{m:02d}" for m in range(1, 13)]+["2024-01"]
+    for index, month in enumerate(months):
+        target=manifest_path.parent / "bars" / f"{month}.parquet"; target.parent.mkdir(exist_ok=True)
+        stamp=datetime(2023 + (index//12), (index%12)+1, 1, tzinfo=timezone.utc)
+        if month == "2024-01": stamp=datetime(2024,1,31,23,55,tzinfo=timezone.utc)
+        pq.write_table(pa.Table.from_pylist([{"bar_start_utc":stamp,"open":100,"high":101,"low":99,"close":100,"volume":10,"daily_vwap":100}]), target)
+        files.append({"kind":"bars","month":month,"relative_path":target.relative_to(manifest_path.parent).as_posix(),"sha256":sha256_file(target)})
+    manifest={"valid":True,"identity":{"phase":"PHASE_A","symbol":"BTCUSDT","bar_interval":"5m","months":months},"parquet_files":files}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _clean_git_repo(root):
+    import subprocess
+    subprocess.run(["git","init"],cwd=root,check=True,capture_output=True)
+    subprocess.run(["git","config","user.email","synthetic@example.test"],cwd=root,check=True)
+    subprocess.run(["git","config","user.name","Synthetic"],cwd=root,check=True)
+    subprocess.run(["git","add","."],cwd=root,check=True); subprocess.run(["git","commit","-m","sealed fixture"],cwd=root,check=True,capture_output=True)
+
+
+def test_29_real_cli_contract_executes_exactly_three_only_on_synthetic_pinned_fixture(tmp_path):
+    root=tmp_path/"repo"; root.mkdir(); _sealed_spec(root); _pinned_synthetic_phase_a_manifest(root); _clean_git_repo(root)
+    result=run_lsmr_v1_phase_a(repository_root=root,artifact_root=tmp_path/"runs")
+    assert result["status"] == "PHASE_A_NO_ROBUST_CANDIDATE" and result["phaseBStatus"] == "NOT_OPENED" and result["alphaStatus"] == "NOT_EXECUTED"
+    assert validate_artifact_tree(result["artifactRoot"])["valid"]
+    output_root=__import__("pathlib").Path(result["artifactRoot"])
+    assert {p.name for p in (output_root/"phase_a/candidates").iterdir()} == {"LSMR-V1-1P5R","LSMR-V1-2P0R","LSMR-V1-2P5R"}
+    assert all(__import__("json").loads((p/"configuration.json").read_text())["execution_count"] == 1 for p in (output_root/"phase_a/candidates").iterdir())
+
+
+def test_30_real_cli_contract_fails_closed_on_dirty_git_before_market_data_read(tmp_path):
+    root=tmp_path/"repo"; root.mkdir(); _sealed_spec(root); _pinned_synthetic_phase_a_manifest(root); _clean_git_repo(root); (root/"dirty.txt").write_text("x")
+    with pytest.raises(ValueError, match="LSMR_PHASE_A_REQUIRES_CLEAN_GIT"):
+        run_lsmr_v1_phase_a(repository_root=root,artifact_root=tmp_path/"runs")

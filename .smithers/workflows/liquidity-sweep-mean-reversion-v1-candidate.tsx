@@ -1,7 +1,24 @@
 /** @jsxImportSource smithers-orchestrator */
 import { createSmithers, Task, Workflow } from "smithers-orchestrator";
 import { z } from "zod/v4";
-import { agents } from "../agents";
 
-const { outputs, smithers } = createSmithers({ result: z.object({ status:z.string(), summary:z.string(), testsPassed:z.boolean(), phaseBManifest:z.string().nullable(), model:z.literal("gpt-5.6-terra") }).strict() });
-export default smithers(() => <Workflow name="liquidity-sweep-mean-reversion-v1-candidate"><Task id="materialize-synthetic-contract" output={outputs.result} agent={agents.midTier}>{"Work only in C:/Users/sandr/Trading-Bot-Fib. Read and validate .smithers/specs/liquidity-sweep-mean-reversion-v1.md; fail MISSING_SEALED_LSMR_SPECIFICATION if it is missing or invalid. Run synthetic tests only. Never execute Phase A, Phase B, Alpha, or a candidate CLI; never read, acquire, or modify market data. Preserve every sealed parameter and gate. Materialize only the sealed synthetic LSMR V1 contract and return the required strict JSON schema."}</Task></Workflow>);
+const root = "C:/Users/sandr/Trading-Bot-Fib";
+const result = z.object({
+  status: z.string(), selectedCandidateId: z.string().nullable(),
+  phaseBStatus: z.literal("NOT_OPENED"), alphaStatus: z.literal("NOT_EXECUTED"),
+  artifactRoot: z.string(),
+}).strict();
+const { outputs, smithers } = createSmithers({ result });
+
+async function executeFixedCli(): Promise<z.infer<typeof result>> {
+  const child = Bun.spawn(["python", "-m", "research_pipeline", "lsmr-v1-phase-a", "--repository-root", root, "--artifact-root", `${root}/research_runs`], { cwd: root, stdout: "pipe", stderr: "pipe" });
+  const stdout = await new Response(child.stdout).text();
+  const stderr = await new Response(child.stderr).text();
+  if (await child.exited !== 0) throw new Error(stderr || stdout || "lsmr-v1-phase-a failed");
+  return result.parse(JSON.parse(stdout));
+}
+
+// This sealed final-candidate workflow invokes the fixed deterministic Python CLI only.
+export default smithers(() => <Workflow name="liquidity-sweep-mean-reversion-v1-candidate">
+  <Task id="execute-three-sealed-phase-a-candidates" output={outputs.result} retries={0}>{executeFixedCli}</Task>
+</Workflow>);

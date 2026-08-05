@@ -60,7 +60,7 @@ def terminal_disposition(setup: dict[str, Any], bars: list[dict[str, Any]], conf
         entry = _d(bars[index+1]["open"]); stop = extreme - config.stop_buffer_ticks * config.price_tick if direction == "LONG" else extreme + config.stop_buffer_ticks * config.price_tick
         distance = abs(entry-stop)
         if distance < entry * config.minimum_stop_fraction or distance > entry * config.maximum_stop_fraction: return "STOP_DISTANCE_REJECTED", None
-        return "EXECUTED", {"setup_id": setup["setup_id"], "direction": direction, "entry_timestamp": _time(bars[index+1]).isoformat(), "entry_price": str(entry), "initial_stop_price": str(stop), "target_price": str(entry + config.target_r_multiple*distance if direction == "LONG" else entry-config.target_r_multiple*distance)}
+        return "EXECUTED", {"setup_id": setup["setup_id"], "direction": direction, "reclaim_index": index, "entry_timestamp": _time(bars[index+1]).isoformat(), "entry_price": str(entry), "initial_stop_price": str(stop), "target_price": str(entry + config.target_r_multiple*distance if direction == "LONG" else entry-config.target_r_multiple*distance)}
     return "RECLAIM_WINDOW_EXPIRED", None
 
 def simulate_trade(*, setup: dict[str, Any], reclaim_index: int, bars: list[dict[str, Any]], config: LSMRConfig) -> tuple[str, dict[str, Any] | None]:
