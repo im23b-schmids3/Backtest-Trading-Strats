@@ -111,7 +111,7 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("htf-lfvg-v2-synthetic-materialize", help="materialize only the sealed HTF LFVG V2 synthetic contract")
     command.add_argument("--artifact-root", required=True)
     command.add_argument("--repository-root", required=True)
-    command = sub.add_parser("htf-lfvg-v2-phase-a", help="reserved HTF LFVG V2 Phase-A contract; execution remains locked")
+    command = sub.add_parser("htf-lfvg-v2-phase-a", help="execute the sealed deterministic HTF LFVG V2 Phase-A candidates once")
     command.add_argument("--phase-a-bars-manifest", required=True)
     command.add_argument("--artifact-root", required=True)
     command.add_argument("--repository-root", required=True)

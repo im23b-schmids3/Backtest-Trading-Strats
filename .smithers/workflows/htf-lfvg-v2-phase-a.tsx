@@ -2,7 +2,15 @@
 import { createSmithers, Task, Workflow } from "smithers-orchestrator";
 import { z } from "zod/v4";
 
-const result = z.object({ status: z.string() }).passthrough();
+const result = z.object({
+  status: z.literal("COMPLETED"),
+  artifact_root: z.string(),
+  phase_a_result: z.literal("phase-a-result.json"),
+  phase_b_status: z.literal("NOT_OPENED"),
+  realPhaseAExecuted: z.literal(true),
+  phaseBExecuted: z.literal(false),
+  alphaExecuted: z.literal(false),
+}).strict();
 const { outputs, smithers } = createSmithers({ result });
 
 // Non-agent by design.  This is the sole future Phase-A invocation surface.

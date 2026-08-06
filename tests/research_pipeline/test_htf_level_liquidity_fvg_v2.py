@@ -1,6 +1,10 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from research_pipeline.htf_level_liquidity_fvg_v2 import Bar, CANDIDATES, HTFLevelLiquidityFVG, TerminalDisposition, materialize_synthetic, reconcile_events
@@ -54,7 +58,51 @@ def test_synthetic_diagnostic_is_read_only_and_real_lock_opens_no_market_data(tm
     fixture = tmp_path / "synthetic.json"; fixture.write_text(json.dumps({"synthetic_only":True,"bars":[{"time":"2023-01-01T00:00:00Z","open":1,"high":2,"low":.5,"close":1.5}]}))
     before = set(tmp_path.iterdir()); report = runner.synthetic_funnel_diagnostic(str(fixture)); assert before == set(tmp_path.iterdir()) and report["artifactWritten"] is False
     with pytest.raises(ValueError): runner.run_htf_lfvg_v2_phase_a(phase_a_bars_manifest="not-the-contract", artifact_root=str(tmp_path / "new"), repository_root=str(__import__("pathlib").Path.cwd()))
-    with pytest.raises(RuntimeError): runner.run_htf_lfvg_v2_phase_a(phase_a_bars_manifest=runner.PHASE_A_MANIFEST, artifact_root=str(tmp_path / "new"), repository_root=str(__import__("pathlib").Path.cwd()))
+    with pytest.raises(ValueError): runner.run_htf_lfvg_v2_phase_a(phase_a_bars_manifest="relative-manifest.json", artifact_root=str((tmp_path / "new").resolve()), repository_root=str(__import__("pathlib").Path.cwd()))
+
+
+def _v2_local_v5_manifest(tmp_path: Path) -> Path:
+    root = tmp_path / "local-v5"; files = []
+    for index, month in enumerate(__import__("research_pipeline.htf_level_liquidity_fvg.runner", fromlist=["PHASE_A_MONTHS"]).PHASE_A_MONTHS):
+        target = root / "bars" / f"{month}.parquet"; target.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.fromisoformat(f"{month}-01T00:00:00+00:00")
+        pq.write_table(pa.table({"bar_start_utc": pa.array([timestamp], type=pa.timestamp("us", tz="UTC")), "open": [100.0], "high": [101.0], "low": [99.0], "close": [100.5], "volume": [1.0]}), target)
+        files.append({"kind": "bars", "month": month, "relative_path": f"bars/{month}.parquet", "row_count": 1, "sha256": hashlib.sha256(target.read_bytes()).hexdigest()})
+    manifest = {"valid": True, "identity": {"phase": "PHASE_A", "symbol": "BTCUSDT", "bar_interval": "5m", "months": [item["month"] for item in files]}, "parquet_files": files, "five_minute_bar_count": 13}
+    path = root / "manifest.json"; path.write_text(json.dumps(manifest), encoding="utf-8")
+    return path.resolve()
+
+
+def test_v2_real_phase_a_fixture_accepts_exact_pinned_manifest_and_writes_final_root(tmp_path, monkeypatch):
+    manifest = _v2_local_v5_manifest(tmp_path); artifact = (tmp_path / "final-artifact").resolve()
+    monkeypatch.setattr(runner, "PHASE_A_MANIFEST", str(manifest)); monkeypatch.setattr(runner, "PHASE_A_TOTAL_ROWS", 13)
+    result = runner.run_htf_lfvg_v2_phase_a(phase_a_bars_manifest=str(manifest), artifact_root=str(artifact), repository_root=str(Path.cwd()))
+    assert result["artifact_root"] == str(artifact) and not (artifact / "phase_a").exists()
+    payload = json.loads((artifact / "phase-a-result.json").read_text())
+    assert payload["schema_version"].endswith(".v1") and payload["phase_b_status"] == "NOT_OPENED"
+    assert payload["phase_b_executed"] is False and payload["alpha_executed"] is False
+    assert {item["candidate_id"] for item in payload["candidates"]} == set(CANDIDATES)
+    required = {"candidate_id", "executed_trades", "annualized_trades", "net_pnl", "net_profit_factor", "average_net_r", "maximum_drawdown_r", "long_trades", "short_trades", "funnel_reconciliation", "gate_results", "terminal_disposition_counts", "phase_b_status"}
+    assert all(required <= set(item) and item["phase_b_status"] == "NOT_OPENED" for item in payload["candidates"])
+
+
+def test_v2_real_phase_a_fixture_rejects_existing_output_and_never_opens_phase_b(tmp_path, monkeypatch):
+    manifest = _v2_local_v5_manifest(tmp_path); artifact = (tmp_path / "already-there").resolve(); artifact.mkdir()
+    monkeypatch.setattr(runner, "PHASE_A_MANIFEST", str(manifest)); monkeypatch.setattr(runner, "PHASE_A_TOTAL_ROWS", 13)
+    with pytest.raises(FileExistsError):
+        runner.run_htf_lfvg_v2_phase_a(phase_a_bars_manifest=str(manifest), artifact_root=str(artifact), repository_root=str(Path.cwd()))
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda payload: payload.__setitem__("valid", False),
+    lambda payload: payload["parquet_files"].__setitem__(0, {**payload["parquet_files"][0], "relative_path": "../escape.parquet"}),
+    lambda payload: payload["parquet_files"].__setitem__(0, {**payload["parquet_files"][0], "sha256": "0" * 64}),
+    lambda payload: payload.__setitem__("five_minute_bar_count", 12),
+])
+def test_v2_local_v5_loader_fails_closed_for_manifest_contract(tmp_path, mutation):
+    manifest = _v2_local_v5_manifest(tmp_path); payload = json.loads(manifest.read_text()); mutation(payload); manifest.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        runner._load_sealed_v5_phase_a_bars(manifest)
 
 
 @pytest.mark.parametrize("candidate,threshold", sorted(CANDIDATES.items()))
