@@ -14,7 +14,10 @@ def touch(direction: str, bar: Bar, limit: Decimal) -> bool: return bar.low<=lim
 def create_setup(candidate: Candidate, direction: str, anchor: Bar, extreme: Bar) -> dict[str,Any]:
  anchor_price=anchor.low if direction=="LONG" else anchor.high
  extreme_price=extreme.high if direction=="LONG" else extreme.low
- sid=setup_id(candidate.candidate_id,direction,anchor.timestamp,anchor_price)
+ # The candidate's economic setup is unchanged.  The impulse coordinates are
+ # identity provenance so repeated impulses from one anchor have distinct,
+ # deterministic audit lifecycles.
+ sid=setup_id(candidate.candidate_id,direction,anchor.timestamp,anchor_price,extreme.timestamp,extreme_price)
  iid=impulse_id(sid,extreme.timestamp,extreme_price)
  low,high=(anchor_price,extreme_price) if direction=="LONG" else (extreme_price,anchor_price)
  if low>=high: return {"setup_id":sid,"direction":direction,"anchor_timestamp":anchor.timestamp,"anchor_price":anchor_price,"terminal":"FIB_RANGE_INVALID"}

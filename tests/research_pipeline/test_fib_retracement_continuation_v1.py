@@ -17,6 +17,7 @@ from research_pipeline.fib_retracement_continuation_v1.manifests import Manifest
 from research_pipeline.fib_retracement_continuation_v1.metrics import gates
 from research_pipeline.fib_retracement_continuation_v1.models import Bar, Candidate, ExecutionAssumptions
 from research_pipeline.fib_retracement_continuation_v1.reconciliation import reconcile
+from research_pipeline.fib_retracement_continuation_v1.diagnostics import _candidate_diagnostic
 from research_pipeline.fib_retracement_continuation_v1.loader import load_development_bars, parquet_schema_sha256
 from research_pipeline.fib_retracement_continuation_v1.runner import development_diagnostic, materialize_synthetic, run_candidate, run_development, run_holdout, run_synthetic
 from research_pipeline.fib_retracement_continuation_v1.strategy import create_setup, fib_price
@@ -138,6 +139,13 @@ def test_deterministic_identifiers():
  sid = setup_id("c", "LONG", NOW, D(1)); iid = impulse_id(sid, NOW, D(2)); fid = fib_range_id(iid, D(1), D(2)); oid = order_id(fid, 1, NOW); tid = trade_id(oid, NOW)
  assert (sid, iid, fid, oid, tid, exit_leg_id(tid, 1), event_id("c", NOW, "K", sid, 1)) == (setup_id("c", "LONG", NOW, D(1)), impulse_id(sid, NOW, D(2)), fib_range_id(iid, D(1), D(2)), order_id(fid, 1, NOW), trade_id(oid, NOW), exit_leg_id(tid, 1), event_id("c", NOW, "K", sid, 1))
 
+def test_distinct_impulses_from_one_anchor_have_distinct_setup_ids():
+ anchor = bar(0, 100, 101, 99, 100)
+ first = create_setup(candidate(), "LONG", anchor, bar(4, 100, 120, 101, 119))
+ second = create_setup(candidate(), "LONG", anchor, bar(8, 100, 125, 102, 124))
+ assert first["setup_id"] != second["setup_id"]
+ assert first["direction"] == second["direction"] == "LONG"
+
 def test_run_candidate_one_terminal_and_reconciliation():
  result = run_candidate([bar(0,100,101,100,101), bar(4,120,130,119,129), bar(8,104,105,103,104), bar(12,105,106,90,95)], candidate())
  assert result["reconciliation"]["one_terminal_outcome"] and result["reconciliation"]["reconciles"]
@@ -149,6 +157,24 @@ def test_event_order_trade_reconciliation():
 def test_reconciliation_failure_blocks_gate():
  value = {"net_pnl": D(2), "profit_factor": D(2), "average_net_r": D(1), "maximum_drawdown_percent": D(0), "evidence_label": "LOW_FREQUENCY_DEVELOPMENT_EVIDENCE"}
  assert not gates(value, [], False)["passed"] and not gates(value, [], False)["hard_gates"]["full_reconciliation"]
+
+def test_reconciliation_rejects_real_pattern_duplicate_setup_lifecycle():
+ setup = {"setup_id": "setup-repeated-anchor"}
+ outcome = {"setup_id": "setup-repeated-anchor", "disposition": "ENTRY_EXPIRED"}
+ result = reconcile([setup, setup], [outcome, outcome], [], [], D(10000), final_equity=D(10000))
+ assert not result["reconciles"] and not result["unique_setup_ids"] and not result["one_terminal_outcome"]
+
+def test_reconciliation_accepts_costed_two_leg_trade_and_equity_delta():
+ legs = [{"quantity": D(".3"), "gross_pnl": D(3), "fee": D(".1")}, {"quantity": D(".7"), "gross_pnl": D(7), "fee": D(".2")}]
+ trade = {"trade_id": "trade-1", "order_id": "order-1", "setup_id": "setup-1", "quantity": D(1), "remaining_quantity": D(0), "legs": legs, "entry_fee": D(".1"), "gross_pnl": D(10), "net_pnl": D("9.6")}
+ result = reconcile([{"setup_id": "setup-1"}], [{"setup_id": "setup-1", "disposition": "TRADE_EXECUTED"}], [{"setup_id": "setup-1", "order_id": "order-1"}], [trade], D(100), final_equity=D("109.6"), events=[{"kind": "ORDER_SUBMITTED", "setup_id": "setup-1", "order_id": "order-1"}, {"kind": "ORDER_FILLED", "setup_id": "setup-1", "order_id": "order-1", "trade_id": "trade-1"}])
+ assert result["reconciles"] and result["quantity_conservation"] and result["equity_reconcile"]
+
+def test_diagnostic_is_compact_and_reports_first_duplicate_setup_failure():
+ item = {"setups": [{"setup_id": "setup-1"}, {"setup_id": "setup-1"}], "setup_outcomes": [{"setup_id": "setup-1", "disposition": "ENTRY_EXPIRED"}, {"setup_id": "setup-1", "disposition": "ENTRY_EXPIRED"}], "orders": [], "trades": [], "events": [], "metrics": {"final_equity": D(100)}, "reconciliation": {"reconciles": False}}
+ value = _candidate_diagnostic(item, "candidate-1", D(100))
+ assert value["RECONCILIATION_FIRST_FAILURE"]["setup_id"] == "setup-1"
+ assert value["ids"]["duplicate_setup_ids"] == {"count": 1, "first_id": "setup-1"}
 
 def test_best_trade_removal_and_extra_slippage_stress():
  trade = {"net_pnl": D(10), "entry_price": D(100), "quantity": D(1), "legs": [{"fill_price": D(110), "quantity": D(1)}]}; value = {"net_pnl": D(10), "profit_factor": D(2), "average_net_r": D(1), "maximum_drawdown_percent": D(0), "evidence_label": "LOW_FREQUENCY_DEVELOPMENT_EVIDENCE"}; output = gates(value, [trade], True)

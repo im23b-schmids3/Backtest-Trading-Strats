@@ -123,6 +123,8 @@ def _parser() -> argparse.ArgumentParser:
     command.add_argument("--synthetic-bars", required=True); command.add_argument("--artifact-root", required=True); command.add_argument("--repository-root", required=True)
     command = sub.add_parser("fib09-v1-development-diagnostic", help="verify explicit Fib09 V1 manifests")
     command.add_argument("--eth-manifest", required=True); command.add_argument("--btc-manifest", required=True)
+    command = sub.add_parser("fib09-v1-development-reconciliation-diagnostic", help="run price-free reconciliation diagnostics against sealed development rows only")
+    command.add_argument("--eth-manifest", required=True); command.add_argument("--btc-manifest", required=True); command.add_argument("--chronology-manifest", required=True)
     command = sub.add_parser("fib09-v1-development", help="future deterministic Fib09 V1 development runner")
     command.add_argument("--eth-manifest", required=True); command.add_argument("--btc-manifest", required=True); command.add_argument("--chronology-manifest", required=True); command.add_argument("--artifact-root", required=True); command.add_argument("--repository-root", required=True)
     command = sub.add_parser("fib09-v1-holdout", help="locked holdout refusal")
@@ -289,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         # are explicitly controlled by their own output arguments.
         controller = None
         registry = None
-        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository", "v5-candidate-run", "lsmr-v1-materialize", "lsmr-v1-phase-a", "lsmr-v2-strict-materialize", "lsmr-v2-phase-a", "vbtc-v1-synthetic-materialize", "vbtc-v1-phase-a", "vbtc-v2-synthetic-materialize", "vbtc-v2-phase-a", "htf-lfvg-v1-synthetic-materialize", "htf-lfvg-v1-phase-a", "htf-lfvg-v1-phase-a-funnel-diagnostic", "htf-lfvg-v2-synthetic-materialize", "htf-lfvg-v2-phase-a", "htf-lfvg-v2-funnel-diagnostic", "fib09-v1-synthetic-materialize", "fib09-v1-synthetic-run", "fib09-v1-development-diagnostic", "fib09-v1-development", "fib09-v1-holdout"}:
+        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository", "v5-candidate-run", "lsmr-v1-materialize", "lsmr-v1-phase-a", "lsmr-v2-strict-materialize", "lsmr-v2-phase-a", "vbtc-v1-synthetic-materialize", "vbtc-v1-phase-a", "vbtc-v2-synthetic-materialize", "vbtc-v2-phase-a", "htf-lfvg-v1-synthetic-materialize", "htf-lfvg-v1-phase-a", "htf-lfvg-v1-phase-a-funnel-diagnostic", "htf-lfvg-v2-synthetic-materialize", "htf-lfvg-v2-phase-a", "htf-lfvg-v2-funnel-diagnostic", "fib09-v1-synthetic-materialize", "fib09-v1-synthetic-run", "fib09-v1-development-diagnostic", "fib09-v1-development-reconciliation-diagnostic", "fib09-v1-development", "fib09-v1-holdout"}:
             controller = _controller(args.registry)
             registry = controller.registry
         if args.command == "v5-candidate-run":
@@ -306,6 +308,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "fib09-v1-development-diagnostic":
             from .fib_retracement_continuation_v1.runner import development_diagnostic
             _print(development_diagnostic(eth_manifest=args.eth_manifest, btc_manifest=args.btc_manifest))
+        elif args.command == "fib09-v1-development-reconciliation-diagnostic":
+            from .fib_retracement_continuation_v1.diagnostics import development_reconciliation_diagnostic
+            _print(development_reconciliation_diagnostic(eth_manifest=args.eth_manifest, btc_manifest=args.btc_manifest, chronology_manifest=args.chronology_manifest))
         elif args.command == "fib09-v1-development":
             from .fib_retracement_continuation_v1.runner import run_development
             _print(run_development(eth_manifest=args.eth_manifest, btc_manifest=args.btc_manifest, chronology_manifest=args.chronology_manifest, artifact_root=args.artifact_root, repository_root=args.repository_root))

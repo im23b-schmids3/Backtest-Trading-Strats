@@ -46,7 +46,7 @@ def run_candidate(bars:list[Bar], candidate:Candidate, assumptions:ExecutionAssu
    trade,reject=execute_order(order,bar,candidate,equity,assumptions)
    if reject: outcomes.append({"setup_id":order["setup_id"],"disposition":reject});pending.remove(order);continue
    if trade:
-    active=trade; pending.remove(order); outcomes.append({"setup_id":order["setup_id"],"disposition":"TRADE_EXECUTED"});events.append({"kind":"ORDER_FILLED","order_id":order["order_id"],"trade_id":trade["trade_id"],"timestamp":bar.timestamp})
+    active=trade; pending.remove(order); outcomes.append({"setup_id":order["setup_id"],"disposition":"TRADE_EXECUTED"});events.append({"kind":"ORDER_FILLED","setup_id":order["setup_id"],"order_id":order["order_id"],"trade_id":trade["trade_id"],"timestamp":bar.timestamp})
   if active is not None and bar.timestamp>active["entry_timestamp"]:
    process_position(active,bar,candidate,assumptions)
    if active["remaining_quantity"]<=0:
@@ -56,7 +56,7 @@ def run_candidate(bars:list[Bar], candidate:Candidate, assumptions:ExecutionAssu
  for order in pending: outcomes.append({"setup_id":order["setup_id"],"disposition":"SESSION_OR_DATA_END"})
  for setup in setups:
   if setup.get("terminal") and not any(x["setup_id"]==setup["setup_id"] for x in outcomes): outcomes.append({"setup_id":setup["setup_id"],"disposition":setup["terminal"]})
- rec=reconcile(setups,outcomes,orders,trades,assumptions.opening_equity); met=metrics(trades,assumptions.opening_equity); return {"events":events,"setups":setups,"setup_outcomes":outcomes,"orders":orders,"trades":trades,"partial_exits":[leg for trade in trades for leg in trade["legs"]],"metrics":met,"reconciliation":rec,"gates":gates(met,trades,rec["reconciles"])}
+ met=metrics(trades,assumptions.opening_equity); rec=reconcile(setups,outcomes,orders,trades,assumptions.opening_equity,final_equity=equity,events=events); return {"events":events,"setups":setups,"setup_outcomes":outcomes,"orders":orders,"trades":trades,"partial_exits":[leg for trade in trades for leg in trade["legs"]],"metrics":met,"reconciliation":rec,"gates":gates(met,trades,rec["reconciles"])}
 
 def materialize_synthetic(*,artifact_root:str|Path,repository_root:str|Path)->dict:
  repo=Path(repository_root).resolve();spec=_sealed(repo);root=_store(Path(artifact_root).resolve(),{"mode":"SYNTHETIC"});identity={"strategy_id":STRATEGY_ID,"mode":"SYNTHETIC_ONLY","holdout_status":"LOCKED_NOT_OPENED"}
