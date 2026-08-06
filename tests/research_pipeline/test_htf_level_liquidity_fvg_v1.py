@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from research_pipeline.htf_level_liquidity_fvg import Bar, ClosedBarAggregator, HTFLevelLiquidityFVG, frequency_classification, materialize_synthetic, reconcile_events
-from research_pipeline.htf_level_liquidity_fvg.core import Event, Level, TerminalDisposition, phase_a_hard_gates, wilder_atr_prior
+from research_pipeline.htf_level_liquidity_fvg.core import Event, EventScope, Level, TerminalDisposition, phase_a_hard_gates, reconcile_events, wilder_atr_prior
 from research_pipeline.htf_level_liquidity_fvg import runner
 
 T=datetime(2023,1,1,tzinfo=timezone.utc)
@@ -41,10 +41,39 @@ def test_long_and_short_sweep_choose_nearest_and_consume_once():
     s=HTFLevelLiquidityFVG("HTFLFVG-V1-MIN2P5R"); s.daily=[trend(i,200-i) for i in range(56)]; s.bars15=[bar(i,100,101,99,100) for i in range(16)]; s.levels=[Level("r","RESISTANCE",105,T,T)]
     s._evaluate_sweep(bar(99,104,108,103,104)); assert s.setup and s.setup["direction"]=="SHORT"
 
+def test_replaced_inflight_setup_has_one_audit_terminal_and_successor_is_normal():
+    e=HTFLevelLiquidityFVG("HTFLFVG-V1-MIN2P5R",run_id="replacement"); e.daily=[trend(i,100+i) for i in range(56)]; e.bars15=[bar(i,100,101,99,100) for i in range(16)]
+    e.levels=[Level("first","SUPPORT",95,T,T),Level("second","SUPPORT",90,T,T)]
+    e._evaluate_sweep(bar(99,100,101,93,97)); first=e.setup["setup_id"]
+    successor_bar=bar(102,92,94,88,92); e._evaluate_sweep(successor_bar); successor=e.setup["setup_id"]
+    expected=f"setup_{hashlib.sha256('|'.join(map(str,('replacement',e.candidate.id,'second',successor_bar.time.isoformat()))).encode()).hexdigest()[:20]}"
+    assert successor==expected and successor != first
+    displaced=[outcome for outcome in e.outcomes if outcome["setup_id"]==first]
+    assert len(displaced)==1 and displaced[0]["terminal_disposition"]=="SUPERSEDED_BY_NEW_SWEEP"
+    assert displaced[0]["superseded_by_setup_id"]==successor and displaced[0]["superseded_by_sweep_id"]==e.setup["sweep_id"]
+    terminal=[event for event in e.events if event.decision=="TERMINAL_DISPOSITION" and event.setup_id==first]
+    assert len(terminal)==1 and terminal[0].inputs=={"successor_setup_id":successor,"successor_sweep_id":e.setup["sweep_id"]}
+    e._finish(successor_bar.time,TerminalDisposition.MSS_WINDOW_EXPIRED)
+    reconcile_events(e.events,e.outcomes,e.trades)
+
+def test_non_superseded_terminal_lifecycle_is_unchanged():
+    e=HTFLevelLiquidityFVG("HTFLFVG-V1-MIN2P5R"); e.setup={"setup_id":"setup","event_history":["SETUP_PROPOSED"]}
+    e._finish(T,TerminalDisposition.MSS_WINDOW_EXPIRED)
+    assert e.outcomes==[{"setup_id":"setup","event_history":["SETUP_PROPOSED","TERMINAL_DISPOSITION"],"terminal_disposition":"MSS_WINDOW_EXPIRED"}]
+    assert e.events[-1].reason_code=="MSS_WINDOW_EXPIRED" and e.events[-1].inputs=={}
+
 def test_mss_displacement_first_fvg_and_projected_r_rejection():
     e=HTFLevelLiquidityFVG("HTFLFVG-V1-MIN2P5R"); e.daily=[trend(i,100+i) for i in range(56)]; e.bars5=[bar(i,100,101,99,100) for i in range(20)]
     e.setup={"setup_id":"s","direction":"LONG","sweep_5_index":0,"sweep_extreme":90,"sweep_atr":2,"event_history":["SETUP_PROPOSED"]}
     e._finish(T,TerminalDisposition.MSS_WINDOW_EXPIRED); assert e.outcomes[0]["terminal_disposition"]=="MSS_WINDOW_EXPIRED"
+
+def test_mss_confirmation_records_the_generated_mss_identity():
+    e=HTFLevelLiquidityFVG("HTFLFVG-V1-MIN2P5R"); e.daily=[trend(i,100+i*.1) for i in range(56)]; e.bars5=[bar(i) for i in range(20)]
+    e.bars5[16]=bar(16,100,105,99,100); e.bars5[19]=bar(19,100,110,100,109)
+    e.setup={"setup_id":"setup","mss_id":None,"direction":"LONG","sweep_5_index":10,"sweep_extreme":90,"sweep_atr":2,"event_history":["SETUP_PROPOSED"]}
+    e._progress_setup(e.bars5[-1])
+    mss=next(event for event in e.events if event.decision=="MSS_CONFIRMED")
+    assert mss.inputs["mss_id"]==e.setup["mss_id"]
 
 def test_order_invalidation_expiry_and_session_controls():
     e=HTFLevelLiquidityFVG("HTFLFVG-V1-MIN2P5R"); e.setup={"setup_id":"s","direction":"LONG","sweep_5_index":0,"sweep_extreme":99,"event_history":["SETUP_PROPOSED"]}; e.order={"activated_index":0,"entry":100}; e.bars5=[bar(0)]
@@ -58,9 +87,52 @@ def test_stop_first_partial_tp_and_forced_exit():
     e._progress_order_or_position(bar(2,105,111,104,110)); assert e.trades[-1]["exit_reason"]=="TP2_COMPLETED"
 
 def test_ids_lifecycle_and_reconciliation():
-    ev=[Event("a",T.isoformat(),1,"c","SETUP_PROPOSED","s"),Event("b",T.isoformat(),2,"c","TERMINAL_DISPOSITION","s")]
+    ev=[Event("a",T.isoformat(),1,"c","SETUP_PROPOSED","s",inputs={"sweep_id":"sweep"},scope=EventScope.SETUP),Event("b",T.isoformat(),2,"c","TERMINAL_DISPOSITION","s",scope=EventScope.SETUP)]
     reconcile_events(ev,[{"setup_id":"s","terminal_disposition":"DAILY_BIAS_REJECTED","event_history":["SETUP_PROPOSED","TERMINAL_DISPOSITION"]}],[])
     with pytest.raises(ValueError): reconcile_events(ev,[],[])
+
+def test_reconciliation_rejects_proposed_setup_without_terminal_event():
+    events=[Event("proposal",T.isoformat(),1,"c","SETUP_PROPOSED","setup",inputs={"sweep_id":"sweep"},scope=EventScope.SETUP)]
+    with pytest.raises(ValueError,match="missing or duplicate terminal event"):
+        reconcile_events(events,[{"setup_id":"setup","terminal_disposition":"MSS_WINDOW_EXPIRED","event_history":["SETUP_PROPOSED"]}],[])
+
+def test_event_scope_contract_accepts_setup_global_and_level_events():
+    events=[Event("proposal",T.isoformat(),1,"c","SETUP_PROPOSED","setup",inputs={"sweep_id":"sweep"},scope=EventScope.SETUP),Event("aggregate",T.isoformat(),2,"c","AGGREGATION_CONFIRMED",scope=EventScope.GLOBAL),Event("level",T.isoformat(),3,"c","LEVEL_CONFIRMED",inputs={"level_id":"level"},scope=EventScope.LEVEL),Event("terminal",T.isoformat(),4,"c","TERMINAL_DISPOSITION","setup",scope=EventScope.SETUP)]
+    reconcile_events(events,[{"setup_id":"setup","terminal_disposition":"MSS_WINDOW_EXPIRED","event_history":["SETUP_PROPOSED","TERMINAL_DISPOSITION"]}],[])
+
+def test_event_scope_contract_rejects_orphan_setup_event():
+    events=[Event("proposal",T.isoformat(),1,"c","SETUP_PROPOSED","setup",inputs={"sweep_id":"sweep"},scope=EventScope.SETUP),Event("orphan",T.isoformat(),2,"c","MSS_CONFIRMED","other-setup",inputs={"mss_id":"mss"},scope=EventScope.SETUP),Event("terminal",T.isoformat(),3,"c","TERMINAL_DISPOSITION","setup",scope=EventScope.SETUP)]
+    with pytest.raises(ValueError): reconcile_events(events,[{"setup_id":"setup","terminal_disposition":"MSS_WINDOW_EXPIRED","event_history":["SETUP_PROPOSED","TERMINAL_DISPOSITION"]}],[])
+
+@pytest.mark.parametrize("setup_id",["", "null", "placeholder"])
+def test_event_scope_contract_rejects_orphan_and_placeholder_setup_ids(setup_id):
+    events=[Event("proposal",T.isoformat(),1,"c","SETUP_PROPOSED","setup",inputs={"sweep_id":"sweep"},scope=EventScope.SETUP),Event("bad",T.isoformat(),2,"c","MSS_CONFIRMED",setup_id,scope=EventScope.SETUP),Event("terminal",T.isoformat(),3,"c","TERMINAL_DISPOSITION","setup",scope=EventScope.SETUP)]
+    with pytest.raises(ValueError): reconcile_events(events,[{"setup_id":"setup","terminal_disposition":"MSS_WINDOW_EXPIRED","event_history":["SETUP_PROPOSED","TERMINAL_DISPOSITION"]}],[])
+
+def test_event_scope_contract_rejects_duplicate_event_and_terminal_ids():
+    events=[Event("same",T.isoformat(),1,"c","SETUP_PROPOSED","setup",inputs={"sweep_id":"sweep"},scope=EventScope.SETUP),Event("same",T.isoformat(),2,"c","TERMINAL_DISPOSITION","setup",scope=EventScope.SETUP)]
+    with pytest.raises(ValueError): reconcile_events(events,[{"setup_id":"setup","terminal_disposition":"MSS_WINDOW_EXPIRED","event_history":["SETUP_PROPOSED","TERMINAL_DISPOSITION"]}],[])
+    events[1].event_id="terminal"; events.append(Event("terminal2",T.isoformat(),3,"c","TERMINAL_DISPOSITION","setup",scope=EventScope.SETUP))
+    with pytest.raises(ValueError): reconcile_events(events,[{"setup_id":"setup","terminal_disposition":"MSS_WINDOW_EXPIRED","event_history":["SETUP_PROPOSED","TERMINAL_DISPOSITION"]}],[])
+
+def test_trade_events_link_to_one_executed_setup_and_real_style_lifecycle():
+    events=[Event("p",T.isoformat(),1,"c","SETUP_PROPOSED","setup",inputs={"sweep_id":"sweep"},scope=EventScope.SETUP),Event("m",T.isoformat(),2,"c","MSS_CONFIRMED","setup",inputs={"mss_id":"mss"},scope=EventScope.SETUP),Event("f",T.isoformat(),3,"c","FVG_CONFIRMED","setup",inputs={"fvg_id":"fvg"},scope=EventScope.SETUP),Event("entry",T.isoformat(),4,"c","ENTRY_FILLED","setup",scope=EventScope.TRADE,trade_id="trade"),Event("exit",T.isoformat(),5,"c","EXIT_FILLED","setup",scope=EventScope.TRADE,trade_id="trade"),Event("t",T.isoformat(),6,"c","TERMINAL_DISPOSITION","setup",scope=EventScope.SETUP)]
+    outcome={"setup_id":"setup","trade_id":"trade","terminal_disposition":"TRADE_EXECUTED","event_history":["SETUP_PROPOSED","MSS_CONFIRMED","FVG_CONFIRMED","ENTRY_FILLED","EXIT_FILLED","TERMINAL_DISPOSITION"]}
+    trade={"trade_id":"trade","setup_id":"setup","quantity":1,"exits":[{"quantity":1}]}
+    reconcile_events(events,[outcome],[trade])
+    events[3].trade_id="wrong"
+    with pytest.raises(ValueError): reconcile_events(events,[outcome],[trade])
+
+def test_indexed_reconciler_handles_large_event_set_without_changing_validation():
+    count=5000; events=[]; outcomes=[]
+    for i in range(count):
+        setup_id=f"setup-{i}"
+        events.extend([
+            Event(f"proposal-{i}",T.isoformat(),i*2,"c","SETUP_PROPOSED",setup_id,inputs={"sweep_id":f"sweep-{i}"},scope=EventScope.SETUP),
+            Event(f"terminal-{i}",T.isoformat(),i*2+1,"c","TERMINAL_DISPOSITION",setup_id,scope=EventScope.SETUP),
+        ])
+        outcomes.append({"setup_id":setup_id,"terminal_disposition":"MSS_WINDOW_EXPIRED","event_history":["SETUP_PROPOSED","TERMINAL_DISPOSITION"]})
+    reconcile_events(events,outcomes,[])
 
 @pytest.mark.parametrize(("n,label"),[(49,"UNDERFREQUENCY_FAIL"),(50,"TARGET_FREQUENCY"),(300,"TARGET_FREQUENCY"),(301,"HIGH_FREQUENCY_WARNING"),(500,"HIGH_FREQUENCY_WARNING"),(501,"OVERFREQUENCY_FAIL")])
 def test_frequency_matrix(n,label): assert frequency_classification(n)[1]==label
@@ -93,6 +165,12 @@ def test_real_phase_a_loader_accepts_only_declared_v5_partitions_and_tolerates_g
     path,_=_v5_manifest(tmp_path)
     loaded=runner._load_explicit_phase_a_bars(path)
     assert len(loaded)==13 and loaded[0].time.tzinfo is not None
+
+def test_phase_a_diagnostic_is_read_only_and_creates_no_artifacts(tmp_path):
+    path,_=_v5_manifest(tmp_path); before={item.relative_to(tmp_path) for item in tmp_path.rglob("*")}
+    result=runner.phase_a_diagnostic(path)
+    after={item.relative_to(tmp_path) for item in tmp_path.rglob("*")}
+    assert before==after and result["artifactWritten"] is False and len(result["diagnostics"])==3
 
 
 @pytest.mark.parametrize("mutate",[

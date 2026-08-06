@@ -9,7 +9,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-from .core import CANDIDATES, SPEC_HASH, Bar, HTFLevelLiquidityFVG, materialize_synthetic, phase_a_hard_gates, reconcile_events
+from .core import CANDIDATES, SPEC_HASH, Bar, EventScope, HTFLevelLiquidityFVG, TerminalDisposition, materialize_synthetic, phase_a_hard_gates, reconcile_events
 
 
 PHASE_A_MANIFEST = Path(r"C:\Users\sandr\Trading-Bot-Fib\data\imbalance_vwap_ride\v5\bars\BTCUSDT\phase_a\6c75fc621bdb83ed10e687013e5d675f46ab96fa041ef9fda19b435d9ec5a65f\manifest.json")
@@ -128,10 +128,31 @@ def load_synthetic_embedded_bars(manifest: dict[str, Any]) -> list[Bar]:
 
 
 def phase_a_diagnostic(path: Path = PHASE_A_MANIFEST) -> dict[str, Any]:
-    """Read-only integrity summary for the sealed data contract."""
+    """Read-only in-memory event reconciliation diagnostic; it writes no artifacts."""
     bars = _load_explicit_phase_a_bars(path)
     times = [bar.time for bar in bars]
-    return {"partitionCount": len(PHASE_A_MONTHS), "totalRows": len(bars), "minimumTimestamp": times[0].isoformat(), "maximumTimestamp": times[-1].isoformat(), "duplicateTimestamps": sum(right == left for left, right in zip(times, times[1:])), "nonIncreasingTimestamps": sum(right <= left for left, right in zip(times, times[1:])), "gapsGreaterThanFiveMinutes": sum(right - left > __import__("datetime").timedelta(minutes=5) for left, right in zip(times, times[1:]))}
+    reports=[]; reconciliation_errors=[]
+    for candidate_id in CANDIDATES:
+        engine=HTFLevelLiquidityFVG(candidate_id,run_id=f"diagnostic-{candidate_id}")
+        for bar in bars: engine.feed(bar)
+        if engine.position: engine._exit(bars[-1],bars[-1].close,engine.position["remaining"],"FORCED_END_OF_DATA_EXIT")
+        if engine.setup: engine._finish(bars[-1].time,TerminalDisposition.MSS_WINDOW_EXPIRED)
+        proposed={e.setup_id for e in engine.events if e.decision=="SETUP_PROPOSED"}
+        terminal={setup_id:0 for setup_id in proposed}
+        for event in engine.events:
+            if event.decision=="TERMINAL_DISPOSITION" and event.setup_id in terminal: terminal[event.setup_id]+=1
+        orphans=[event for event in engine.events if event.scope in {EventScope.SETUP,EventScope.TRADE} and (not event.setup_id or event.setup_id not in proposed)]
+        executed={outcome["setup_id"]:outcome.get("trade_id") for outcome in engine.outcomes if outcome.get("terminal_disposition")=="TRADE_EXECUTED"}
+        bad_trades=[trade for trade in engine.trades if executed.get(trade.get("setup_id")) != trade.get("trade_id")]
+        event_ids=[event.event_id for event in engine.events]
+        reports.append({"candidateId":candidate_id,"totalEvents":len(engine.events),"setupScopedEvents":sum(event.scope in {EventScope.SETUP,EventScope.TRADE} for event in engine.events),"globalLevelAggregationEvents":sum(event.scope in {EventScope.GLOBAL,EventScope.LEVEL} for event in engine.events),"proposedSetupCount":len(proposed),"orphanEventCount":len(orphans),"firstOrphans":[{"eventId":event.event_id,"decision":event.decision,"setupId":event.setup_id,"timestamp":event.time,"scope":event.scope.value} for event in orphans[:20]],"duplicateEventIds":len(event_ids)-len(set(event_ids)),"setupsMissingTerminalEvents":sum(count==0 for count in terminal.values()),"setupsMultipleTerminalEvents":sum(count>1 for count in terminal.values()),"tradesMissingExecutedSetups":len(bad_trades)})
+        try:
+            reconcile_events(engine.events,engine.outcomes,engine.trades)
+        except ValueError as exc:
+            # This diagnostic is deliberately non-fatal so it can return the
+            # complete audit summary. Production reconciliation remains fail-closed.
+            reconciliation_errors.append({"candidateId":candidate_id,"error":str(exc)})
+    return {"partitionCount":len(PHASE_A_MONTHS),"totalRows":len(bars),"minimumTimestamp":times[0].isoformat(),"maximumTimestamp":times[-1].isoformat(),"duplicateTimestamps":sum(right==left for left,right in zip(times,times[1:])),"nonIncreasingTimestamps":sum(right<=left for left,right in zip(times,times[1:])),"gapsGreaterThanFiveMinutes":sum(right-left>__import__("datetime").timedelta(minutes=5) for left,right in zip(times,times[1:])),"diagnostics":reports,"reconciliationErrors":reconciliation_errors,"realStudyExecuted":False,"artifactWritten":False}
 
 
 def run_htf_lfvg_v1_phase_a(*, phase_a_bars_manifest: str, artifact_root: str, repository_root: str) -> dict:

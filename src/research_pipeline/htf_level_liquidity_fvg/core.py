@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
@@ -14,8 +15,9 @@ REQUIRED_ARTIFACTS = ("sealed-specification.json", "candidate-registry.json", "d
 
 class Direction(StrEnum): LONG="LONG"; SHORT="SHORT"
 class Bias(StrEnum): BULLISH="BULLISH"; BEARISH="BEARISH"; NEUTRAL="NEUTRAL"
+class EventScope(StrEnum): SETUP="SETUP"; TRADE="TRADE"; LEVEL="LEVEL"; GLOBAL="GLOBAL"
 class TerminalDisposition(StrEnum):
-    TRADE_EXECUTED="TRADE_EXECUTED"; DAILY_BIAS_REJECTED="DAILY_BIAS_REJECTED"; NO_ACTIVE_HTF_LEVEL="NO_ACTIVE_HTF_LEVEL"; DUPLICATE_LEVEL_BLOCKED="DUPLICATE_LEVEL_BLOCKED"; SWEEP_DEPTH_REJECTED="SWEEP_DEPTH_REJECTED"; SWEEP_RECLAIM_REJECTED="SWEEP_RECLAIM_REJECTED"; SWEEP_WICK_REJECTED="SWEEP_WICK_REJECTED"; MSS_WINDOW_EXPIRED="MSS_WINDOW_EXPIRED"; MSS_STRUCTURE_REJECTED="MSS_STRUCTURE_REJECTED"; DISPLACEMENT_REJECTED="DISPLACEMENT_REJECTED"; FVG_NOT_FORMED="FVG_NOT_FORMED"; FVG_TOO_SMALL="FVG_TOO_SMALL"; PENDING_ORDER_EXPIRED="PENDING_ORDER_EXPIRED"; PRE_ENTRY_SWEEP_INVALIDATED="PRE_ENTRY_SWEEP_INVALIDATED"; BIAS_INVALIDATED_BEFORE_ENTRY="BIAS_INVALIDATED_BEFORE_ENTRY"; STOP_DISTANCE_REJECTED="STOP_DISTANCE_REJECTED"; PROJECTED_RR_REJECTED="PROJECTED_RR_REJECTED"; ACTIVE_POSITION_BLOCKED="ACTIVE_POSITION_BLOCKED"; ACTIVE_ORDER_BLOCKED="ACTIVE_ORDER_BLOCKED"; SESSION_ENTRY_BLOCKED="SESSION_ENTRY_BLOCKED"; SESSION_ENDED="SESSION_ENDED"
+    TRADE_EXECUTED="TRADE_EXECUTED"; DAILY_BIAS_REJECTED="DAILY_BIAS_REJECTED"; NO_ACTIVE_HTF_LEVEL="NO_ACTIVE_HTF_LEVEL"; DUPLICATE_LEVEL_BLOCKED="DUPLICATE_LEVEL_BLOCKED"; SWEEP_DEPTH_REJECTED="SWEEP_DEPTH_REJECTED"; SWEEP_RECLAIM_REJECTED="SWEEP_RECLAIM_REJECTED"; SWEEP_WICK_REJECTED="SWEEP_WICK_REJECTED"; MSS_WINDOW_EXPIRED="MSS_WINDOW_EXPIRED"; MSS_STRUCTURE_REJECTED="MSS_STRUCTURE_REJECTED"; DISPLACEMENT_REJECTED="DISPLACEMENT_REJECTED"; FVG_NOT_FORMED="FVG_NOT_FORMED"; FVG_TOO_SMALL="FVG_TOO_SMALL"; PENDING_ORDER_EXPIRED="PENDING_ORDER_EXPIRED"; PRE_ENTRY_SWEEP_INVALIDATED="PRE_ENTRY_SWEEP_INVALIDATED"; BIAS_INVALIDATED_BEFORE_ENTRY="BIAS_INVALIDATED_BEFORE_ENTRY"; STOP_DISTANCE_REJECTED="STOP_DISTANCE_REJECTED"; PROJECTED_RR_REJECTED="PROJECTED_RR_REJECTED"; ACTIVE_POSITION_BLOCKED="ACTIVE_POSITION_BLOCKED"; ACTIVE_ORDER_BLOCKED="ACTIVE_ORDER_BLOCKED"; SESSION_ENTRY_BLOCKED="SESSION_ENTRY_BLOCKED"; SESSION_ENDED="SESSION_ENDED"; SUPERSEDED_BY_NEW_SWEEP="SUPERSEDED_BY_NEW_SWEEP"
 
 @dataclass(frozen=True)
 class Bar:
@@ -29,13 +31,26 @@ class Bar:
 class Candidate: id: str; minimum_tp2_r: float
 @dataclass
 class Event:
-    event_id: str; time: str; sequence: int; candidate_id: str; decision: str; setup_id: str|None=None; reason_code: str|None=None; inputs: dict[str,Any]=field(default_factory=dict)
+    event_id: str; time: str; sequence: int; candidate_id: str; decision: str; setup_id: str|None=None; reason_code: str|None=None; inputs: dict[str,Any]=field(default_factory=dict); scope: EventScope=EventScope.GLOBAL; trade_id: str|None=None
 @dataclass
 class Level:
     level_id: str; side: str; price: float; source_time: datetime; confirmation_time: datetime; consumed: bool=False
 
 def deterministic_id(kind: str, *parts: object) -> str:
     return f"{kind}_{hashlib.sha256('|'.join(map(str,parts)).encode()).hexdigest()[:20]}"
+
+EVENT_SCOPES: dict[str, EventScope] = {
+    "SETUP_PROPOSED": EventScope.SETUP, "MSS_CONFIRMED": EventScope.SETUP,
+    "DISPLACEMENT_CONFIRMED": EventScope.SETUP, "FVG_CONFIRMED": EventScope.SETUP,
+    "ORDER_ACTIVATED": EventScope.SETUP, "TERMINAL_DISPOSITION": EventScope.SETUP,
+    "ENTRY_FILLED": EventScope.TRADE, "EXIT_FILLED": EventScope.TRADE,
+    "LEVEL_CONFIRMED": EventScope.LEVEL, "AGGREGATION_CONFIRMED": EventScope.GLOBAL,
+    "DAILY_BIAS_CONFIRMED": EventScope.GLOBAL,
+}
+
+def event_scope(decision: str) -> EventScope:
+    try: return EVENT_SCOPES[decision]
+    except KeyError as exc: raise ValueError(f"RECONCILIATION_ERROR: unknown event decision {decision}") from exc
 
 class ClosedBarAggregator:
     """In-memory UTC aggregation. Gaps are legitimate; a gapped bucket is never emitted."""
@@ -87,23 +102,80 @@ class HTFLevelLiquidityFVG:
     def __init__(self,candidate_id:str,run_id:str="synthetic",tick:float=.1,quantity_step:float=.001,minimum_quantity:float=.001,fee_rate:float=.0004,slippage_ticks:int=1):
         if candidate_id not in CANDIDATES: raise ValueError("unsealed candidate")
         self.candidate=Candidate(candidate_id,CANDIDATES[candidate_id]); self.run_id=run_id; self.tick=tick; self.quantity_step=quantity_step; self.minimum_quantity=minimum_quantity; self.fee_rate=fee_rate; self.slippage_ticks=slippage_ticks
-        self.aggregator=ClosedBarAggregator(); self.bars5=[]; self.bars15=[]; self.bars4h=[]; self.daily=[]; self.levels=[]; self.levels15=[]; self.events=[]; self.outcomes=[]; self.trades=[]; self._seq=0; self.setup=None; self.order=None; self.position=None
-    def _event(self,t:datetime,decision:str,setup_id:str|None=None,reason_code:str|None=None,**inputs:Any)->None:
-        self._seq+=1; self.events.append(Event(deterministic_id("event",self.run_id,self.candidate.id,self._seq),t.isoformat(),self._seq,self.candidate.id,decision,setup_id,reason_code,inputs))
+        self.aggregator=ClosedBarAggregator(); self.bars5=[]; self.bars15=[]; self.bars4h=[]; self.daily=[]; self.levels=[]; self.levels15=[]; self.events=[]; self.outcomes=[]; self.trades=[]; self._seq=0; self.setup=None; self.order=None; self.position=None; self._daily_bias_cache=(0,Bias.NEUTRAL); self._atr5_prior=[]; self._atr15_prior=[]; self._level_index_source=id(self.levels); self._level_index_count=0; self._available_levels={"SUPPORT":[],"RESISTANCE":[]}; self._available_level_prices={"SUPPORT":[],"RESISTANCE":[]}; self._nearest_indexes={}
+    def _event(self,t:datetime,decision:str,setup_id:str|None=None,reason_code:str|None=None,trade_id:str|None=None,**inputs:Any)->None:
+        scope=event_scope(decision)
+        if scope in {EventScope.SETUP,EventScope.TRADE} and not setup_id: raise ValueError("setup/trade event requires setup_id")
+        if scope in {EventScope.GLOBAL,EventScope.LEVEL} and setup_id is not None: raise ValueError("non-setup event cannot carry setup_id")
+        if scope==EventScope.TRADE and not trade_id: raise ValueError("trade event requires trade_id")
+        self._seq+=1; self.events.append(Event(deterministic_id("event",self.run_id,self.candidate.id,self._seq),t.isoformat(),self._seq,self.candidate.id,decision,setup_id,reason_code,inputs,scope,trade_id))
     def _finish(self,t:datetime,disposition:TerminalDisposition,reason:str|None=None)->None:
         if not self.setup:return
         self.setup["terminal_disposition"]=disposition.value; self.setup["event_history"].append("TERMINAL_DISPOSITION"); self._event(t,"TERMINAL_DISPOSITION",self.setup["setup_id"],reason_code=reason or disposition.value); self.outcomes.append(self.setup); self.setup=None; self.order=None
+    def _supersede_setup(self,t:datetime,successor_setup_id:str,successor_sweep_id:str)->None:
+        """Close only the replaced setup's audit lifecycle; execution state is untouched."""
+        if not self.setup:return
+        prior=self.setup
+        prior["terminal_disposition"]=TerminalDisposition.SUPERSEDED_BY_NEW_SWEEP.value
+        prior["superseded_by_setup_id"]=successor_setup_id
+        prior["superseded_by_sweep_id"]=successor_sweep_id
+        prior["event_history"].append("TERMINAL_DISPOSITION")
+        self._event(t,"TERMINAL_DISPOSITION",prior["setup_id"],reason_code=TerminalDisposition.SUPERSEDED_BY_NEW_SWEEP.value,successor_setup_id=successor_setup_id,successor_sweep_id=successor_sweep_id)
+        self.outcomes.append(prior)
     def _lifecycle(self,t:datetime,name:str,**data:Any)->None:
-        self.setup["event_history"].append(name); self._event(t,name,self.setup["setup_id"],**data)
+        self.setup["event_history"].append(name); self._event(t,name,self.setup["setup_id"],trade_id=self.setup.get("trade_id"),**data)
     def daily_bias(self)->Bias:
-        if len(self.daily)<56:return Bias.NEUTRAL
-        values=ema_prior([x.close for x in self.daily]); return Bias.BULLISH if self.daily[-1].close>values[-1] and values[-1]>values[-6] else Bias.BEARISH if self.daily[-1].close<values[-1] and values[-1]<values[-6] else Bias.NEUTRAL
+        if self._daily_bias_cache[0]==len(self.daily): return self._daily_bias_cache[1]
+        if len(self.daily)<56: bias=Bias.NEUTRAL
+        else:
+            values=ema_prior([x.close for x in self.daily]); bias=Bias.BULLISH if self.daily[-1].close>values[-1] and values[-1]>values[-6] else Bias.BEARISH if self.daily[-1].close<values[-1] and values[-1]<values[-6] else Bias.NEUTRAL
+        self._daily_bias_cache=(len(self.daily),bias); return bias
+    def _refresh_available_levels(self)->None:
+        if self._level_index_source==id(self.levels) and self._level_index_count==len(self.levels): return
+        self._available_levels={side:sorted((level.price,level.level_id,level) for level in self.levels if level.side==side and not level.consumed) for side in ("SUPPORT","RESISTANCE")}
+        self._available_level_prices={side:[value[0] for value in self._available_levels[side]] for side in ("SUPPORT","RESISTANCE")}
+        self._level_index_source=id(self.levels); self._level_index_count=len(self.levels)
+    def _available_level(self,side:str,price:float,t:datetime)->Level|None:
+        self._refresh_available_levels(); values=self._available_levels[side]
+        prices=self._available_level_prices[side]
+        i=bisect_right(prices,price)-1 if side=="SUPPORT" else bisect_left(prices,price)
+        step=-1 if side=="SUPPORT" else 1
+        while 0<=i<len(values):
+            candidate_price=values[i][0]; matches=[]
+            while 0<=i<len(values) and values[i][0]==candidate_price:
+                level=values[i][2]
+                if level.confirmation_time<t: matches.append(level)
+                i+=step
+            if matches:return min(matches,key=lambda level:level.level_id)
+        return None
+    def _consume_level(self,level:Level)->None:
+        level.consumed=True
+        values=self._available_levels[level.side]
+        index=next(index for index,value in enumerate(values) if value[2] is level)
+        del values[index]; del self._available_level_prices[level.side][index]
+    @staticmethod
+    def _append_prior_atr(bars:list[Bar],cache:list[float|None])->None:
+        index=len(bars)-1
+        if index<15: value=None
+        elif index==15: value=sum(max(bars[i].high-bars[i].low,abs(bars[i].high-bars[i-1].close),abs(bars[i].low-bars[i-1].close)) for i in range(1,15))/14
+        else:
+            previous=cache[-1]
+            assert previous is not None
+            bar=bars[index-1]; earlier=bars[index-2]
+            true_range=max(bar.high-bar.low,abs(bar.high-earlier.close),abs(bar.low-earlier.close))
+            value=(previous*13+true_range)/14
+        cache.append(value)
+    @staticmethod
+    def _prior_atr(bars:list[Bar],cache:list[float|None])->float|None:
+        return cache[-1] if len(cache)==len(bars) else wilder_atr_prior(bars,len(bars)-1)
     def feed(self,bar:Bar)->None:
         if self.bars5 and bar.time<=self.bars5[-1].time: raise ValueError("closed bars must be strictly ordered")
-        self.bars5.append(bar); derived=self.aggregator.push(bar)
+        self.bars5.append(bar); self._append_prior_atr(self.bars5,self._atr5_prior); derived=self.aggregator.push(bar)
         for name,target in (("15m",self.bars15),("4h",self.bars4h),("1d",self.daily)):
             if name in derived:
-                target.append(derived[name]); self._event(bar.time,"AGGREGATION_CONFIRMED",timeframe=name,source_bar_id=bar.id); self._confirm_levels(name)
+                target.append(derived[name]);
+                if name=="15m": self._append_prior_atr(self.bars15,self._atr15_prior)
+                self._event(bar.time,"AGGREGATION_CONFIRMED",timeframe=name,source_bar_id=bar.id); self._confirm_levels(name)
                 if name=="15m": self._evaluate_sweep(target[-1])
         self._confirm_5m_fractals(); self._progress_setup(bar); self._progress_order_or_position(bar)
     def _confirm_levels(self,tf:str)->None:
@@ -116,26 +188,29 @@ class HTFLevelLiquidityFVG:
             side="SUPPORT" if low else "RESISTANCE"; price=b.low if low else b.high; level=Level(deterministic_id("level",tf,side,b.time.isoformat(),price),side,price,b.time,bars[-1].time)
             (self.levels if tf=="4h" else self.levels15).append(level); self._event(level.confirmation_time,"LEVEL_CONFIRMED",level_id=level.level_id,timeframe=tf,side=side,price=price)
     def _evaluate_sweep(self,b:Bar)->None:
-        atr=wilder_atr_prior(self.bars15,len(self.bars15)-1)
+        atr=self._prior_atr(self.bars15,self._atr15_prior)
         if atr is None:return
-        bias=self.daily_bias(); candidates=[]
-        if bias==Bias.BULLISH: candidates=[x for x in self.levels if x.side=="SUPPORT" and not x.consumed and x.confirmation_time < b.time and x.price<=b.close]
-        if bias==Bias.BEARISH: candidates=[x for x in self.levels if x.side=="RESISTANCE" and not x.consumed and x.confirmation_time < b.time and x.price>=b.close]
-        if not candidates:return
-        direction=Direction.LONG if bias==Bias.BULLISH else Direction.SHORT; level=sorted(candidates,key=lambda x:(abs(b.close-x.price),x.level_id))[0]
+        bias=self.daily_bias()
+        if bias==Bias.NEUTRAL:return
+        direction=Direction.LONG if bias==Bias.BULLISH else Direction.SHORT; level=self._available_level("SUPPORT" if direction==Direction.LONG else "RESISTANCE",b.close,b.time)
+        if level is None:return
         depth=(b.low<=level.price-.1*atr) if direction==Direction.LONG else (b.high>=level.price+.1*atr)
         reclaim=(b.close>=level.price) if direction==Direction.LONG else (b.close<=level.price)
         wick=((min(b.open,b.close)-b.low)/(b.high-b.low) if b.high>b.low else 0) if direction==Direction.LONG else ((b.high-max(b.open,b.close))/(b.high-b.low) if b.high>b.low else 0)
         if not(depth and reclaim and wick>=.5):return
-        level.consumed=True
-        sid=deterministic_id("setup",self.run_id,self.candidate.id,level.level_id,b.time.isoformat()); self.setup={"setup_id":sid,"level_id":level.level_id,"sweep_id":deterministic_id("sweep",sid),"mss_id":None,"fvg_id":None,"direction":direction.value,"daily_bias_snapshot":bias.value,"level_snapshot":asdict(level),"sweep":asdict(b),"sweep_atr":atr,"sweep_extreme":b.low if direction==Direction.LONG else b.high,"sweep_5_index":len(self.bars5)-1,"event_history":["SETUP_PROPOSED"]}; self._event(b.time,"SETUP_PROPOSED",sid,level_id=level.level_id,sweep_id=self.setup["sweep_id"],prior_atr=atr,wick=wick)
+        self._consume_level(level)
+        sid=deterministic_id("setup",self.run_id,self.candidate.id,level.level_id,b.time.isoformat()); sweep_id=deterministic_id("sweep",sid)
+        # This preserves the historical replacement order and execution state:
+        # only the displaced setup's otherwise-lost audit lifecycle is closed.
+        self._supersede_setup(b.time,sid,sweep_id)
+        self.setup={"setup_id":sid,"level_id":level.level_id,"sweep_id":sweep_id,"mss_id":None,"fvg_id":None,"direction":direction.value,"daily_bias_snapshot":bias.value,"level_snapshot":asdict(level),"sweep":asdict(b),"sweep_atr":atr,"sweep_extreme":b.low if direction==Direction.LONG else b.high,"sweep_5_index":len(self.bars5)-1,"event_history":["SETUP_PROPOSED"]}; self._event(b.time,"SETUP_PROPOSED",sid,level_id=level.level_id,sweep_id=self.setup["sweep_id"],prior_atr=atr,wick=wick)
     def _confirm_5m_fractals(self)->None: pass # confirmation is derived causally in _progress_setup
     def _progress_setup(self,b:Bar)->None:
         if not self.setup or self.order or self.position:return
         s=self.setup; elapsed=len(self.bars5)-1-s["sweep_5_index"]
         if elapsed>12:self._finish(b.time,TerminalDisposition.MSS_WINDOW_EXPIRED); return
         if self.daily_bias() != (Bias.BULLISH if s["direction"]=="LONG" else Bias.BEARISH): self._finish(b.time,TerminalDisposition.BIAS_INVALIDATED_BEFORE_ENTRY); return
-        i=len(self.bars5)-1; atr=wilder_atr_prior(self.bars5,i)
+        i=len(self.bars5)-1; atr=self._prior_atr(self.bars5,self._atr5_prior)
         if atr is None:return
         d=Direction(s["direction"])
         if s["mss_id"] is None and i>=4:
@@ -145,7 +220,7 @@ class HTFLevelLiquidityFVG:
             if fractal and structural:
                 bullish=d==Direction.LONG; displacement=(b.close>b.open if bullish else b.close<b.open) and b.high-b.low>=1.5*atr and (b.close>=b.low+.75*(b.high-b.low) if bullish else b.close<=b.high-.75*(b.high-b.low))
                 if not displacement:self._finish(b.time,TerminalDisposition.DISPLACEMENT_REJECTED); return
-                s["mss_id"]=deterministic_id("mss",s["setup_id"],b.time.isoformat()); s["displacement_id"]=deterministic_id("displacement",s["mss_id"]); s["mss_index"]=i; s["fractal_id"]=deterministic_id("fractal",pivot.time.isoformat()); self._lifecycle(b.time,"MSS_CONFIRMED",fractal_id=s["fractal_id"],prior_atr=atr); self._lifecycle(b.time,"DISPLACEMENT_CONFIRMED",displacement_id=s["displacement_id"])
+                s["mss_id"]=deterministic_id("mss",s["setup_id"],b.time.isoformat()); s["displacement_id"]=deterministic_id("displacement",s["mss_id"]); s["mss_index"]=i; s["fractal_id"]=deterministic_id("fractal",pivot.time.isoformat()); self._lifecycle(b.time,"MSS_CONFIRMED",mss_id=s["mss_id"],fractal_id=s["fractal_id"],prior_atr=atr); self._lifecycle(b.time,"DISPLACEMENT_CONFIRMED",mss_id=s["mss_id"],displacement_id=s["displacement_id"])
         if s.get("mss_id") and i-s["mss_index"]<=2 and i>=2:
             a,c=self.bars5[i-2],self.bars5[i]; lower,upper=(a.high,c.low) if d==Direction.LONG else (c.high,a.low)
             valid=(c.low>a.high if d==Direction.LONG else c.high<a.low)
@@ -165,7 +240,21 @@ class HTFLevelLiquidityFVG:
         if projected<self.candidate.minimum_tp2_r:self._finish(b.time,TerminalDisposition.PROJECTED_RR_REJECTED); return
         s.update({"entry_price":entry,"stop":stop,"tp1_level_id":tp1.level_id if tp1 else None,"tp1":tp1.price if tp1 else None,"tp2_level_id":tp2.level_id,"tp2":tp2.price,"projected_r":projected,"cost_assumptions":{"fee_rate":self.fee_rate,"slippage_ticks":self.slippage_ticks}}); self.order={"order_id":deterministic_id("order",s["setup_id"]),"activated_index":len(self.bars5)-1,"entry":entry}; self._lifecycle(b.time,"ORDER_ACTIVATED",order_id=self.order["order_id"],entry=entry)
     def _nearest(self,levels:list[Level],side:str,entry:float,t:datetime,d:Direction)->Level|None:
-        xs=[x for x in levels if x.side==side and x.confirmation_time<t and ((x.price>entry) if d==Direction.LONG else (x.price<entry))]; return sorted(xs,key=lambda x:(abs(x.price-entry),x.level_id))[0] if xs else None
+        key=(id(levels),side); cached=self._nearest_indexes.get(key)
+        if cached is None or cached[0]!=len(levels):
+            values=sorted((level.price,level.level_id,level) for level in levels if level.side==side)
+            self._nearest_indexes[key]=(len(levels),values,[value[0] for value in values]); cached=self._nearest_indexes[key]
+        _,values,prices=cached
+        i=bisect_right(prices,entry) if d==Direction.LONG else bisect_left(prices,entry)-1
+        step=1 if d==Direction.LONG else -1
+        while 0<=i<len(values):
+            candidate_price=values[i][0]; matches=[]
+            while 0<=i<len(values) and values[i][0]==candidate_price:
+                level=values[i][2]
+                if level.confirmation_time<t: matches.append(level)
+                i+=step
+            if matches:return min(matches,key=lambda level:level.level_id)
+        return None
     def _progress_order_or_position(self,b:Bar)->None:
         if self.order and not self.position:
             s=self.setup; d=Direction(s["direction"])
@@ -193,15 +282,77 @@ class HTFLevelLiquidityFVG:
             trade={"trade_id":s["trade_id"],"setup_id":s["setup_id"],"direction":s["direction"],"quantity":p["qty"],"exits":s["exits"],"net_pnl":sum(x["net_pnl"] for x in s["exits"]),"exit_reason":reason}; self.trades.append(trade); self._finish(b.time,TerminalDisposition.TRADE_EXECUTED); self.position=None
 
 def reconcile_events(events:Iterable[Event],outcomes:Iterable[dict],trades:Iterable[dict])->None:
-    es=list(events); os=list(outcomes); ts=list(trades); ids={x["setup_id"] for x in os}
-    if any(e.setup_id and e.setup_id not in ids for e in es):raise ValueError("RECONCILIATION_ERROR: orphan event")
-    allowed={"SETUP_PROPOSED","MSS_CONFIRMED","DISPLACEMENT_CONFIRMED","FVG_CONFIRMED","ORDER_ACTIVATED","ENTRY_FILLED","EXIT_FILLED","TERMINAL_DISPOSITION"}
-    for o in os:
-        x=[e.decision for e in es if e.setup_id==o["setup_id"]]
-        if any(v not in allowed for v in x) or x.count("SETUP_PROPOSED")!=1 or x.count("TERMINAL_DISPOSITION")!=1 or len(x)!=len(o.get("event_history",x)):raise ValueError("RECONCILIATION_ERROR: lifecycle")
-        executed=o["terminal_disposition"]=="TRADE_EXECUTED"; trade=next((t for t in ts if t.get("setup_id")==o["setup_id"]),None)
-        if executed != bool(trade):raise ValueError("RECONCILIATION_ERROR: trade")
-        if trade and abs(sum(e["quantity"] for e in trade["exits"])-trade["quantity"])>1e-9:raise ValueError("RECONCILIATION_ERROR: quantity")
+    """Fail-closed, indexed event/outcome/trade reconciliation.
+
+    All indexes are built in one pass; in particular, this must remain linear in
+    the real audit volume rather than filtering the complete event list per setup.
+    """
+    es=list(events); os=list(outcomes); ts=list(trades)
+    placeholders={"", "null", "none", "unknown", "placeholder"}
+    def fail(detail:str)->None: raise ValueError(f"RECONCILIATION_ERROR: {detail}")
+    def valid_id(value:object)->bool:
+        return isinstance(value,str) and value.strip().lower() not in placeholders
+    def add_identity(index:dict[str,object], value:object, label:str)->None:
+        if not valid_id(value) or value in index: fail(f"duplicate or empty {label} id")
+        index[value]=None
+
+    event_ids:dict[str,object]={}; proposed:dict[str,Event]={}; lifecycle:dict[str,list[Event]]={}
+    terminal_count:dict[str,int]={}; level_ids:dict[str,object]={}; sweep_ids:dict[str,object]={}
+    mss_ids:dict[str,object]={}; fvg_ids:dict[str,object]={}
+    for event in es:
+        add_identity(event_ids,event.event_id,"event")
+        if event.scope != event_scope(event.decision): fail("event scope contract")
+        if event.scope in {EventScope.SETUP,EventScope.TRADE}:
+            if not valid_id(event.setup_id): fail("empty or placeholder setup id")
+            lifecycle.setdefault(event.setup_id,[]).append(event)
+        elif event.setup_id is not None: fail("non-setup event has setup id")
+        if event.scope==EventScope.LEVEL:
+            if not valid_id(event.inputs.get("level_id")): fail("level event missing level id")
+        if event.scope==EventScope.TRADE and not valid_id(event.trade_id): fail("trade event missing trade id")
+        if event.decision=="SETUP_PROPOSED":
+            if event.setup_id in proposed: fail("duplicate setup id")
+            proposed[event.setup_id]=event; terminal_count[event.setup_id]=0
+            add_identity(sweep_ids,event.inputs.get("sweep_id"),"sweep")
+        elif event.decision=="LEVEL_CONFIRMED": add_identity(level_ids,event.inputs.get("level_id"),"level")
+        elif event.decision=="MSS_CONFIRMED": add_identity(mss_ids,event.inputs.get("mss_id"),"MSS")
+        elif event.decision=="FVG_CONFIRMED": add_identity(fvg_ids,event.inputs.get("fvg_id"),"FVG")
+        elif event.decision=="TERMINAL_DISPOSITION":
+            # The setup may be proposed earlier in the same append-only stream.
+            if event.setup_id not in terminal_count: fail("orphan setup event")
+            terminal_count[event.setup_id]+=1
+
+    for setup_id in lifecycle:
+        if setup_id not in proposed: fail("orphan setup event")
+    if any(count!=1 for count in terminal_count.values()): fail("missing or duplicate terminal event")
+
+    outcomes_by_setup:dict[str,dict]={}
+    for outcome in os:
+        setup_id=outcome.get("setup_id")
+        if not valid_id(setup_id) or setup_id in outcomes_by_setup: fail("duplicate or empty setup outcome id")
+        outcomes_by_setup[setup_id]=outcome
+    if set(proposed)!=set(outcomes_by_setup): fail("proposed setup/outcome mismatch")
+
+    trades_by_setup:dict[str,list[dict]]={setup_id:[] for setup_id in proposed}; trade_ids:dict[str,dict]={}
+    for trade in ts:
+        trade_id=trade.get("trade_id"); setup_id=trade.get("setup_id")
+        if not valid_id(trade_id) or trade_id in trade_ids: fail("duplicate or empty trade id")
+        if setup_id not in trades_by_setup: fail("trade without proposed setup")
+        trade_ids[trade_id]=trade; trades_by_setup[setup_id].append(trade)
+
+    for setup_id,outcome in outcomes_by_setup.items():
+        setup_lifecycle=lifecycle.get(setup_id,[])
+        decisions=[event.decision for event in setup_lifecycle]
+        if decisions.count("SETUP_PROPOSED")!=1 or decisions.count("TERMINAL_DISPOSITION")!=1 or len(decisions)!=len(outcome.get("event_history",[])): fail("lifecycle")
+        executed=outcome.get("terminal_disposition")==TerminalDisposition.TRADE_EXECUTED.value; linked=trades_by_setup[setup_id]
+        trade_events=[event for event in setup_lifecycle if event.scope==EventScope.TRADE]
+        if executed != (len(linked)==1): fail("executed setup/trade mismatch")
+        if not executed and (linked or trade_events): fail("trade linked to non-executed setup")
+        if executed:
+            trade=linked[0]
+            if outcome.get("trade_id") != trade["trade_id"]: fail("outcome trade id mismatch")
+            if sum(event.decision=="ENTRY_FILLED" for event in trade_events)!=1: fail("executed setup entry lifecycle")
+            if not trade_events or any(event.trade_id != trade["trade_id"] for event in trade_events): fail("trade event link")
+            if abs(sum(exit["quantity"] for exit in trade["exits"])-trade["quantity"])>1e-9: fail("quantity")
 
 def _write_json(path:Path,value:object)->None:path.write_text(json.dumps(value,sort_keys=True,indent=2,default=str)+"\n",encoding="utf-8")
 def materialize_synthetic(artifact_root:Path,repository_root:Path)->dict:
