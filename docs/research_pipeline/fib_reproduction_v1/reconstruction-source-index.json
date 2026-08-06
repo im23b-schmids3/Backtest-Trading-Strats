@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "fib-reproduction-source-index/v1",
+  "status": "RECONSTRUCTION_BLOCKED",
+  "scope": "Forensic reconstruction and research design only; no market-data file was read.",
+  "repositoryEvidence": {
+    "inspectedHead": "35d6b71b1445ce51754ab4feeb4b4b9b3e8e857a",
+    "v6IntroductionCommit": {
+      "commit": "0bae67ecaf14a16fba14fee7f6ed99666be9c5d1",
+      "timestamp": "2026-07-16T14:20:37+02:00",
+      "subject": "Stable checkpoint before automated pipeline being implemented"
+    },
+    "matrixPathsExpectedByCode": [
+      "reports/v6/v6_ranked_matrix.csv",
+      "reports/v6_5/v6_5_ranked_matrix.csv"
+    ],
+    "matrixEvidence": "Neither expected matrix, a source-row export, V6/V6.5 metadata, report, or trade list is tracked or present in the inspected non-data repository evidence. reports/ is ignored by .gitignore."
+  },
+  "requestedAnchors": [
+    {
+      "id": "FIB09-ETH-4H-POST0830",
+      "requestedValues": {"asset": "ETH", "timeframe": "4h", "entry_level": 0.9, "post_tp1_stop_fib_ratio": 0.83, "number_of_trades_approx": 56, "final_equity": 19818.742189, "net_pnl": 9818.742189, "profit_factor": 3.984866, "average_r": 0.625218, "win_rate": 0.821429, "maximum_drawdown": -0.061759},
+      "sourceRow": null,
+      "provenance": "User-supplied anchor only; no repository row was found."
+    },
+    {
+      "id": "FIB09-ETH-4H-POST0786-REFERENCE",
+      "requestedValues": {"asset": "ETH", "timeframe": "4h", "entry_level": 0.9, "post_tp1_stop_fib_ratio": 0.786, "number_of_trades_approx": 56, "final_equity": 20985.537649, "net_pnl": 10985.537649, "profit_factor": 4.188006, "average_r": 0.674906, "maximum_drawdown": -0.060109},
+      "sourceRow": null,
+      "provenance": "User-supplied anchor only; no repository row was found."
+    },
+    {
+      "id": "FIB09-BTC-1D-POST0786",
+      "requestedValues": {"asset": "BTC", "timeframe": "1d", "entry_level": 0.9, "post_tp1_stop_fib_ratio": 0.786, "number_of_trades_approx": 37, "final_equity": 14904.513365, "net_pnl": 4904.513365, "profit_factor": 2.756583, "average_r": 0.553586, "maximum_drawdown": -0.042065},
+      "sourceRow": null,
+      "provenance": "User-supplied anchor only; no repository row was found."
+    }
+  ],
+  "textArtifacts": [
+    {"path": "src/fib_backtester/research/v6_post_tp1_stop.py", "sha256": "49ab1965b72420a9013e6180e491a858ea38369e6734c7b4b09b9fcbd8647dbc", "role": "V6 generator, selection, walk-forward, ranking and output names"},
+    {"path": "src/fib_backtester/research/v6_5_post_tp1_stop_placement.py", "sha256": "12b76d2a42b18668907ed555546ad1c9c4bd7c2831203e1019d74365c5231e3e", "role": "V6.5 generator, V6 selection dependency, ranking and output names"},
+    {"path": "src/fib_backtester/backtest/v6_post_tp1_stop_engine.py", "sha256": "a42cac953348a7e66cffbed9aaedd44a54a0b9c06f4875fcf41908565f24935d", "role": "post-TP1 ordering and stop semantics"},
+    {"path": "src/fib_backtester/backtest/v6_5_post_tp1_stop_placement_engine.py", "sha256": "b217316ae851dc800a00d5e3db7fe4745930c08063658a16a404e4cea94c008b", "role": "V6.5 engine inheritance"},
+    {"path": "src/fib_backtester/backtest/v2_engine.py", "sha256": "e85552ec74266f6c9ede7b73ddde6cfd9a5418292b2237319f506fcabb41ab14", "role": "causal lifecycle, order timing, sizing and forced exit"},
+    {"path": "src/fib_backtester/strategy/v2_swings.py", "sha256": "487ba3c1f0d74f76a74d29ed930e7bf3ffd058a57b051a4bb8f61f4c1f65f138", "role": "swing-anchor lifecycle and filters"},
+    {"path": "src/fib_backtester/strategy/v3_entry_research.py", "sha256": "9dfad325fed4b9e7e6dbda18581259f46b7ba7b2ae3a07a60d13911e7651bba3", "role": "fixed 0.900 entry override"},
+    {"path": "src/fib_backtester/strategy/v4_take_profit_research.py", "sha256": "6cf584c251305fd5a171afcc328eee8d2577586365b12064e14f792d66aa12c1", "role": "Profile B targets and fractions"},
+    {"path": "src/fib_backtester/strategy/v6_post_tp1_stop_research.py", "sha256": "7890a0ebeb6ed6ea47b567c289eb19044a7d2a3cba4a1157eb5999d1523e4fd0", "role": "V6 policy names and ratios"},
+    {"path": "src/fib_backtester/strategy/v6_5_post_tp1_stop_placement.py", "sha256": "3f9ee00c67c4aa8bcd9a3560f20ae474f05ca8774d7b75710fd5df57b12989e1", "role": "V6.5 policy names and ratios"},
+    {"path": "src/fib_backtester/backtest/execution.py", "sha256": "3e3c3aa25ed2b98adb73872df3fbdf974d6c245d087a2bb1337daf62a8ca4c85", "role": "fee/slippage arithmetic"},
+    {"path": "src/fib_backtester/backtest/metrics.py", "sha256": "b31f0b5f82da2e29a7b498c745bc07219051168163d72308f863c1924b1451de", "role": "metric definitions"},
+    {"path": "config/default.yaml", "sha256": "fa0fb94f559f295290a6a981c617cf39e9d6611c5a12c74a4b1d4aa3dddb2e89", "role": "default historical asset/config contract"},
+    {"path": "reports/binance/setup.md", "sha256": "01cd9fe6fde1068149c26dd4b09a1c8ed46c98024231233d1b3ede3a2199a8ea", "role": "venue/proxy documentation"}
+  ],
+  "tests": [
+    {"path": "tests/test_v6_post_tp1_stop_research.py", "sha256": "7aab1c22a310268d5930e936d1f2df29dabad14790d04a2a59a9157ecbc1c4ff"},
+    {"path": "tests/test_v6_5_post_tp1_stop_placement.py", "sha256": "026733d8358e8d61bf9abe0ef7acd96b2834d086f6b9000b7c2538cc03c10479"},
+    {"path": "tests/test_no_lookahead.py", "sha256": "93f4b1d5067c5c371856b3ed23219c66d6bf1036e1a04d3a4c11fa7faebfa0a8"},
+    {"path": "tests/test_order_timing.py", "sha256": "cb95e6685bfe25d71b191f08d371c06bfdb7d7e00ff75689e9924b1a25bdcef8"}
+  ]
+}
