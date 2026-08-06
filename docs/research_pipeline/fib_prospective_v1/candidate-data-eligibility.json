@@ -1,0 +1,183 @@
+{
+  "schemaVersion": "fib-prospective-v1-candidate-data-eligibility/v5",
+  "auditDate": "2026-08-06",
+  "status": "READY_TO_IMPLEMENT_WITH_PROVENANCE_LIMITATION",
+  "studyStatus": "READY_TO_IMPLEMENT_WITH_PROVENANCE_LIMITATION",
+  "independentAssets": {
+    "ETH": {
+      "requiredContract": "exact hash-bound ETH 4h OHLCV input contract with owner-attested ETH/4h purpose, independently audited cadence, UTC chronology, OHLCV integrity, and matching manifest",
+      "status": "DATA_CONTRACT_READY_WITH_PROVENANCE_LIMITATION",
+      "sourceFile": "data/raw/ETH_4h.parquet",
+      "sourceFileSha256": "d47e76a450d02dc842129866a1f37e34e616b1ba99adf0acbdbf000e3b77e68d",
+      "manifestPath": "docs/research_pipeline/fib_prospective_v1/data-contracts/ETH_4H/manifest.json",
+      "manifestSha256": "c3e9b15473b6210ad486114afb8fafc6b728e8bf512e1ed87e0b0651928a9fa3",
+      "acceptanceDecision": "DATA_CONTRACT_READY_WITH_PROVENANCE_LIMITATION",
+      "provenanceClassification": "USER_SUPPLIED_PROVENANCE_EVIDENCE",
+      "provenanceStatus": "OWNER_ATTESTED_WITH_LIMITATIONS",
+      "ownerAttestedSymbol": "ETH",
+      "ownerAttestedTimeframe": "4h",
+      "sourceExchange": "UNKNOWN",
+      "instrumentType": "UNKNOWN",
+      "historicalV6Identity": "NOT_CLAIMED",
+      "limitations": [
+        "No repository text/code/Git-visible exact-literal hit establishes ETH or ETHUSDT identity; the filename alone is not admissible symbol evidence.",
+        "No repository text/code/Git-visible exact-literal hit establishes downloader/generator, source exchange, or spot-versus-perpetual instrument type."
+      ],
+      "auditSummary": {
+        "absolutePath": "C:\\Users\\sandr\\Trading-Bot-Fib\\data\\raw\\ETH_4h.parquet",
+        "byteSize": 434072,
+        "rowCount": 9928,
+        "schema": {
+          "fields": [
+            { "metadata": {}, "name": "open", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "high", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "low", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "close", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "volume", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "timestamp", "nullable": true, "type": "timestamp[ns, tz=UTC]" }
+          ],
+          "metadata": {
+            "pandas": "{\"index_columns\":[\"timestamp\"],\"column_indexes\":[{\"name\":null,\"field_name\":null,\"pandas_type\":\"unicode\",\"numpy_type\":\"object\",\"metadata\":{\"encoding\":\"UTF-8\"}}],\"columns\":[{\"name\":\"open\",\"field_name\":\"open\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"high\",\"field_name\":\"high\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"low\",\"field_name\":\"low\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"close\",\"field_name\":\"close\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"volume\",\"field_name\":\"volume\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"timestamp\",\"field_name\":\"timestamp\",\"pandas_type\":\"datetimetz\",\"numpy_type\":\"datetime64[ns]\",\"metadata\":{\"timezone\":\"UTC\"}}],\"attributes\":{},\"creator\":{\"library\":\"pyarrow\",\"version\":\"25.0.0\"},\"pandas_version\":\"2.3.3\"}"
+          }
+        },
+        "timestampColumn": "timestamp",
+        "timestampType": "timestamp[ns, tz=UTC]",
+        "timestampTimezone": "UTC",
+        "firstTimestamp": "2022-01-01T00:00:00Z",
+        "finalTimestamp": "2026-07-13T12:00:00Z",
+        "observedIntervalDistribution": {
+          "14400s": 9927
+        },
+        "duplicateTimestampCount": 0,
+        "nonIncreasingTimestampCount": 0,
+        "missingExpectedIntervalCount": 0,
+        "largestGap": null,
+        "invalidOhlcCount": 0,
+        "ohlcvColumnMapping": { "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume" },
+        "nullCounts": { "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0, "timestamp": 0 },
+        "provenanceEvidence": {
+          "exactLiteralSearchHits": [
+            "docs/research_pipeline/fib_prospective_v1/local-data-inventory.json:149 lists data/raw/ETH_4h.parquet.",
+            ".smithers/workflows/audit-seal-fib09-prospective-direct-parquet.tsx:61 names the audit input and its task text states that filename alone is insufficient."
+          ],
+          "gitVisibleExactLiteralHits": [],
+          "symbolEvidence": null,
+          "timeframeEvidence": "Observed interval distribution contains only 14400s across 9927 consecutive pairs.",
+          "exchangeEvidence": null,
+          "sourceEvidence": null,
+          "instrumentTypeEvidence": null,
+          "utcEvidence": "Parquet timestamp field is timestamp[ns, tz=UTC] and pandas metadata records timezone UTC.",
+          "historicalUsageEvidence": null
+        }
+      }
+    },
+    "BTC": {
+      "requiredContract": "exact hash-bound BTC 1d OHLCV input contract with owner-attested BTC/1d purpose, independently audited cadence, UTC chronology, OHLCV integrity, and matching manifest",
+      "status": "DATA_CONTRACT_READY_WITH_PROVENANCE_LIMITATION",
+      "sourceFile": "data/raw/BTC_1d.parquet",
+      "sourceFileSha256": "ca38099edecf776247fd8a2af824dd5545dcd5e9372afe07706058dd7b258170",
+      "manifestPath": "docs/research_pipeline/fib_prospective_v1/data-contracts/BTC_1D/manifest.json",
+      "manifestSha256": "b9f79623022cd234a702c326de06f6acf7d4e23a75916ec1ea716ea0b9a9a62a",
+      "acceptanceDecision": "DATA_CONTRACT_READY_WITH_PROVENANCE_LIMITATION",
+      "provenanceClassification": "USER_SUPPLIED_PROVENANCE_EVIDENCE",
+      "provenanceStatus": "OWNER_ATTESTED_WITH_LIMITATIONS",
+      "ownerAttestedSymbol": "BTC",
+      "ownerAttestedTimeframe": "1d",
+      "sourceExchange": "UNKNOWN",
+      "instrumentType": "UNKNOWN",
+      "historicalV6Identity": "NOT_CLAIMED",
+      "limitations": [
+        "No repository text/code/Git-visible exact-literal hit establishes BTC or BTCUSDT identity; the filename alone is not admissible symbol evidence.",
+        "No repository text/code/Git-visible exact-literal hit establishes downloader/generator, source exchange, or spot-versus-perpetual instrument type."
+      ],
+      "auditSummary": {
+        "absolutePath": "C:\\Users\\sandr\\Trading-Bot-Fib\\data\\raw\\BTC_1d.parquet",
+        "byteSize": 79491,
+        "rowCount": 1654,
+        "schema": {
+          "fields": [
+            { "metadata": {}, "name": "open", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "high", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "low", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "close", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "volume", "nullable": true, "type": "double" },
+            { "metadata": {}, "name": "timestamp", "nullable": true, "type": "timestamp[ns, tz=UTC]" }
+          ],
+          "metadata": {
+            "pandas": "{\"index_columns\":[\"timestamp\"],\"column_indexes\":[{\"name\":null,\"field_name\":null,\"pandas_type\":\"unicode\",\"numpy_type\":\"object\",\"metadata\":{\"encoding\":\"UTF-8\"}}],\"columns\":[{\"name\":\"open\",\"field_name\":\"open\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"high\",\"field_name\":\"high\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"low\",\"field_name\":\"low\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"close\",\"field_name\":\"close\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"volume\",\"field_name\":\"volume\",\"pandas_type\":\"float64\",\"numpy_type\":\"float64\",\"metadata\":null},{\"name\":\"timestamp\",\"field_name\":\"timestamp\",\"pandas_type\":\"datetimetz\",\"numpy_type\":\"datetime64[ns]\",\"metadata\":{\"timezone\":\"UTC\"}}],\"attributes\":{},\"creator\":{\"library\":\"pyarrow\",\"version\":\"25.0.0\"},\"pandas_version\":\"2.3.3\"}"
+          }
+        },
+        "timestampColumn": "timestamp",
+        "timestampType": "timestamp[ns, tz=UTC]",
+        "timestampTimezone": "UTC",
+        "firstTimestamp": "2022-01-01T00:00:00Z",
+        "finalTimestamp": "2026-07-12T00:00:00Z",
+        "observedIntervalDistribution": {
+          "86400s": 1653
+        },
+        "duplicateTimestampCount": 0,
+        "nonIncreasingTimestampCount": 0,
+        "missingExpectedIntervalCount": 0,
+        "largestGap": null,
+        "invalidOhlcCount": 0,
+        "ohlcvColumnMapping": { "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume" },
+        "nullCounts": { "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0, "timestamp": 0 },
+        "provenanceEvidence": {
+          "exactLiteralSearchHits": [
+            "docs/research_pipeline/fib_prospective_v1/local-data-inventory.json:146 lists data/raw/BTC_1d.parquet.",
+            ".smithers/workflows/audit-seal-fib09-prospective-direct-parquet.tsx:62 names the audit input and its task text states that filename alone is insufficient."
+          ],
+          "gitVisibleExactLiteralHits": [],
+          "symbolEvidence": null,
+          "timeframeEvidence": "Observed interval distribution contains only 86400s across 1653 consecutive pairs.",
+          "exchangeEvidence": null,
+          "sourceEvidence": null,
+          "instrumentTypeEvidence": null,
+          "utcEvidence": "Parquet timestamp field is timestamp[ns, tz=UTC] and pandas metadata records timezone UTC.",
+          "historicalUsageEvidence": null
+        }
+      }
+    }
+  },
+  "candidateDataContracts": {
+    "FIB09-ETH-4H-POST0830": {
+      "asset": "ETH",
+      "contractManifestPaths": [
+        "docs/research_pipeline/fib_prospective_v1/data-contracts/ETH_4H/manifest.json"
+      ],
+      "status": "DATA_CONTRACT_READY_WITH_PROVENANCE_LIMITATION"
+    },
+    "FIB09-ETH-4H-POST0786-REFERENCE": {
+      "asset": "ETH",
+      "contractManifestPaths": [
+        "docs/research_pipeline/fib_prospective_v1/data-contracts/ETH_4H/manifest.json"
+      ],
+      "status": "DATA_CONTRACT_READY_WITH_PROVENANCE_LIMITATION"
+    },
+    "FIB09-BTC-1D-POST0786": {
+      "asset": "BTC",
+      "contractManifestPaths": [
+        "docs/research_pipeline/fib_prospective_v1/data-contracts/BTC_1D/manifest.json"
+      ],
+      "status": "DATA_CONTRACT_READY_WITH_PROVENANCE_LIMITATION"
+    }
+  },
+  "prospectiveRule": "Hash-bound file identity, owner-attested symbol/timeframe, independently verified cadence, UTC chronology, and OHLCV integrity permit this prospective study only. No venue/instrument transferability or historical V6/V6.5 reproduction is claimed. Normalized/derived prior-study material remains ineligible. Aggregate trades and other intervals were not resampled.",
+  "executionStatus": {
+    "noBacktestRun": true,
+    "noOptimizationRun": true,
+    "noCandidateOrPhaseA": true,
+    "noHoldoutAccess": true,
+    "noPhaseBOrAlpha": true,
+    "noPropPortfolioOrLive": true,
+    "noMarketDataModified": true,
+    "noMarketDataDownloaded": true
+  },
+  "inventoryPath": "docs/research_pipeline/fib_prospective_v1/local-data-inventory.json",
+  "priorUnauthenticatedAudit": {
+    "auditDate": "2026-08-06",
+    "studyStatus": "DATA_CONTRACT_BLOCKED",
+    "conclusion": "Before the owner attestation, no repository text/code/Git-visible exact-literal evidence established either file's symbol identity, downloader/generator, source exchange, or spot-versus-perpetual instrument type; filename alone was not admissible symbol evidence.",
+    "supersededBy": "USER_SUPPLIED_PROVENANCE_EVIDENCE limited to the two exact hash-bound files and this prospective study; unknown venue and instrument provenance remain unknown."
+  }
+}
