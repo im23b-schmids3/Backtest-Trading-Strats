@@ -17,7 +17,7 @@ from research_pipeline.fib_retracement_continuation_v1.manifests import Manifest
 from research_pipeline.fib_retracement_continuation_v1.metrics import gates
 from research_pipeline.fib_retracement_continuation_v1.models import Bar, Candidate, ExecutionAssumptions
 from research_pipeline.fib_retracement_continuation_v1.reconciliation import reconcile
-from research_pipeline.fib_retracement_continuation_v1.loader import parquet_schema_sha256
+from research_pipeline.fib_retracement_continuation_v1.loader import load_development_bars, parquet_schema_sha256
 from research_pipeline.fib_retracement_continuation_v1.runner import development_diagnostic, materialize_synthetic, run_candidate, run_development, run_holdout, run_synthetic
 from research_pipeline.fib_retracement_continuation_v1.strategy import create_setup, fib_price
 
@@ -57,6 +57,13 @@ def parquet_manifest(tmp_path, symbol, interval_hours):
  data["manifestSha256"] = canonical_manifest_hash(data)
  path = tmp_path / f"{symbol}-manifest.json"; path.write_text(json.dumps(data), encoding="utf-8")
  return path, stamps
+
+def test_parquet_schema_hash_canonicalizes_json_metadata_whitespace(tmp_path):
+ table = pa.table({"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [1.0], "timestamp": [NOW]})
+ spaced = tmp_path / "spaced.parquet"; compact = tmp_path / "compact.parquet"
+ pq.write_table(table.replace_schema_metadata({b"pandas": b'{"index_columns": ["timestamp"]}'}), spaced)
+ pq.write_table(table.replace_schema_metadata({b"pandas": b'{"index_columns":["timestamp"]}'}), compact)
+ assert parquet_schema_sha256(spaced) == parquet_schema_sha256(compact)
 
 def chronology_manifest(tmp_path, eth, btc, eth_stamps, btc_stamps):
  def asset(path, stamps):
@@ -203,13 +210,29 @@ def test_chronology_tampering_and_linked_manifest_mismatch_are_rejected(tmp_path
  payload["chronologyManifestSha256"] = canonical_chronology_hash(payload); payload["assets"]["ETH"]["source_manifest_sha256"]="0"*64; payload["chronologyManifestSha256"] = canonical_chronology_hash(payload); chronology.write_text(json.dumps(payload))
  with pytest.raises(ManifestError, match="SOURCE_MANIFEST_HASH"): verify_chronology_manifest(chronology, eth_manifest=eth, btc_manifest=btc)
 
-def test_mixed_row_group_fails_closed_before_execution(tmp_path):
+def test_mixed_row_group_is_privately_filtered_before_public_bar_exposure(tmp_path):
  eth, eth_stamps = parquet_manifest(tmp_path, "ETH", 4); btc, btc_stamps = parquet_manifest(tmp_path, "BTC", 24); chronology = chronology_manifest(tmp_path, eth, btc, eth_stamps, btc_stamps)
  source=Path(json.loads(eth.read_text())["absoluteSourcePath"]); table=pq.read_table(source); pq.write_table(table, source)
  payload=json.loads(eth.read_text()); payload["sourceFileSha256"]=hashlib.sha256(source.read_bytes()).hexdigest(); payload["fileSizeBytes"]=source.stat().st_size; payload["schemaSha256"]=parquet_schema_sha256(source); payload["manifestSha256"]=canonical_manifest_hash(payload); eth.write_text(json.dumps(payload))
  payload=json.loads(chronology.read_text()); payload["assets"]["ETH"]["source_manifest_sha256"]=json.loads(eth.read_text())["manifestSha256"]; payload["chronologyManifestSha256"]=canonical_chronology_hash(payload); chronology.write_text(json.dumps(payload))
- with pytest.raises(ManifestError, match="ROW_GROUP_CROSSES_LOCK"):
-  run_development(eth_manifest=eth, btc_manifest=btc, chronology_manifest=chronology, artifact_root=(tmp_path / "never-created").resolve(), repository_root=Path.cwd().resolve())
+ bars, metadata = load_development_bars(eth, development_start=datetime(2022, 1, 1, tzinfo=timezone.utc), development_end=datetime(2025, 1, 1, tzinfo=timezone.utc), chronology_claim=json.loads(chronology.read_text())["assets"]["ETH"])
+ assert [item.timestamp for item in bars] == eth_stamps[:-1]
+ assert max(item.timestamp for item in bars) < datetime(2025, 1, 1, tzinfo=timezone.utc)
+ assert all(item.close != D(999) for item in bars)  # synthetic holdout sentinel is never public.
+ assert metadata["isolation_counters"] == {"physical_row_groups_read": 1, "mixed_row_groups_read": 1, "development_rows_returned": 2, "holdout_rows_discarded": 1}
+ assert "rows" not in metadata and "table" not in metadata
+
+def test_all_holdout_groups_are_skipped_and_all_development_groups_are_included(tmp_path):
+ eth, stamps = parquet_manifest(tmp_path, "ETH", 4)
+ claim = {"development_row_count": 2, "development_final_timestamp": stamps[1].isoformat()}
+ bars, metadata = load_development_bars(eth, development_start=datetime(2022, 1, 1, tzinfo=timezone.utc), development_end=datetime(2025, 1, 1, tzinfo=timezone.utc), chronology_claim=claim)
+ assert [item.timestamp for item in bars] == stamps[:-1]
+ assert metadata["isolation_counters"] == {"physical_row_groups_read": 2, "mixed_row_groups_read": 0, "development_rows_returned": 2, "holdout_rows_discarded": 0}
+
+def test_sealed_eth_btc_development_count_claims_are_exact_metadata_invariants():
+ chronology = json.loads((Path.cwd() / "docs" / "research_pipeline" / "fib_prospective_v1" / "chronology-manifest.json").read_text(encoding="utf-8"))
+ assert (chronology["assets"]["ETH"]["development_row_count"], chronology["assets"]["ETH"]["development_final_timestamp"]) == (6576, "2024-12-31T20:00:00+00:00")
+ assert (chronology["assets"]["BTC"]["development_row_count"], chronology["assets"]["BTC"]["development_final_timestamp"]) == (1096, "2024-12-31T00:00:00+00:00")
 
 @pytest.mark.parametrize(("direction", "reason"), [("LONG", "STOP"), ("SHORT", "STOP")])
 def test_synthetic_stop_losses(direction, reason):
