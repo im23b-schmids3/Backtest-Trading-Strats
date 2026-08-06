@@ -5,17 +5,20 @@ import json
 from pathlib import Path
 
 import pytest
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from research_pipeline.cli import main
 from research_pipeline.fib_retracement_continuation_v1.accounting import close_trade, compounded_equity
 from research_pipeline.fib_retracement_continuation_v1.constants import CANDIDATES, ENTRY_RATIO, TARGET_RATIOS
 from research_pipeline.fib_retracement_continuation_v1.execution import execute_order, process_position, submit_order
 from research_pipeline.fib_retracement_continuation_v1.ids import event_id, exit_leg_id, fib_range_id, impulse_id, order_id, setup_id, trade_id
-from research_pipeline.fib_retracement_continuation_v1.manifests import ManifestError, canonical_manifest_hash, verify_manifest
+from research_pipeline.fib_retracement_continuation_v1.manifests import ManifestError, canonical_chronology_hash, canonical_manifest_hash, verify_chronology_manifest, verify_manifest
 from research_pipeline.fib_retracement_continuation_v1.metrics import gates
 from research_pipeline.fib_retracement_continuation_v1.models import Bar, Candidate, ExecutionAssumptions
 from research_pipeline.fib_retracement_continuation_v1.reconciliation import reconcile
-from research_pipeline.fib_retracement_continuation_v1.runner import materialize_synthetic, run_candidate, run_development, run_holdout, run_synthetic
+from research_pipeline.fib_retracement_continuation_v1.loader import parquet_schema_sha256
+from research_pipeline.fib_retracement_continuation_v1.runner import development_diagnostic, materialize_synthetic, run_candidate, run_development, run_holdout, run_synthetic
 from research_pipeline.fib_retracement_continuation_v1.strategy import create_setup, fib_price
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -37,6 +40,32 @@ def manifest(tmp_path, rows=None):
  data["manifestSha256"] = canonical_manifest_hash(data)
  path = tmp_path / "synthetic-manifest.json"; path.write_text(json.dumps(data), encoding="utf-8")
  return path, data, rows
+
+def parquet_manifest(tmp_path, symbol, interval_hours):
+ source = tmp_path / f"{symbol}.parquet"
+ start = datetime(2022, 1, 1, tzinfo=timezone.utc)
+ end = datetime(2025, 1, 1, tzinfo=timezone.utc)
+ stamps = [start, end - timedelta(hours=interval_hours), end]
+ values = [(100, 101, 99, 100)] * 5 + [(999, 1000, 998, 999)]
+ writer = None
+ for stamp, (open_, high, low, close) in zip(stamps, values):
+  table = pa.table({"open": [float(open_)], "high": [float(high)], "low": [float(low)], "close": [float(close)], "volume": [3.0], "timestamp": [stamp]})
+  if writer is None: writer = pq.ParquetWriter(source, table.schema)
+  writer.write_table(table)
+ writer.close()
+ data = {"absoluteSourcePath": str(source.resolve()), "sourceFileSha256": hashlib.sha256(source.read_bytes()).hexdigest(), "fileSizeBytes": source.stat().st_size, "schemaSha256": parquet_schema_sha256(source), "rowCount": 3, "developmentRowCount": 2, "firstTimestamp": stamps[0].isoformat(), "finalTimestamp": stamps[-1].isoformat(), "expectedInterval": "PT4H" if interval_hours == 4 else "P1D", "provenanceClassification": "USER_SUPPLIED_PROVENANCE_EVIDENCE", "sourceExchange": "UNKNOWN", "instrumentType": "UNKNOWN", "historicalV6Identity": "NOT_CLAIMED"}
+ data["manifestSha256"] = canonical_manifest_hash(data)
+ path = tmp_path / f"{symbol}-manifest.json"; path.write_text(json.dumps(data), encoding="utf-8")
+ return path, stamps
+
+def chronology_manifest(tmp_path, eth, btc, eth_stamps, btc_stamps):
+ def asset(path, stamps):
+  source = json.loads(path.read_text())
+  return {"source_manifest_path": str(path.resolve()), "source_manifest_sha256": source["manifestSha256"], "total_row_count": 3, "development_row_count": 2, "holdout_row_count": 1, "development_first_timestamp": stamps[0].isoformat(), "development_final_timestamp": stamps[1].isoformat(), "holdout_first_timestamp": stamps[2].isoformat(), "holdout_final_timestamp": stamps[2].isoformat()}
+ data = {"chronology_contract_id":"FIB09_V1_ETH_BTC_UTC_2022_2025_LOCK","study_id":"FibRetracementContinuation.ETH_BTC_V1_PROSPECTIVE_VALIDATION","timezone":"UTC","development_start_inclusive":"2022-01-01T00:00:00+00:00","development_end_exclusive":"2025-01-01T00:00:00+00:00","holdout_start_inclusive":"2025-01-01T00:00:00+00:00","holdout_end_exclusive":None,"boundary_semantics":{"development":"timestamp >= development_start_inclusive and timestamp < development_end_exclusive","holdout":"timestamp >= holdout_start_inclusive","no_gap_requirement":True},"candidate_ids":[row["candidate_id"] for row in CANDIDATES],"assets":{"ETH":asset(eth,eth_stamps),"BTC":asset(btc,btc_stamps)},"no_overlap":True,"holdout_locked":True,"holdout_strategy_accessed":False,"chronology_selected_without_strategy_results":True,"historical_matrix_used_for_split_selection":False,"source_files_modified":False}
+ data["chronologyManifestSha256"] = canonical_chronology_hash(data)
+ path=tmp_path / "chronology.json"; path.write_text(json.dumps(data),encoding="utf-8")
+ return path
 
 def test_manifest_tampering_rejected(tmp_path):
  path, data, _ = manifest(tmp_path); data["rowCount"] = 2; path.write_text(json.dumps(data), encoding="utf-8")
@@ -133,8 +162,54 @@ def test_candidate_independence(tmp_path):
  assert [x["candidate_id"] for x in result["candidates"]] == [x["candidate_id"] for x in CANDIDATES]
 
 def test_development_requires_absolute_new_paths(tmp_path):
- with pytest.raises(ValueError, match="ARTIFACT_ROOT"): run_development(eth_manifest="x", btc_manifest="y", artifact_root="relative", repository_root=Path.cwd())
- with pytest.raises(FileExistsError, match="COLLISION"): run_development(eth_manifest="x", btc_manifest="y", artifact_root=tmp_path, repository_root=Path.cwd())
+ with pytest.raises(ValueError, match="ARTIFACT_ROOT"): run_development(eth_manifest="x", btc_manifest="y", chronology_manifest="x", artifact_root="relative", repository_root=Path.cwd())
+ with pytest.raises(FileExistsError, match="COLLISION"): run_development(eth_manifest="x", btc_manifest="y", chronology_manifest="x", artifact_root=tmp_path, repository_root=Path.cwd())
+
+def test_development_diagnostic_is_manifest_only(tmp_path):
+ eth, _ = parquet_manifest(tmp_path, "ETH", 4); btc, _ = parquet_manifest(tmp_path, "BTC", 24)
+ result = development_diagnostic(eth_manifest=eth, btc_manifest=btc)
+ assert result["eth"]["rows_read"] is False and result["btc"]["rows_read"] is False
+ assert "artifact_root" not in result and not list(tmp_path.glob("**/development-result.json"))
+
+def test_development_reads_only_synthetic_development_rows_and_writes_artifacts(tmp_path, monkeypatch):
+ eth, eth_stamps = parquet_manifest(tmp_path, "ETH", 4); btc, btc_stamps = parquet_manifest(tmp_path, "BTC", 24)
+ chronology = chronology_manifest(tmp_path, eth, btc, eth_stamps, btc_stamps)
+ observed = []
+ original = run_candidate
+ def capture(bars, candidate, *args, **kwargs):
+  observed.extend(bar.timestamp for bar in bars)
+  return original(bars, candidate, *args, **kwargs)
+ monkeypatch.setattr("research_pipeline.fib_retracement_continuation_v1.runner.run_candidate", capture)
+ root = tmp_path / "development-output"
+ result = run_development(eth_manifest=eth, btc_manifest=btc, chronology_manifest=chronology, artifact_root=root.resolve(), repository_root=Path.cwd().resolve())
+ assert result == {"artifact_root": str(root.resolve()), "rows_read": True, "candidate_count": 3, "holdout_status": "LOCKED_NOT_OPENED"}
+ assert all(stamp not in {eth_stamps[-1], btc_stamps[-1]} for stamp in observed)
+ assert (root / "development-result.json").is_file()
+ assert {path.name for path in (root / "candidates").iterdir()} == {row["candidate_id"] for row in CANDIDATES}
+ assert all((root / "candidates" / row["candidate_id"] / "reconciliation.json").is_file() for row in CANDIDATES)
+
+def test_development_and_diagnostic_callables_are_distinct():
+ assert run_development is not development_diagnostic
+
+def test_missing_chronology_manifest_is_rejected(tmp_path):
+ eth, _ = parquet_manifest(tmp_path, "ETH", 4); btc, _ = parquet_manifest(tmp_path, "BTC", 24)
+ with pytest.raises(ManifestError, match="CHRONOLOGY_MANIFEST_MISSING"):
+  run_development(eth_manifest=eth, btc_manifest=btc, chronology_manifest=(tmp_path / "missing.json").resolve(), artifact_root=(tmp_path / "never-created").resolve(), repository_root=Path.cwd().resolve())
+
+def test_chronology_tampering_and_linked_manifest_mismatch_are_rejected(tmp_path):
+ eth, eth_stamps = parquet_manifest(tmp_path, "ETH", 4); btc, btc_stamps = parquet_manifest(tmp_path, "BTC", 24); chronology = chronology_manifest(tmp_path, eth, btc, eth_stamps, btc_stamps)
+ payload=json.loads(chronology.read_text()); payload["no_overlap"] = False; chronology.write_text(json.dumps(payload))
+ with pytest.raises(ManifestError, match="SELF_HASH"): verify_chronology_manifest(chronology, eth_manifest=eth, btc_manifest=btc)
+ payload["chronologyManifestSha256"] = canonical_chronology_hash(payload); payload["assets"]["ETH"]["source_manifest_sha256"]="0"*64; payload["chronologyManifestSha256"] = canonical_chronology_hash(payload); chronology.write_text(json.dumps(payload))
+ with pytest.raises(ManifestError, match="SOURCE_MANIFEST_HASH"): verify_chronology_manifest(chronology, eth_manifest=eth, btc_manifest=btc)
+
+def test_mixed_row_group_fails_closed_before_execution(tmp_path):
+ eth, eth_stamps = parquet_manifest(tmp_path, "ETH", 4); btc, btc_stamps = parquet_manifest(tmp_path, "BTC", 24); chronology = chronology_manifest(tmp_path, eth, btc, eth_stamps, btc_stamps)
+ source=Path(json.loads(eth.read_text())["absoluteSourcePath"]); table=pq.read_table(source); pq.write_table(table, source)
+ payload=json.loads(eth.read_text()); payload["sourceFileSha256"]=hashlib.sha256(source.read_bytes()).hexdigest(); payload["fileSizeBytes"]=source.stat().st_size; payload["schemaSha256"]=parquet_schema_sha256(source); payload["manifestSha256"]=canonical_manifest_hash(payload); eth.write_text(json.dumps(payload))
+ payload=json.loads(chronology.read_text()); payload["assets"]["ETH"]["source_manifest_sha256"]=json.loads(eth.read_text())["manifestSha256"]; payload["chronologyManifestSha256"]=canonical_chronology_hash(payload); chronology.write_text(json.dumps(payload))
+ with pytest.raises(ManifestError, match="ROW_GROUP_CROSSES_LOCK"):
+  run_development(eth_manifest=eth, btc_manifest=btc, chronology_manifest=chronology, artifact_root=(tmp_path / "never-created").resolve(), repository_root=Path.cwd().resolve())
 
 @pytest.mark.parametrize(("direction", "reason"), [("LONG", "STOP"), ("SHORT", "STOP")])
 def test_synthetic_stop_losses(direction, reason):

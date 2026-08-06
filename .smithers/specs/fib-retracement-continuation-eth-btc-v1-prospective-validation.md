@@ -49,7 +49,7 @@ assert one terminal setup outcome and all reconciliation identities
 
 ## Chronology, gates, and anti-overfitting
 
-After local contract acceptance only, `chronology-manifest.json` must choose one contiguous UTC development interval followed immediately by one locked unseen holdout interval. The holdout is unopened: no reading, derived artifacts, metrics, diagnostics, or execution before development gates pass. No date may be chosen from returns; split is fixed from contract coverage before development execution.
+The sealed chronology contract is `docs/research_pipeline/fib_prospective_v1/chronology-manifest.json` (canonical self-hash `bb910f85e271a5f436c6203f279a3ef0d4bc4119344e409fdeefec1dd01e5794`) and is required for every development invocation. It fixes identical UTC boundaries for both assets: development is `timestamp >= 2022-01-01T00:00:00+00:00` and `< 2025-01-01T00:00:00+00:00`; holdout is `timestamp >= 2025-01-01T00:00:00+00:00`, with no exclusive end. The holdout is unopened: no reading, derived artifacts, metrics, diagnostics, or execution before development gates pass. No date may be chosen from returns; split is fixed from contract coverage before development execution.
 
 Development gates, independently per candidate: positive net after costs; PF >=1.30; positive average net R; max DD <=20%; positive with one extra conservative slippage unit each entry/exit; positive after best-trade removal; full reconciliation. Evidence labels: `<30` `LOW_FREQUENCY_DEVELOPMENT_EVIDENCE`, `30-59` `MODERATE_DEVELOPMENT_EVIDENCE`, `>=60` `FULL_DEVELOPMENT_GATE_ELIGIBILITY`. Holdout labels: `<15` `INSUFFICIENT_HOLDOUT_SAMPLE`, `15-29` `PRELIMINARY_LOW_FREQUENCY_EVIDENCE`, `>=30` `FULL_HOLDOUT_GATE_ELIGIBILITY`.
 

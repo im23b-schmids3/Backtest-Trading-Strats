@@ -124,7 +124,7 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("fib09-v1-development-diagnostic", help="verify explicit Fib09 V1 manifests")
     command.add_argument("--eth-manifest", required=True); command.add_argument("--btc-manifest", required=True)
     command = sub.add_parser("fib09-v1-development", help="future deterministic Fib09 V1 development runner")
-    command.add_argument("--eth-manifest", required=True); command.add_argument("--btc-manifest", required=True); command.add_argument("--artifact-root", required=True); command.add_argument("--repository-root", required=True)
+    command.add_argument("--eth-manifest", required=True); command.add_argument("--btc-manifest", required=True); command.add_argument("--chronology-manifest", required=True); command.add_argument("--artifact-root", required=True); command.add_argument("--repository-root", required=True)
     command = sub.add_parser("fib09-v1-holdout", help="locked holdout refusal")
     command = imbalance_sub.add_parser("validate-btc-long-only-v5-artifacts", help="verify immutable V5 artifact identities and content hashes")
     command.add_argument("artifact_root")
@@ -308,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
             _print(development_diagnostic(eth_manifest=args.eth_manifest, btc_manifest=args.btc_manifest))
         elif args.command == "fib09-v1-development":
             from .fib_retracement_continuation_v1.runner import run_development
-            _print(run_development(eth_manifest=args.eth_manifest, btc_manifest=args.btc_manifest, artifact_root=args.artifact_root, repository_root=args.repository_root))
+            _print(run_development(eth_manifest=args.eth_manifest, btc_manifest=args.btc_manifest, chronology_manifest=args.chronology_manifest, artifact_root=args.artifact_root, repository_root=args.repository_root))
         elif args.command == "fib09-v1-holdout":
             from .fib_retracement_continuation_v1.runner import run_holdout
             _print(run_holdout())

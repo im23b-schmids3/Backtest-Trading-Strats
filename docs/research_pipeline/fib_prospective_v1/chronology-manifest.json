@@ -1,0 +1,50 @@
+{
+  "chronology_contract_id": "FIB09_V1_ETH_BTC_UTC_2022_2025_LOCK",
+  "study_id": "FibRetracementContinuation.ETH_BTC_V1_PROSPECTIVE_VALIDATION",
+  "timezone": "UTC",
+  "development_start_inclusive": "2022-01-01T00:00:00+00:00",
+  "development_end_exclusive": "2025-01-01T00:00:00+00:00",
+  "holdout_start_inclusive": "2025-01-01T00:00:00+00:00",
+  "holdout_end_exclusive": null,
+  "boundary_semantics": {
+    "development": "timestamp >= development_start_inclusive and timestamp < development_end_exclusive",
+    "holdout": "timestamp >= holdout_start_inclusive",
+    "no_gap_requirement": true
+  },
+  "candidate_ids": [
+    "FIB09-ETH-4H-POST0830",
+    "FIB09-ETH-4H-POST0786-REFERENCE",
+    "FIB09-BTC-1D-POST0786"
+  ],
+  "assets": {
+    "ETH": {
+      "source_manifest_path": "C:/Users/sandr/Trading-Bot-Fib/docs/research_pipeline/fib_prospective_v1/data-contracts/ETH_4H/manifest.json",
+      "source_manifest_sha256": "c3e9b15473b6210ad486114afb8fafc6b728e8bf512e1ed87e0b0651928a9fa3",
+      "total_row_count": 9928,
+      "development_row_count": 6576,
+      "holdout_row_count": 3352,
+      "development_first_timestamp": "2022-01-01T00:00:00+00:00",
+      "development_final_timestamp": "2024-12-31T20:00:00+00:00",
+      "holdout_first_timestamp": "2025-01-01T00:00:00+00:00",
+      "holdout_final_timestamp": "2026-07-13T12:00:00+00:00"
+    },
+    "BTC": {
+      "source_manifest_path": "C:/Users/sandr/Trading-Bot-Fib/docs/research_pipeline/fib_prospective_v1/data-contracts/BTC_1D/manifest.json",
+      "source_manifest_sha256": "b9f79623022cd234a702c326de06f6acf7d4e23a75916ec1ea716ea0b9a9a62a",
+      "total_row_count": 1654,
+      "development_row_count": 1096,
+      "holdout_row_count": 558,
+      "development_first_timestamp": "2022-01-01T00:00:00+00:00",
+      "development_final_timestamp": "2024-12-31T00:00:00+00:00",
+      "holdout_first_timestamp": "2025-01-01T00:00:00+00:00",
+      "holdout_final_timestamp": "2026-07-12T00:00:00+00:00"
+    }
+  },
+  "no_overlap": true,
+  "holdout_locked": true,
+  "holdout_strategy_accessed": false,
+  "chronology_selected_without_strategy_results": true,
+  "historical_matrix_used_for_split_selection": false,
+  "source_files_modified": false,
+  "chronologyManifestSha256": "bb910f85e271a5f436c6203f279a3ef0d4bc4119344e409fdeefec1dd01e5794"
+}

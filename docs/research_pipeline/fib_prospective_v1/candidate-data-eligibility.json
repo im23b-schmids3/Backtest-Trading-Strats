@@ -163,6 +163,11 @@
     }
   },
   "prospectiveRule": "Hash-bound file identity, owner-attested symbol/timeframe, independently verified cadence, UTC chronology, and OHLCV integrity permit this prospective study only. No venue/instrument transferability or historical V6/V6.5 reproduction is claimed. Normalized/derived prior-study material remains ineligible. Aggregate trades and other intervals were not resampled.",
+  "sealedChronologyManifest": {
+    "path": "docs/research_pipeline/fib_prospective_v1/chronology-manifest.json",
+    "requiredForDevelopment": true,
+    "chronologyManifestSha256": "bb910f85e271a5f436c6203f279a3ef0d4bc4119344e409fdeefec1dd01e5794"
+  },
   "executionStatus": {
     "noBacktestRun": true,
     "noOptimizationRun": true,
