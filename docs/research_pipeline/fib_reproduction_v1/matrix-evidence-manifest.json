@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "fib-matrix-evidence-manifest/v1",
+  "evidenceStatus": "USER_SUPPLIED_EVIDENCE: authenticated as files supplied by the repository owner; current repository bytes are Git-tracked, but no historic hash/reference proves byte identity to a historical generated matrix.",
+  "collectionMethod": "Read complete CSV files; computed SHA-256 and byte sizes; queried Git metadata only. No market-data file, generated data, backtest, optimization, holdout, Phase A/B, Alpha, prop, portfolio, live action, or candidate execution was accessed.",
+  "matrices": [
+    {
+      "path": "docs/research_pipeline/fib_reproduction_v1/evidence/v6_ranked_matrix.csv",
+      "sha256": "bede956d6e972606f5c30e3e758902db65a83069b701e3226e76147740866661",
+      "byteSize": 1245845,
+      "gitBlob": "28ec027b9aa3a3183416492c31dffd182388bc5a",
+      "gitCommit": "0d87708f3a8d0e7794a925ef7fcba0b7e21b5f3c",
+      "gitCommitTimestamp": "2026-08-06T16:07:29+02:00",
+      "gitCommitSubject": "Add Fib 0.9 reconstruction evidence",
+      "rowCount": 1350,
+      "columnCount": 65,
+      "coverage": {"strategy_version": ["Strategy_V6_PostTP1StopResearch"], "assets": ["BTC", "ETH", "GOLD", "SOL", "XRP"], "timeframes": ["1d", "4h"], "policies": ["A", "B", "C", "D", "E"], "entry_level": ["0.9"], "min_distance": ["4", "7", "10", "13", "16"], "min_move": ["0.0025", "0.005", "0.01", "0.02", "0.03", "0.05"], "post_tp1_stop_fib_ratio": ["", "0.618", "0.786", "0.88", "0.9"]},
+      "rankSemantics": "PROVEN from current generator code: robust_rank is global descending robust_score rank after the generator's stated sort/tie order; ranks 1..1350 are unique and contiguous. A matrix row proves only its reported parameter/result, not historical execution mechanics.",
+      "missingFields": {"post_tp1_stop_fib_ratio": 270, "warnings": 887, "calmar_ratio": 30, "sortino_ratio": 30, "average_loss": 150, "profit_factor": 150},
+      "duplicateExactRows": 0,
+      "internalInconsistencies": ["270 policy-A rows have an empty post_tp1_stop_fib_ratio while other policies report a ratio.", "The same reported result vector repeats across distinct min_move/min_distance parameter rows; these are not byte-identical rows because parameter and rank fields differ."]
+    },
+    {
+      "path": "docs/research_pipeline/fib_reproduction_v1/evidence/v6_5_ranked_matrix.csv",
+      "sha256": "c45c360c866b237df74028d5864911776947af97567bfb8de679699fc2c509dd",
+      "byteSize": 71047,
+      "gitBlob": "c94e7e8d83f94254a470964cfcd877ca02fb15c9",
+      "gitCommit": "0d87708f3a8d0e7794a925ef7fcba0b7e21b5f3c",
+      "gitCommitTimestamp": "2026-08-06T16:07:29+02:00",
+      "gitCommitSubject": "Add Fib 0.9 reconstruction evidence",
+      "rowCount": 88,
+      "columnCount": 54,
+      "coverage": {"strategy_version": ["Strategy_V6_5_PostTP1StopPlacement"], "assets": ["BTC", "ETH", "SOL", "XRP"], "timeframes": ["1d", "4h"], "stop_policy": ["Fib 0.786", "Fib 0.820", "Fib 0.830", "Fib 0.840", "Fib 0.850", "Fib 0.860", "Fib 0.870", "Fib 0.880", "Fib 0.890", "Fib 0.900", "no_stop_movement"], "entry_level": ["0.9"], "min_distance": ["4", "7", "10", "16"], "min_move": ["0.0025", "0.05"], "post_tp1_stop_fib_ratio": ["", "0.786", "0.82", "0.83", "0.84", "0.85", "0.86", "0.87", "0.88", "0.89", "0.9"]},
+      "rankSemantics": "PROVEN from current generator code: robust_rank is global descending robust_score rank after stated sort/tie order; ranks 1..88 are unique and contiguous. v6_selection_robust_rank/score identify the selected V6 row reported by the V6.5 generator, not independent historical provenance.",
+      "missingFields": {"post_tp1_stop_fib_ratio": 8, "warnings": 86},
+      "duplicateExactRows": 0,
+      "internalInconsistencies": ["Eight no_stop_movement rows use an empty post_tp1_stop_fib_ratio.", "CSV serializes the 0.830 setting as numeric text 0.83 while stop_policy says Fib 0.830; numerically consistent but textually non-identical."]
+    }
+  ],
+  "matrixDifferences": ["V6 has 1,350 rows, five policies, 65 columns, includes GOLD, and varies five min_distance by six min_move values.", "V6.5 has 88 rows, 11 stop placements, 54 columns, excludes GOLD, and carries V6 selection policy/rank/score fields plus placement-specific penalties.", "V6 reports policy-C comparative fields suffixed _vs_A and concentration/performance-instability penalties; V6.5 reports comparisons _vs_0880 and stop-neighborhood/placement-instability/consistency penalties."] ,
+  "columnMeaningGroups": {
+    "identity_and_parameters": "strategy_version identifies the reporting generator; policy/stop_policy names stop behavior; post_tp1_stop_fib_ratio is its numeric ratio (blank for no movement); asset, timeframe, entry_level, min_distance, min_move identify the reported parameter row; V6.5 v6_selection_* fields report its input V6 selection.",
+    "trade_and_equity_metrics": "number_of_trades, trades_per_year, initial_capital, final_equity, total_return, annualized_return, net_pnl, gross_pnl, fees, slippage, profit_factor, expectancy, average_r, median_r, win_rate, average_win, average_loss, sharpe_ratio, sortino_ratio, calmar_ratio, maximum_drawdown, average_holding_duration report aggregate outcome metrics.",
+    "direction_and_exit_metrics": "long_trades, short_trades, long_net_pnl, short_net_pnl, stop_before_tp1_rate, post_tp1_stop_exit_rate, tp1_reach_rate through tp5_reach_rate, long_average_r, long_win_rate, long_post_tp1_stop_rate, short_average_r, short_win_rate, short_post_tp1_stop_rate report directional/exit aggregates.",
+    "comparison_and_chronology_metrics": "percentage_trades_improved_vs_A/_0880, percentage_trades_worsened_vs_A/_0880, average_incremental_r_vs_A/_0880, comparable_trades_vs_A/_0880 compare the named baseline; early_return and late_return are the generator's two equity-series halves; fees_slippage_ratio is a reported cost ratio; warnings is emitted warning text.",
+    "ranking_metrics": "cost_penalty, asset_concentration_penalty, timeframe_concentration_penalty, nearby_parameter_penalty, out_of_sample_consistency_penalty, low_trade_penalty, performance_instability_penalty (V6), and stop_neighborhood_penalty, placement_instability_penalty, consistency_penalty (V6.5) are reported robust-score components; robust_score is the reported ranking score and robust_rank its reported ordinal rank. Meanings are code-derived, not historical-run provenance."
+  },
+  "classification": {"matrixRows": "USER_SUPPLIED_EVIDENCE", "currentGitTracking": "PROVEN", "currentGeneratorSemantics": "PROVEN", "historicalGenerationByteIdentity": "UNRESOLVED", "historicalExecutionMechanics": "UNRESOLVED"}
+}
