@@ -128,31 +128,127 @@ def load_synthetic_embedded_bars(manifest: dict[str, Any]) -> list[Bar]:
 
 
 def phase_a_diagnostic(path: Path = PHASE_A_MANIFEST) -> dict[str, Any]:
-    """Read-only in-memory event reconciliation diagnostic; it writes no artifacts."""
+    """Compatibility name for the read-only HTF-LFVG Phase-A funnel diagnostic."""
+    return htf_lfvg_v1_phase_a_funnel_diagnostic(path)
+
+
+# Funnel stage contract.  These names intentionally name the engine evidence,
+# rather than a prose interpretation: a proposed event is emitted only after
+# daily bias, an eligible 4H level, and a valid 15m sweep have all passed;
+# later stages are their exact append-only lifecycle decisions.  An activated
+# order necessarily passed both stop-distance and projected-RR gates.
+_FUNNEL_EVENT_STAGES = {
+    "mssConfirmed": "MSS_CONFIRMED",
+    "displacementPass": "DISPLACEMENT_CONFIRMED",
+    "validFVG": "FVG_CONFIRMED",
+    "pendingOrdersActivated": "ORDER_ACTIVATED",
+    "pendingOrdersFilled": "ENTRY_FILLED",
+}
+_FUNNEL_STAGE_ORDER = (
+    "proposedSetups", "dailyBiasPass", "activeHTFLevel", "validSweep",
+    "mssConfirmed", "displacementPass", "validFVG", "stopDistancePass",
+    "projectedRRPass", "pendingOrdersActivated", "pendingOrdersFilled",
+    "executedTrades",
+)
+
+
+def _funnel_candidate_summary(candidate_id: str, events: list[Any], outcomes: list[dict[str, Any]], trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate the sealed engine lifecycle without inferring unrecorded gates."""
+    reconcile_events(events, outcomes, trades)
+    proposals = {event.setup_id: event for event in events if event.decision == "SETUP_PROPOSED"}
+    outcomes_by_setup = {outcome["setup_id"]: outcome for outcome in outcomes}
+    if set(proposals) != set(outcomes_by_setup):
+        raise ValueError("RECONCILIATION_ERROR: proposed setup/outcome mismatch")
+    directions = {setup_id: outcomes_by_setup[setup_id].get("direction") for setup_id in proposals}
+    if any(direction not in {"LONG", "SHORT"} for direction in directions.values()):
+        raise ValueError("RECONCILIATION_ERROR: setup direction is missing")
+    terminal = {disposition.value: 0 for disposition in TerminalDisposition}
+    for outcome in outcomes:
+        terminal[outcome["terminal_disposition"]] = terminal.get(outcome["terminal_disposition"], 0) + 1
+    if sum(terminal.values()) != len(proposals):
+        raise ValueError("RECONCILIATION_ERROR: terminal disposition count")
+
+    event_setup_ids = {
+        stage: {event.setup_id for event in events if event.decision == decision}
+        for stage, decision in _FUNNEL_EVENT_STAGES.items()
+    }
+    proposed_ids = set(proposals)
+    # These gate passes have no individual event because the proposal is the
+    # engine's first setup-scoped evidence.  Keeping them equal to proposals
+    # makes the limitation explicit and prevents synthetic upstream counts.
+    stage_ids = {
+        "proposedSetups": proposed_ids,
+        "dailyBiasPass": proposed_ids,
+        "activeHTFLevel": proposed_ids,
+        "validSweep": proposed_ids,
+        **event_setup_ids,
+        "stopDistancePass": event_setup_ids["pendingOrdersActivated"],
+        "projectedRRPass": event_setup_ids["pendingOrdersActivated"],
+        "executedTrades": {outcome["setup_id"] for outcome in outcomes if outcome["terminal_disposition"] == TerminalDisposition.TRADE_EXECUTED.value},
+    }
+    if len(stage_ids["executedTrades"]) != len(trades):
+        raise ValueError("RECONCILIATION_ERROR: executed outcomes/trades mismatch")
+    long_short = {
+        stage: {side.lower(): sum(directions[setup_id] == side for setup_id in ids) for side in ("LONG", "SHORT")}
+        for stage, ids in stage_ids.items()
+    }
+    lifecycle = []
+    for setup_id, proposal in sorted(proposals.items(), key=lambda item: (item[1].sequence, item[0]))[:20]:
+        history = sorted((event for event in events if event.setup_id == setup_id), key=lambda event: event.sequence)
+        lifecycle.append({
+            "setupId": setup_id,
+            "direction": directions[setup_id],
+            "proposedTimestamp": proposal.time,
+            "events": [{"decision": event.decision, "timestamp": event.time} for event in history],
+            "terminalDisposition": outcomes_by_setup[setup_id]["terminal_disposition"],
+        })
+    return {
+        "candidateId": candidate_id,
+        "proposedSetups": len(proposed_ids),
+        "executedTrades": len(trades),
+        "dailyBiasPassCount": len(stage_ids["dailyBiasPass"]),
+        "activeHTFLevelCount": len(stage_ids["activeHTFLevel"]),
+        "validSweepCount": len(stage_ids["validSweep"]),
+        "mssConfirmedCount": len(stage_ids["mssConfirmed"]),
+        "displacementPassCount": len(stage_ids["displacementPass"]),
+        "validFVGCount": len(stage_ids["validFVG"]),
+        "pendingOrdersActivatedCount": len(stage_ids["pendingOrdersActivated"]),
+        "pendingOrdersFilledCount": len(stage_ids["pendingOrdersFilled"]),
+        "projectedRRPassCount": len(stage_ids["projectedRRPass"]),
+        "stopDistancePassCount": len(stage_ids["stopDistancePass"]),
+        "terminalDispositionCounts": terminal,
+        "stageCounts": {stage: len(ids) for stage, ids in stage_ids.items()},
+        "longShortStageCounts": long_short,
+        "firstProposedSetupLifecycles": lifecycle,
+        "fullyReconciled": True,
+    }
+
+
+def _funnel_bottleneck(summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    aggregate = {stage: sum(summary["stageCounts"][stage] for summary in summaries) for stage in _FUNNEL_STAGE_ORDER}
+    previous = _FUNNEL_STAGE_ORDER[0]
+    for stage in _FUNNEL_STAGE_ORDER[1:]:
+        if aggregate[stage] < aggregate[previous]:
+            return {"stage": stage, "counts": {"predecessor": aggregate[previous], "stage": aggregate[stage]}, "explanation": f"{stage} is the first recorded lifecycle stage below {previous}; its count is derived directly from engine events."}
+        previous = stage
+    return {"stage": "NO_MEASURABLE_DROP", "counts": {"proposedSetups": aggregate["proposedSetups"]}, "explanation": "No recorded funnel stage falls below its predecessor."}
+
+
+def htf_lfvg_v1_phase_a_funnel_diagnostic(path: Path = PHASE_A_MANIFEST) -> dict[str, Any]:
+    """Execute only the sealed data contract in memory; never materialize artifacts."""
     bars = _load_explicit_phase_a_bars(path)
-    times = [bar.time for bar in bars]
-    reports=[]; reconciliation_errors=[]
+    reports = []
     for candidate_id in CANDIDATES:
-        engine=HTFLevelLiquidityFVG(candidate_id,run_id=f"diagnostic-{candidate_id}")
-        for bar in bars: engine.feed(bar)
-        if engine.position: engine._exit(bars[-1],bars[-1].close,engine.position["remaining"],"FORCED_END_OF_DATA_EXIT")
-        if engine.setup: engine._finish(bars[-1].time,TerminalDisposition.MSS_WINDOW_EXPIRED)
-        proposed={e.setup_id for e in engine.events if e.decision=="SETUP_PROPOSED"}
-        terminal={setup_id:0 for setup_id in proposed}
-        for event in engine.events:
-            if event.decision=="TERMINAL_DISPOSITION" and event.setup_id in terminal: terminal[event.setup_id]+=1
-        orphans=[event for event in engine.events if event.scope in {EventScope.SETUP,EventScope.TRADE} and (not event.setup_id or event.setup_id not in proposed)]
-        executed={outcome["setup_id"]:outcome.get("trade_id") for outcome in engine.outcomes if outcome.get("terminal_disposition")=="TRADE_EXECUTED"}
-        bad_trades=[trade for trade in engine.trades if executed.get(trade.get("setup_id")) != trade.get("trade_id")]
-        event_ids=[event.event_id for event in engine.events]
-        reports.append({"candidateId":candidate_id,"totalEvents":len(engine.events),"setupScopedEvents":sum(event.scope in {EventScope.SETUP,EventScope.TRADE} for event in engine.events),"globalLevelAggregationEvents":sum(event.scope in {EventScope.GLOBAL,EventScope.LEVEL} for event in engine.events),"proposedSetupCount":len(proposed),"orphanEventCount":len(orphans),"firstOrphans":[{"eventId":event.event_id,"decision":event.decision,"setupId":event.setup_id,"timestamp":event.time,"scope":event.scope.value} for event in orphans[:20]],"duplicateEventIds":len(event_ids)-len(set(event_ids)),"setupsMissingTerminalEvents":sum(count==0 for count in terminal.values()),"setupsMultipleTerminalEvents":sum(count>1 for count in terminal.values()),"tradesMissingExecutedSetups":len(bad_trades)})
-        try:
-            reconcile_events(engine.events,engine.outcomes,engine.trades)
-        except ValueError as exc:
-            # This diagnostic is deliberately non-fatal so it can return the
-            # complete audit summary. Production reconciliation remains fail-closed.
-            reconciliation_errors.append({"candidateId":candidate_id,"error":str(exc)})
-    return {"partitionCount":len(PHASE_A_MONTHS),"totalRows":len(bars),"minimumTimestamp":times[0].isoformat(),"maximumTimestamp":times[-1].isoformat(),"duplicateTimestamps":sum(right==left for left,right in zip(times,times[1:])),"nonIncreasingTimestamps":sum(right<=left for left,right in zip(times,times[1:])),"gapsGreaterThanFiveMinutes":sum(right-left>__import__("datetime").timedelta(minutes=5) for left,right in zip(times,times[1:])),"diagnostics":reports,"reconciliationErrors":reconciliation_errors,"realStudyExecuted":False,"artifactWritten":False}
+        engine = HTFLevelLiquidityFVG(candidate_id, run_id=f"diagnostic-{candidate_id}")
+        for bar in bars:
+            engine.feed(bar)
+        if engine.position:
+            engine._exit(bars[-1], bars[-1].close, engine.position["remaining"], "FORCED_END_OF_DATA_EXIT")
+        if engine.setup:
+            engine._finish(bars[-1].time, TerminalDisposition.MSS_WINDOW_EXPIRED)
+        reports.append(_funnel_candidate_summary(candidate_id, engine.events, engine.outcomes, engine.trades))
+    aggregate_long_short = {stage: {side: sum(report["longShortStageCounts"][stage][side] for report in reports) for side in ("long", "short")} for stage in _FUNNEL_STAGE_ORDER}
+    return {"candidateSummaries": reports, "aggregateLongShortStageCounts": aggregate_long_short, "bottleneck": _funnel_bottleneck(reports), "realPhaseARun": False, "phaseBRun": False, "alphaRun": False, "artifactWritten": False}
 
 
 def run_htf_lfvg_v1_phase_a(*, phase_a_bars_manifest: str, artifact_root: str, repository_root: str) -> dict:

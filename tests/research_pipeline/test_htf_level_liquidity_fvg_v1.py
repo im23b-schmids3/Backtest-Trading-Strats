@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 from research_pipeline.htf_level_liquidity_fvg import Bar, ClosedBarAggregator, HTFLevelLiquidityFVG, frequency_classification, materialize_synthetic, reconcile_events
 from research_pipeline.htf_level_liquidity_fvg.core import Event, EventScope, Level, TerminalDisposition, phase_a_hard_gates, reconcile_events, wilder_atr_prior
 from research_pipeline.htf_level_liquidity_fvg import runner
+from research_pipeline import cli
 
 T=datetime(2023,1,1,tzinfo=timezone.utc)
 def bar(i,o=100,h=102,l=99,c=101): return Bar(T+timedelta(minutes=5*i),o,h,l,c,1,f"b{i}")
@@ -170,7 +171,32 @@ def test_phase_a_diagnostic_is_read_only_and_creates_no_artifacts(tmp_path):
     path,_=_v5_manifest(tmp_path); before={item.relative_to(tmp_path) for item in tmp_path.rglob("*")}
     result=runner.phase_a_diagnostic(path)
     after={item.relative_to(tmp_path) for item in tmp_path.rglob("*")}
-    assert before==after and result["artifactWritten"] is False and len(result["diagnostics"])==3
+    assert before==after and result["artifactWritten"] is False and len(result["candidateSummaries"])==3
+
+
+def test_funnel_diagnostic_cli_prints_one_json_document(monkeypatch,capsys):
+    expected={"artifactWritten":False,"candidateSummaries":[]}
+    monkeypatch.setattr(runner,"htf_lfvg_v1_phase_a_funnel_diagnostic",lambda:expected)
+    assert cli.main(["htf-lfvg-v1-phase-a-funnel-diagnostic"])==0
+    assert json.loads(capsys.readouterr().out)==expected
+
+
+def test_funnel_aggregation_uses_event_contract_and_stable_lifecycle_truncation():
+    events=[]; outcomes=[]
+    for index in range(21):
+        setup_id=f"setup-{index:02d}"; direction="LONG" if index % 2 else "SHORT"
+        events.append(Event(f"proposal-{index}",T.isoformat(),index*2,"candidate","SETUP_PROPOSED",setup_id,inputs={"sweep_id":f"sweep-{index}"},scope=EventScope.SETUP))
+        if index == 0:
+            events.extend([Event("mss",T.isoformat(),100,"candidate","MSS_CONFIRMED",setup_id,inputs={"mss_id":"mss"},scope=EventScope.SETUP),Event("displacement",T.isoformat(),101,"candidate","DISPLACEMENT_CONFIRMED",setup_id,scope=EventScope.SETUP),Event("fvg",T.isoformat(),102,"candidate","FVG_CONFIRMED",setup_id,inputs={"fvg_id":"fvg"},scope=EventScope.SETUP),Event("order",T.isoformat(),103,"candidate","ORDER_ACTIVATED",setup_id,scope=EventScope.SETUP)])
+        events.append(Event(f"terminal-{index}",T.isoformat(),200+index,"candidate","TERMINAL_DISPOSITION",setup_id,scope=EventScope.SETUP))
+        history=[event.decision for event in sorted((event for event in events if event.setup_id==setup_id),key=lambda event:event.sequence)]
+        outcomes.append({"setup_id":setup_id,"direction":direction,"terminal_disposition":"PROJECTED_RR_REJECTED" if index==0 else "MSS_WINDOW_EXPIRED","event_history":history})
+    summary=runner._funnel_candidate_summary("candidate",events,outcomes,[])
+    assert summary["stageCounts"]["proposedSetups"]==21
+    assert summary["stageCounts"]["pendingOrdersActivated"]==1
+    assert summary["longShortStageCounts"]["proposedSetups"]=={"long":10,"short":11}
+    assert len(summary["firstProposedSetupLifecycles"])==20
+    assert summary["firstProposedSetupLifecycles"][0]["setupId"]=="setup-00"
 
 
 @pytest.mark.parametrize("mutate",[

@@ -107,6 +107,7 @@ def _parser() -> argparse.ArgumentParser:
     command.add_argument("--phase-a-bars-manifest", required=True)
     command.add_argument("--artifact-root", required=True)
     command.add_argument("--repository-root", required=True)
+    command = sub.add_parser("htf-lfvg-v1-phase-a-funnel-diagnostic", help="read-only HTF LFVG V1 Phase-A event funnel diagnostic")
     command = imbalance_sub.add_parser("validate-btc-long-only-v5-artifacts", help="verify immutable V5 artifact identities and content hashes")
     command.add_argument("artifact_root")
     command = value_area_sub.add_parser("download"); command.add_argument("month", help="YYYY-MM"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--allow-network", action="store_true")
@@ -270,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         # are explicitly controlled by their own output arguments.
         controller = None
         registry = None
-        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository", "v5-candidate-run", "lsmr-v1-materialize", "lsmr-v1-phase-a", "lsmr-v2-strict-materialize", "lsmr-v2-phase-a", "vbtc-v1-synthetic-materialize", "vbtc-v1-phase-a", "vbtc-v2-synthetic-materialize", "vbtc-v2-phase-a", "htf-lfvg-v1-synthetic-materialize", "htf-lfvg-v1-phase-a"}:
+        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository", "v5-candidate-run", "lsmr-v1-materialize", "lsmr-v1-phase-a", "lsmr-v2-strict-materialize", "lsmr-v2-phase-a", "vbtc-v1-synthetic-materialize", "vbtc-v1-phase-a", "vbtc-v2-synthetic-materialize", "vbtc-v2-phase-a", "htf-lfvg-v1-synthetic-materialize", "htf-lfvg-v1-phase-a", "htf-lfvg-v1-phase-a-funnel-diagnostic"}:
             controller = _controller(args.registry)
             registry = controller.registry
         if args.command == "v5-candidate-run":
@@ -306,6 +307,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "htf-lfvg-v1-phase-a":
             from .htf_level_liquidity_fvg.runner import run_htf_lfvg_v1_phase_a
             _print(run_htf_lfvg_v1_phase_a(phase_a_bars_manifest=args.phase_a_bars_manifest, artifact_root=args.artifact_root, repository_root=args.repository_root))
+        elif args.command == "htf-lfvg-v1-phase-a-funnel-diagnostic":
+            from .htf_level_liquidity_fvg.runner import htf_lfvg_v1_phase_a_funnel_diagnostic
+            _print(htf_lfvg_v1_phase_a_funnel_diagnostic())
         elif args.command == "init":
             print(f"initialized registry: {Path(args.registry)}")
         elif args.command == "value-area-trap":
