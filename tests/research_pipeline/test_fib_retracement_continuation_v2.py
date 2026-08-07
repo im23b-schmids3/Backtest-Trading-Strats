@@ -8,12 +8,14 @@ import pytest
 
 from research_pipeline.fib_retracement_continuation_v2.aggregation import completed_utc_bars, validate_1m_bars
 from research_pipeline.fib_retracement_continuation_v2.execution import execute_order, process_position, submit_order
-from research_pipeline.fib_retracement_continuation_v2.ids import exit_leg_id, order_id, setup_id, trade_id
+from research_pipeline.fib_retracement_continuation_v2.ids import exit_leg_id, fib_range_id, impulse_id, order_id, setup_id, trade_id
 from research_pipeline.fib_retracement_continuation_v2.manifests import EXPECTED_SCHEMA, ManifestError, canonical, canonical_manifest_hash, verify_manifest
 from research_pipeline.fib_retracement_continuation_v2.models import Bar, Candidate, ExecutionAssumptions
 from research_pipeline.fib_retracement_continuation_v2.reconciliation import reconcile
 from research_pipeline.fib_retracement_continuation_v2.runner import _at_or_after_cutoff, _close, materialize_synthetic, run_candidate, run_holdout
 from research_pipeline.fib_retracement_continuation_v2.strategy import expire_reason, fib_price, touch
+from research_pipeline.fib_retracement_continuation_v2.parity import fib09_v2_v1_parity_diagnostic
+from research_pipeline.fib_retracement_continuation_v1.strategy import causal_setups as v1_causal_setups
 
 
 UTC = timezone.utc
@@ -50,7 +52,11 @@ def write_manifest(tmp_path, data):
 
 
 def setup(direction="LONG", stamp=START):
-    return {"setup_id": "setup-synthetic", "direction": direction, "low": Decimal("90"), "high": Decimal("110"), "anchor_timestamp": stamp, "extreme_timestamp": stamp, "active_timestamp": None, "version": 0}
+    anchor_price = Decimal("90") if direction == "LONG" else Decimal("110")
+    extreme_price = Decimal("110") if direction == "LONG" else Decimal("90")
+    sid = setup_id("synthetic", direction, stamp, anchor_price, stamp, extreme_price)
+    iid = impulse_id(sid, stamp, extreme_price)
+    return {"setup_id": sid, "impulse_id": iid, "fib_range_id": fib_range_id(iid, Decimal("90"), Decimal("110")), "direction": direction, "low": Decimal("90"), "high": Decimal("110"), "anchor_timestamp": stamp, "extreme_timestamp": stamp, "active_timestamp": None, "version": 0}
 
 
 def filled_trade(direction="LONG"):
@@ -171,15 +177,16 @@ def test_midnight_is_eligible_again_and_no_overnight_is_imposed():
 def test_quantity_pnl_equity_reconcile_for_closed_trade():
     trade = filled_trade(); process_position(trade, bar(START + timedelta(minutes=1), 100, 110, 100), CANDIDATE, ASSUMPTIONS)
     closed = _close(trade, bar(START.replace(hour=22, minute=45), 100), ASSUMPTIONS, [], [])
-    setups = [{"setup_id": closed["setup_id"]}]; outcomes = [{"setup_id": closed["setup_id"]}]; orders = [{"setup_id": closed["setup_id"], "order_id": closed["order_id"]}]
+    setups = [{"setup_id": closed["setup_id"]}]; outcomes = [{"setup_id": closed["setup_id"], "disposition": "TRADE_EXECUTED"}]; orders = [{"setup_id": closed["setup_id"], "order_id": closed["order_id"]}]
     assert reconcile(setups, outcomes, orders, [closed], ASSUMPTIONS.opening_equity, final_equity=ASSUMPTIONS.opening_equity + closed["net_pnl"])["reconciles"]
 
 
 def test_deterministic_ids_and_duplicate_prevention():
-    sid = setup_id("c", "ETH", "4h", "LONG", START, START + timedelta(hours=4))
-    oid = order_id(sid, sid, START); tid = trade_id(oid, sid, START)
-    assert sid == setup_id("c", "ETH", "4h", "LONG", START, START + timedelta(hours=4))
-    assert exit_leg_id(tid, sid, START, 1) != exit_leg_id(tid, sid, START, 2)
+    sid = setup_id("c", "LONG", START, Decimal("90"), START + timedelta(hours=4), Decimal("110"))
+    fid = fib_range_id(impulse_id(sid, START + timedelta(hours=4), Decimal("110")), Decimal("90"), Decimal("110"))
+    oid = order_id(fid, 1, START); tid = trade_id(oid, START)
+    assert sid == setup_id("c", "LONG", START, Decimal("90"), START + timedelta(hours=4), Decimal("110"))
+    assert exit_leg_id(tid, 1) != exit_leg_id(tid, 2)
     assert not reconcile([{"setup_id": sid}, {"setup_id": sid}], [{"setup_id": sid}], [], [], Decimal("1"))["reconciles"]
 
 
@@ -201,3 +208,29 @@ def test_empty_synthetic_run_reconciles_without_data_reads():
 def test_fib_prices_and_touch_contract(direction, ratio, expected):
     assert fib_price(direction, Decimal("90"), Decimal("110"), ratio) == expected
     assert touch(direction, bar(START, 100, 110, 90), expected)
+
+
+def test_identical_htf_signal_setups_are_exact_v1_and_no_1m_inflation():
+    candidate = Candidate("PARITY", "ETH", "4h", Decimal(".830"), 1, Decimal(".001"), 10)
+    rows = [bar(START + timedelta(minutes=i), 100, 101 if i < 240 else 120, 99, 100) for i in range(721)]
+    reference = completed_utc_bars(rows, 240)
+    report = fib09_v2_v1_parity_diagnostic(reference_bars_by_candidate={"PARITY": reference}, derived_1m_by_candidate={"PARITY": rows}, candidates=[candidate])
+    assert report["implementation_difference_count"] == 0
+    assert report["candidates"][0]["derived_setup_count"] == len(v1_causal_setups(reference, candidate))
+
+
+def test_v1_execution_ids_prices_partials_and_sizing_are_reused():
+    order = submit_order(setup(), START)
+    trade, rejected = execute_order(order, bar(START, 100, 111, 89), CANDIDATE, Decimal("10000"), ASSUMPTIONS)
+    assert rejected is None and trade
+    assert trade["order_id"] == order_id(order["fib_range_id"], 1, START)
+    leg = process_position(trade, bar(START + timedelta(minutes=1), 100, 110, 100), CANDIDATE, ASSUMPTIONS)[0]
+    assert leg["reason"] == "TP1" and leg["quantity"] == trade["quantity"] * Decimal(".30")
+
+
+def test_reconciliation_fails_injected_overnight_cutoff_and_pending_defects():
+    trade = filled_trade()
+    closed = _close(trade, bar(START.replace(hour=22, minute=45), 100), ASSUMPTIONS, [], [])
+    closed["legs"][-1]["timestamp"] = START + timedelta(days=1)
+    result = reconcile([{"setup_id": closed["setup_id"]}], [{"setup_id": closed["setup_id"]}], [{"setup_id": closed["setup_id"], "order_id": closed["order_id"]}], [closed], ASSUMPTIONS.opening_equity, final_equity=ASSUMPTIONS.opening_equity + closed["net_pnl"], pending_after_cutoff=[{"order_id": "pending"}])
+    assert not result["reconciles"] and result["overnight_trade_count"] == 1

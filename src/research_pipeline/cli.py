@@ -134,6 +134,7 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("fib09-v2-synthetic-materialize"); command.add_argument("--artifact-root",required=True); command.add_argument("--repository-root",required=True)
     command = sub.add_parser("fib09-v2-synthetic-run"); command.add_argument("--synthetic-bars",required=True); command.add_argument("--artifact-root",required=True); command.add_argument("--repository-root",required=True)
     command = sub.add_parser("fib09-v2-development-diagnostic"); command.add_argument("--eth-manifest",required=True); command.add_argument("--btc-manifest",required=True)
+    command = sub.add_parser("fib09-v2-v1-parity-diagnostic", help="artifact-free development-only Fib09 V1/V2 parity diagnostic"); command.add_argument("--reference-bars", required=True); command.add_argument("--derived-1m-bars", required=True)
     command = sub.add_parser("fib09-v2-development"); command.add_argument("--eth-manifest",required=True); command.add_argument("--btc-manifest",required=True); command.add_argument("--artifact-root",required=True); command.add_argument("--repository-root",required=True)
     sub.add_parser("fib09-v2-holdout")
     command = imbalance_sub.add_parser("validate-btc-long-only-v5-artifacts", help="verify immutable V5 artifact identities and content hashes")
@@ -338,6 +339,18 @@ def main(argv: list[str] | None = None) -> int:
                 raw=json.loads(Path(args.synthetic_bars).read_text(encoding="utf-8")); from .fib_retracement_continuation_v2.models import Bar
                 _print(v2.run_synthetic(bars_by_candidate={k:[Bar(**x) for x in v] for k,v in raw.items()},artifact_root=args.artifact_root,repository_root=args.repository_root))
             elif args.command == "fib09-v2-development-diagnostic": _print(v2.development_diagnostic(eth_manifest=args.eth_manifest,btc_manifest=args.btc_manifest))
+            elif args.command == "fib09-v2-v1-parity-diagnostic":
+                from .fib_retracement_continuation_v2.parity import fib09_v2_v1_parity_diagnostic
+                from .fib_retracement_continuation_v2.constants import CANDIDATES
+                from .fib_retracement_continuation_v2.models import Bar
+                def _bars(path):
+                    rows = json.loads(Path(path).read_text(encoding="utf-8"))
+                    from datetime import datetime, timezone
+                    from decimal import Decimal
+                    result = {key: [Bar(item["timestamp"] if hasattr(item["timestamp"], "tzinfo") else datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")), *(Decimal(str(item[field])) for field in ("open", "high", "low", "close", "volume"))) for item in value] for key, value in rows.items()}
+                    if any(bar.timestamp.astimezone(timezone.utc) >= datetime(2025, 1, 1, tzinfo=timezone.utc) for values in result.values() for bar in values): raise ValueError("LOCKED_HOLDOUT_NOT_AUTHORIZED")
+                    return result
+                _print(fib09_v2_v1_parity_diagnostic(reference_bars_by_candidate=_bars(args.reference_bars), derived_1m_by_candidate=_bars(args.derived_1m_bars), candidates=CANDIDATES))
             elif args.command == "fib09-v2-development": _print(v2.run_development(eth_manifest=args.eth_manifest,btc_manifest=args.btc_manifest,artifact_root=args.artifact_root,repository_root=args.repository_root))
             else: _print(v2.run_holdout())
         elif args.command == "lsmr-v1-materialize":

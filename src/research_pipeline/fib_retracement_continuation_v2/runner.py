@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .aggregation import completed_utc_bars, validate_1m_bars
-from .constants import CANDIDATES, DEVELOPMENT_END, DEVELOPMENT_START, NO_HOLDOUT_LOGICAL_EXPOSURE, STRATEGY_ID
+from .constants import CANDIDATES, DEVELOPMENT_END, DEVELOPMENT_START, NO_HOLDOUT_LOGICAL_EXPOSURE, SESSION_CUTOFF, STRATEGY_ID, V2_STRATEGY_ID
 from .manifests import ManifestError, verify_manifest
 from .models import Bar, Candidate, ExecutionAssumptions
 from .accounting import close_trade
@@ -16,7 +16,7 @@ from .metrics import gates, metrics
 from .reconciliation import reconcile
 from .strategy import causal_setups, expire_reason
 
-CUTOFF = time(22, 45)
+CUTOFF = SESSION_CUTOFF
 
 
 def guard():
@@ -45,22 +45,30 @@ def _at_or_after_cutoff(stamp: datetime) -> bool:
 
 def _close(active, bar, assumptions, trades, events):
     leg = _exit(active, bar.open, active["remaining_quantity"], bar.timestamp, "FORCED_SESSION_EXIT_2245", len(active["legs"]) + 1, assumptions)
+    # Reconciliation verifies the pre-slippage price without deriving it again.
+    leg["cutoff_open"] = bar.open
     closed = close_trade(active); trades.append(closed)
     events.append({"kind": "FORCED_SESSION_EXIT_2245", "setup_id": active["setup_id"], "order_id": active["order_id"], "trade_id": active["trade_id"], "exit_leg_id": leg["exit_leg_id"], "timestamp": bar.timestamp})
     return closed
 
 
 def run_candidate(rows: list[Bar], candidate: Candidate | dict, assumptions: ExecutionAssumptions = ExecutionAssumptions()) -> dict:
-    """Calculate setups on completed HTF bars but execute only later 1m bars."""
+    """Run frozen V1 signals over completed HTF bars, then 1m execution only."""
     candidate = _candidate(candidate); rows = validate_1m_bars(rows)
     htf_minutes = 240 if candidate.symbol == "ETH" else 1440
     htf = completed_utc_bars(rows, htf_minutes)
+    # This is the only signal call in V2.  It is the frozen V1 function.
     setups = causal_setups(htf, candidate)
     scheduled = {}
     for setup in setups:
         if "terminal" not in setup:
-            # The HTF bar is known only after its last minute has closed.
-            scheduled.setdefault(setup["extreme_timestamp"] + __import__("datetime").timedelta(minutes=htf_minutes), []).append(setup)
+            # Exact V1 activation: the timestamp of the next *completed signal
+            # bar*.  The 1m stream can only execute after this point.
+            next_stamp = setup["extreme_timestamp"] + timedelta(minutes=htf_minutes)
+            if any(item.timestamp == next_stamp for item in htf):
+                scheduled.setdefault(next_stamp, []).append(setup)
+            else:
+                setup["terminal"] = "SESSION_OR_DATA_END"
     events, orders, outcomes, trades, pending = [], [], [], [], []
     active = None; equity = assumptions.opening_equity
     for bar in rows:
@@ -75,7 +83,7 @@ def run_candidate(rows: list[Bar], candidate: Candidate | dict, assumptions: Exe
         for setup in scheduled.get(stamp, []):
             if _at_or_after_cutoff(stamp):
                 outcomes.append({"setup_id": setup["setup_id"], "disposition": "SESSION_ENTRY_CUTOFF_2245"}); continue
-            order = submit_order(setup, stamp, 2); pending.append(order); orders.append(order)
+            order = submit_order(setup, stamp, 1); pending.append(order); orders.append(order)
             events.append({"kind": "ORDER_SUBMITTED", "setup_id": setup["setup_id"], "order_id": order["order_id"], "timestamp": stamp})
         for order in list(pending):
             if _at_or_after_cutoff(stamp):
@@ -103,7 +111,10 @@ def run_candidate(rows: list[Bar], candidate: Candidate | dict, assumptions: Exe
     for setup in setups:
         if setup.get("terminal") and not any(x["setup_id"] == setup["setup_id"] for x in outcomes): outcomes.append({"setup_id": setup["setup_id"], "disposition": setup["terminal"]})
     result_metrics = metrics(trades, assumptions.opening_equity)
-    rec = reconcile(setups, outcomes, orders, trades, assumptions.opening_equity, final_equity=equity, events=events)
+    rec = reconcile(setups, outcomes, orders, trades, assumptions.opening_equity,
+                    final_equity=equity, events=events,
+                    pending_after_cutoff=pending,
+                    positions_after_cutoff=([active] if active is not None else []))
     forced = sum(1 for leg in (leg for trade in trades for leg in trade["legs"]) if leg["reason"] == "FORCED_SESSION_EXIT_2245")
     return {"events": events, "setups": setups, "setup_outcomes": outcomes, "orders": orders, "trades": trades, "partial_exits": [leg for trade in trades for leg in trade["legs"]], "metrics": {**result_metrics, "forced_session_exit_count": forced}, "reconciliation": rec, "gates": gates(result_metrics, trades, rec["reconciles"]), **guard()}
 
@@ -113,7 +124,7 @@ def _materialize_result(root, results, mode):
         base = Path("candidates") / row["candidate_id"]
         for key, name in (("events", "events.json"), ("setup_outcomes", "setup-outcomes.json"), ("orders", "orders.json"), ("trades", "trades.json"), ("partial_exits", "partial-exits.json"), ("metrics", "monthly-metrics.json"), ("gates", "gates.json"), ("reconciliation", "reconciliation.json")):
             _write(root, base / name, item[key])
-    _write(root, "candidate-registry.json", {"strategy_id": STRATEGY_ID, "candidates": CANDIDATES})
+    _write(root, "candidate-registry.json", {"strategy_id": V2_STRATEGY_ID, "v1_signal_strategy_id": STRATEGY_ID, "candidates": CANDIDATES})
     _write(root, "development-result.json", {"status": mode, "candidates": [{"candidate_id": r["candidate_id"], "reconciles": item["reconciliation"]["reconciles"]} for r, item in results], **guard()})
     _write(root, "final-report.json", {"status": mode, **guard()}); _seal(root, {"strategy_id": STRATEGY_ID, "mode": mode})
 
