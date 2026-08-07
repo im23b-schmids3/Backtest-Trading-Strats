@@ -1,0 +1,11 @@
+{
+  "contractId": "FibRetracementContinuation.ETH_BTC_V2_INTRADAY_FORCE_FLAT_2245/aggregation/v1",
+  "sourceSelection": {"venue": "BINANCE", "instrumentType": "USD_M_PERPETUAL", "classification": "OWNER_SELECTED_PROSPECTIVE_VENUE_NOT_V6_OR_V65_EVIDENCE"},
+  "generationStatus": "NOT_GENERATED",
+  "inputGate": "Only separately manifested, immutable, fully validated BTCUSDT and ETHUSDT Binance USD-M perpetual 1m raw partitions may be aggregated.",
+  "barDefinition": {"open": "first raw 1m open in bucket", "high": "maximum raw 1m high", "low": "minimum raw 1m low", "close": "last raw 1m close", "volume": "sum raw 1m base-asset volume", "timestamp": "UTC bucket start"},
+  "rules": [{"candidateId": "FIB09-ETH-4H-POST0830", "symbol": "ETHUSDT", "derivedInterval": "4h", "utcBucketStarts": ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"], "requiredUniqueRawBars": 240}, {"candidateId": "FIB09-ETH-4H-POST0786-REFERENCE", "symbol": "ETHUSDT", "derivedInterval": "4h", "utcBucketStarts": ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"], "requiredUniqueRawBars": 240}, {"candidateId": "FIB09-BTC-1D-POST0786", "symbol": "BTCUSDT", "derivedInterval": "1d", "utcBucketStarts": ["00:00"], "requiredUniqueRawBars": 1440}],
+  "completeness": "Exactly 240 (4h) or 1440 (daily) unique contiguous minute-aligned valid bars are required.",
+  "failurePolicy": "Fail closed: do not emit, fill, interpolate, borrow, carry forward, or partially aggregate an incomplete bucket.",
+  "holdoutRule": "No strategy/signal/trade/metric computation may access holdout."
+}

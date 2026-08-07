@@ -1,0 +1,10 @@
+{
+  "contractId": "FibRetracementContinuation.ETH_BTC_V2_INTRADAY_FORCE_FLAT_2245/session-execution/v1",
+  "sourceSelection": {"venue": "BINANCE", "instrumentType": "USD_M_PERPETUAL", "classification": "OWNER_SELECTED_PROSPECTIVE_VENUE_NOT_V6_OR_V65_EVIDENCE"},
+  "strategyImplementationStatus": "NOT_IMPLEMENTED",
+  "preservedCandidates": [{"candidateId": "FIB09-ETH-4H-POST0830", "symbol": "ETH", "timeframe": "4h", "postTp1Ratio": "0.830", "minDistance": 16, "minMove": "0.0025", "anchorAgeDays": 60}, {"candidateId": "FIB09-ETH-4H-POST0786-REFERENCE", "symbol": "ETH", "timeframe": "4h", "postTp1Ratio": "0.786", "minDistance": 16, "minMove": "0.0025", "anchorAgeDays": 60}, {"candidateId": "FIB09-BTC-1D-POST0786", "symbol": "BTC", "timeframe": "1d", "postTp1Ratio": "0.786", "minDistance": 7, "minMove": "0.0025", "anchorAgeDays": 180}],
+  "selection": "No candidate is selected. BTC is the primary interest only; it receives no preference, parameter change, or evaluation privilege.",
+  "session": {"timezone": "UTC", "entryRule": "No entry at or after 22:45:00 UTC.", "forceExitTimestamp": "22:45:00", "quantityAfter2245": "prohibited", "nextEligibility": "00:00:00 UTC"},
+  "forceExit": {"rawPrice": "OPEN of the raw 1m bar timestamped exactly 22:45:00 UTC", "quantity": "100% of remaining quantity", "reason": "FORCED_SESSION_EXIT_2245", "costs": "Apply normal sealed adverse exit slippage and exit fee.", "dataFailure": "Fail closed; do not substitute another price."},
+  "holdoutProhibition": "This contract authorizes no strategy calculation on locked holdout data."
+}

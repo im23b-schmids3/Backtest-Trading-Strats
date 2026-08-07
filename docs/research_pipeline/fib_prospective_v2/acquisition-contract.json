@@ -1,0 +1,9 @@
+{
+  "contractId": "FibRetracementContinuation.ETH_BTC_V2_INTRADAY_FORCE_FLAT_2245/acquisition/v1",
+  "status": "OWNER_SELECTED_PROSPECTIVE_VENUE",
+  "source": {"venue": "BINANCE", "instrumentType": "USD_M_PERPETUAL", "requestedSymbols": ["BTCUSDT", "ETHUSDT"], "selectionClassification": "OWNER_SELECTED_PROSPECTIVE_VENUE_NOT_V6_OR_V65_EVIDENCE", "officialMonthlyArchive": "https://data.binance.vision/data/futures/um/monthly/klines/{symbol}/1m/{symbol}-1m-{YYYY-MM}.zip", "officialCurrentDayRest": "https://fapi.binance.com/fapi/v1/klines"},
+  "credentials": "Never required; public endpoints only.",
+  "rawDataRequirement": {"interval": "1m", "timezone": "UTC", "coverage": {"startInclusive": "2022-01-01T00:00:00Z", "end": "latest complete UTC day", "endExclusiveRule": "00:00:00Z immediately following the latest UTC day fully completed at acquisition time"}, "rawRoot": "data/fib_prospective_v2/binance_usdm/{SYMBOL}/1m/", "partitioning": "One atomic, content-addressed, sealed partition directory per archive month or REST day; never overwrite.", "manifestCreationGate": "Create each manifest only after full coverage is acquired and validated."},
+  "split": {"development": "[2022-01-01T00:00:00Z, 2025-01-01T00:00:00Z)", "lockedHoldout": "[2025-01-01T00:00:00Z, coverage end)", "holdoutRule": "Never perform strategy, signal, trade, candidate, optimization, or metric calculations on holdout; raw integrity validation only is permitted."},
+  "validation": {"requiredColumns": ["timestamp", "open", "high", "low", "close", "volume"], "timestamp": "UTC minute-aligned, unique, strictly increasing", "checks": ["source checksum or equivalent integrity", "schema", "null OHLCV", "invalid OHLC", "non-positive prices", "missing-minute distribution and classification"], "noSilentFilling": true, "admission": "Fail closed on invalid or unresolved data; never fill gaps."}
+}

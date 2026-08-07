@@ -128,6 +128,14 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("fib09-v1-development", help="future deterministic Fib09 V1 development runner")
     command.add_argument("--eth-manifest", required=True); command.add_argument("--btc-manifest", required=True); command.add_argument("--chronology-manifest", required=True); command.add_argument("--artifact-root", required=True); command.add_argument("--repository-root", required=True)
     command = sub.add_parser("fib09-v1-holdout", help="locked holdout refusal")
+    command = sub.add_parser("fib09-v2-acquire", help="acquire or verify immutable Binance USD-M 1m source partitions for Fib09 V2")
+    command.add_argument("--repository-root", default=".")
+    command.add_argument("--latest-complete-day", help="UTC YYYY-MM-DD; defaults to yesterday UTC")
+    command = sub.add_parser("fib09-v2-synthetic-materialize"); command.add_argument("--artifact-root",required=True); command.add_argument("--repository-root",required=True)
+    command = sub.add_parser("fib09-v2-synthetic-run"); command.add_argument("--synthetic-bars",required=True); command.add_argument("--artifact-root",required=True); command.add_argument("--repository-root",required=True)
+    command = sub.add_parser("fib09-v2-development-diagnostic"); command.add_argument("--eth-manifest",required=True); command.add_argument("--btc-manifest",required=True)
+    command = sub.add_parser("fib09-v2-development"); command.add_argument("--eth-manifest",required=True); command.add_argument("--btc-manifest",required=True); command.add_argument("--artifact-root",required=True); command.add_argument("--repository-root",required=True)
+    sub.add_parser("fib09-v2-holdout")
     command = imbalance_sub.add_parser("validate-btc-long-only-v5-artifacts", help="verify immutable V5 artifact identities and content hashes")
     command.add_argument("artifact_root")
     command = value_area_sub.add_parser("download"); command.add_argument("month", help="YYYY-MM"); command.add_argument("--symbol", default="BTCUSDT"); command.add_argument("--cache-root", default="data/value_area_trap"); command.add_argument("--allow-network", action="store_true")
@@ -291,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         # are explicitly controlled by their own output arguments.
         controller = None
         registry = None
-        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository", "v5-candidate-run", "lsmr-v1-materialize", "lsmr-v1-phase-a", "lsmr-v2-strict-materialize", "lsmr-v2-phase-a", "vbtc-v1-synthetic-materialize", "vbtc-v1-phase-a", "vbtc-v2-synthetic-materialize", "vbtc-v2-phase-a", "htf-lfvg-v1-synthetic-materialize", "htf-lfvg-v1-phase-a", "htf-lfvg-v1-phase-a-funnel-diagnostic", "htf-lfvg-v2-synthetic-materialize", "htf-lfvg-v2-phase-a", "htf-lfvg-v2-funnel-diagnostic", "fib09-v1-synthetic-materialize", "fib09-v1-synthetic-run", "fib09-v1-development-diagnostic", "fib09-v1-development-reconciliation-diagnostic", "fib09-v1-development", "fib09-v1-holdout"}:
+        if args.command not in {"value-area-trap", "value-area-acceptance", "imbalance-vwap-ride", "repository", "v5-candidate-run", "lsmr-v1-materialize", "lsmr-v1-phase-a", "lsmr-v2-strict-materialize", "lsmr-v2-phase-a", "vbtc-v1-synthetic-materialize", "vbtc-v1-phase-a", "vbtc-v2-synthetic-materialize", "vbtc-v2-phase-a", "htf-lfvg-v1-synthetic-materialize", "htf-lfvg-v1-phase-a", "htf-lfvg-v1-phase-a-funnel-diagnostic", "htf-lfvg-v2-synthetic-materialize", "htf-lfvg-v2-phase-a", "htf-lfvg-v2-funnel-diagnostic", "fib09-v1-synthetic-materialize", "fib09-v1-synthetic-run", "fib09-v1-development-diagnostic", "fib09-v1-development-reconciliation-diagnostic", "fib09-v1-development", "fib09-v1-holdout", "fib09-v2-acquire", "fib09-v2-synthetic-materialize", "fib09-v2-synthetic-run", "fib09-v2-development-diagnostic", "fib09-v2-development", "fib09-v2-holdout"}:
             controller = _controller(args.registry)
             registry = controller.registry
         if args.command == "v5-candidate-run":
@@ -317,6 +325,21 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "fib09-v1-holdout":
             from .fib_retracement_continuation_v1.runner import run_holdout
             _print(run_holdout())
+        elif args.command == "fib09-v2-acquire":
+            from .fib_retracement_continuation_v2.acquire import main as acquire_fib09_v2_data
+            argv = ["--repository-root", args.repository_root]
+            if args.latest_complete_day:
+                argv.extend(["--latest-complete-day", args.latest_complete_day])
+            return acquire_fib09_v2_data(argv)
+        elif args.command.startswith("fib09-v2-"):
+            from .fib_retracement_continuation_v2 import runner as v2
+            if args.command == "fib09-v2-synthetic-materialize": _print(v2.materialize_synthetic(artifact_root=args.artifact_root,repository_root=args.repository_root))
+            elif args.command == "fib09-v2-synthetic-run":
+                raw=json.loads(Path(args.synthetic_bars).read_text(encoding="utf-8")); from .fib_retracement_continuation_v2.models import Bar
+                _print(v2.run_synthetic(bars_by_candidate={k:[Bar(**x) for x in v] for k,v in raw.items()},artifact_root=args.artifact_root,repository_root=args.repository_root))
+            elif args.command == "fib09-v2-development-diagnostic": _print(v2.development_diagnostic(eth_manifest=args.eth_manifest,btc_manifest=args.btc_manifest))
+            elif args.command == "fib09-v2-development": _print(v2.run_development(eth_manifest=args.eth_manifest,btc_manifest=args.btc_manifest,artifact_root=args.artifact_root,repository_root=args.repository_root))
+            else: _print(v2.run_holdout())
         elif args.command == "lsmr-v1-materialize":
             from .liquidity_sweep_mean_reversion.runner import materialize_lsmr_v1_contract
             _print(materialize_lsmr_v1_contract(artifact_root=args.artifact_root, repository_root=args.repository_root))
