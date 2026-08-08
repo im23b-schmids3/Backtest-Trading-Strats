@@ -1,0 +1,10 @@
+{
+  "study": "CMEOrderflowAbsorption.ES_V1_PILOT",
+  "timezone": "UTC",
+  "globex": {"definition": "CME Globex electronic trading session for ES; session boundaries and any maintenance break must be confirmed from CME/provider instrument definitions before acquisition", "use": "context and level construction"},
+  "rth": {"definition": "US cash-equity regular trading hours, 13:30:00-20:00:00 UTC for the selected July 2026 dates; confirm exchange-calendar exceptions before acquisition", "use": "new-signal eligibility"},
+  "pre_rth": {"definition": "same UTC calendar date before 13:30:00 UTC", "use": "retained for level construction only, not new eligibility"},
+  "pdh_pdl": {"definition": "prior completed RTH session high/low; source session is prior RTH, not a rolling 24-hour session"},
+  "vah_val_poc": {"definition": "value-area high, value-area low, and point of control calculated from the prior completed RTH volume-at-price profile using a fixed documented profile algorithm; source session is prior RTH"},
+  "eligibility": {"new_entries": "RTH only, 13:30:00 <= timestamp < 20:00:00 UTC", "force_flat_at": "22:45:00 UTC", "positions_after_cutoff": "prohibited", "next_new_eligibility": "00:00:00 UTC", "application": "prospective and study-scoped; do not modify unrelated strategies"}
+}

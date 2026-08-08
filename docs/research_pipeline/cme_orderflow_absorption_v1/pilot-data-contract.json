@@ -1,0 +1,13 @@
+{
+  "study": "CMEOrderflowAbsorption.ES_V1_PILOT",
+  "seal_status": "PILOT_BLOCKED",
+  "instrument": {"root": "ES", "raw_symbol": "ESU6", "dataset": "GLBX.MDP3", "provider": "Databento"},
+  "excluded": ["NQ", "synthetic series", "back-adjusted series", "roll crossing", "paid download", "live trading", "holdout access", "market-data modification"],
+  "calendar_selection": {"rule": "all weekdays UTC from 2026-07-20 through 2026-07-31 inclusive, excluding US/CME major holiday closures", "selection_basis": "deterministic_calendar_not_outcome", "dates_utc": ["2026-07-20", "2026-07-21", "2026-07-22", "2026-07-23", "2026-07-24", "2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30", "2026-07-31"]},
+  "schema": {"recommended_minimum": "mbo", "alternatives_compared": ["trades", "trades+tbbo", "mbp-10", "mbo"], "true_iceberg_status": "UNPROVABLE_ONLY_PROBABLE_REPLENISHMENT_INFERENCE"},
+  "evidence_status": "DOCUMENTED_PROVIDER_EVIDENCE_PENDING_FREE_DEFINITION_AND_SYMBOLOGY_CONFIRMATION",
+  "cost_quote": {"status": "NOT_QUOTED_NO_LOCAL_CREDENTIAL", "quote_currency": null, "estimated_bytes": null, "estimated_records": null, "exact_inputs": {"dataset": "GLBX.MDP3", "schema": "mbo", "symbols": ["ESU6"], "start": "2026-07-20T00:00:00Z", "end": "2026-08-01T00:00:00Z", "stype_in": "raw_symbol"}},
+  "acquisition": {"status": "NOT_EXECUTED", "command_design": "databento-historical metadata get-cost --dataset GLBX.MDP3 --schema mbo --symbols ESU6 --stype-in raw_symbol --start 2026-07-20T00:00:00Z --end 2026-08-01T00:00:00Z; after free definition/symbology confirmation and approved quote only: databento-historical timeseries get-range --dataset GLBX.MDP3 --schema mbo --symbols ESU6 --stype-in raw_symbol --start 2026-07-20T00:00:00Z --end 2026-08-01T00:00:00Z --output <approved_immutable_destination>"},
+  "identity_hashes": {"dataset": "GLBX.MDP3", "raw_symbol": "ESU6", "retrieved_data_sha256": null, "definition_response_sha256": null, "symbology_response_sha256": null},
+  "sources": ["https://databento.com/docs/schemas-and-data-formats/whats-a-schema", "https://databento.com/docs/schemas-and-data-formats/mbo", "https://databento.com/docs/standards-and-conventions/symbology", "https://databento.com/docs/reference-historical/basics/"]
+}

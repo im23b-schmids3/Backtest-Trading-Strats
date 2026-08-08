@@ -1,0 +1,9 @@
+{
+  "study": "CMEOrderflowAbsorption.ES_V1_PILOT",
+  "scope": "descriptive, non-optimized feature specification; not a trading rule",
+  "level_universe": ["PDH", "PDL", "prior-RTH VAH", "prior-RTH VAL", "prior-RTH POC", "current-session high", "current-session low", "fixed price increments around those levels"],
+  "event_definition": {"candidate_absorption": "at a level, aggressive executed volume persists while displayed passive liquidity repeatedly restores; MBO sequence evidence is preferred", "iceberg_label": "PROBABLE_REPLENISHMENT_ONLY; never true-iceberg proof", "mbp10_constraint": "aggregate depth refills may be described but cannot prove a true iceberg"},
+  "features": {"aggressive_volume_imbalance": "signed executed volume in a fixed, predeclared event window; retain unknown/ambiguous side rather than force a label", "displayed_replenishment": "adds or restored displayed quantity following executions at the same price, separately tracking cancel/replace ambiguity", "order_lifecycle": "MBO order_id add/modify/cancel/execute counts and matched sequences where documented semantics permit", "price_response": "signed movement away from/toward level after a fixed observation window", "queue_uncertainty": "explicit missing/ambiguous flag; no queue-position claim"},
+  "regime_normalization": {"method": "per UTC date and RTH only, normalize each raw feature by a robust median and MAD computed over all eligible event windows for that date", "zero_mad": "mark feature unavailable; do not substitute an optimized fallback", "prohibited": ["threshold fitting", "outcome-selected windows", "cross-date label tuning"]},
+  "data_quality": ["preserve provider sequence/timestamp fields", "record gaps and corrections", "do not infer unreported hidden quantity", "retain side and matching ambiguity"]
+}

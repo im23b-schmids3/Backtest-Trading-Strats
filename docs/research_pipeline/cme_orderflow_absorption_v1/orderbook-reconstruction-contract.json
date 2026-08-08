@@ -1,0 +1,18 @@
+{
+  "engine": "causal order-id MBO reconstruction",
+  "ordering": "provider iterator order is preserved exactly; sequence is retained as diagnostic metadata but is not a provider-wide total order",
+  "state": "active order-id map and side/price displayed depth",
+  "fail_closed": [
+    "unsupported action",
+    "unknown order operation",
+    "negative depth",
+    "invalid state transition",
+    "metadata/instrument mismatch"
+  ],
+  "semantics": {
+    "T/F": "execution-only evidence in this pilot; no undocumented displayed-book decrement is made because F may coexist with a subsequent cancel of the same quantity",
+    "aggressor": "not forced for execution-only records",
+    "queue_position": "UNAVAILABLE; no queue-position claim",
+    "hidden_quantity": "UNAVAILABLE; no iceberg claim"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "study": "CMEOrderflowAbsorption.ES_V1_PILOT",
+  "status": "DESIGN_ONLY_NO_ORDERS",
+  "permanent_risk_requirement": {"force_flat_at_utc": "22:45:00", "no_positions_after_cutoff": true, "new_eligibility_utc": "00:00:00", "scope": "prospective study implementation only; unrelated strategies unchanged"},
+  "candidate_framework_not_optimized": {"entry": "candidate only after a documented probable-replenishment event at a level during RTH", "stop": "candidate protective stop beyond the invalidation side of the tested level by a predeclared fixed tick distance", "target": "candidate target at a predeclared next level or fixed reward multiple", "sizing": "unspecified; no live or simulated trading authorization"},
+  "execution_assumptions": {"fill_basis": "bid/ask-aware; buys valued at ask and sells at bid unless actual documented fill evidence is available", "fees": "must use approved current schedule before any evaluation; no fee amount assumed", "slippage": "unknown and separately stress-reported; no zero-slippage claim", "queue": "unknown; no queue-priority or fill-probability claim"},
+  "prohibitions": ["strategy code", "tests", "backtests", "threshold optimization", "live trading", "holdout access"]
+}

@@ -1,0 +1,18 @@
+{
+  "study": "CMEOrderflowAbsorption.ES_V1_PILOT",
+  "read_only": true,
+  "dbn_sha256": "CBA9630FF44DEAB139A5D66B7886197435FA5388EE16B5E999E26CF4DB8B8B7C",
+  "dbn_bytes": 2610421554,
+  "metadata": {
+    "dataset": "GLBX.MDP3",
+    "schema": "mbo",
+    "symbol": "ESU6",
+    "instrument_id": 42140870,
+    "start_ns": 1784505600000000000,
+    "end_ns": 1785542400000000000
+  },
+  "event_count": 147590850,
+  "execution_count": 16177093,
+  "integrity": "PASS: strict causal reconstruction completed",
+  "trading_strategy_executed": false
+}
