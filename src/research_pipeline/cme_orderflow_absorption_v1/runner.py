@@ -19,7 +19,7 @@ def run(dbn: Path, out: Path) -> dict:
             # are not a total ordering across all records, so they are retained but
             # not re-sorted or used to discard/reorder the provider stream.
             applied = book.apply(action=rec.action, side=rec.side, price=rec.price, size=rec.size, order_id=rec.order_id, sequence=rec.sequence, ts_recv=rec.ts_recv, channel_id=rec.channel_id, validate_sequence=False, mutate_execution=False)
-            diag.observe(rec, applied)
+            diag.observe(rec, applied, book.spread())
     except (BookStateError, DBNValidationError) as exc:
         diag.issues[type(exc).__name__] += 1
         write_reports(out, sha256=digest, dbn_bytes=size, metadata=metadata, diagnostics=diag, integrity=f"FAILED_CLOSED: {exc}")

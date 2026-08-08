@@ -1,0 +1,8 @@
+{
+  "instrument": "ES",
+  "tick_size": 0.25,
+  "dbn_fixed_point_scale": 1000000000,
+  "source": "executed trade volume only from immediately preceding completed RTH",
+  "poc": "maximum volume; equal volume selects lower price",
+  "value_area": "70 percent by volume; start at POC, expand one tick at a time; equal outside volumes select lower price; no future session data"
+}

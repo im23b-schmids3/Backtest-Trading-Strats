@@ -7,39 +7,34 @@ Bounded summary-only probable-replenishment examples:
 ```json
 [
   {
-    "date": "2026-07-20",
-    "price": "integer DBN price scale; raw event identifiers omitted",
-    "passive_side": "B",
-    "executed_size_before_add": 5,
-    "label": "PROBABLE_REPLENISHMENT"
+    "date": "2026-07-31",
+    "level": "CURRENT_RTH_HIGH_SWEEP",
+    "price_es": 7540.5,
+    "label": "PROBABLE_REPLENISHMENT_INTERACTION"
   },
   {
-    "date": "2026-07-20",
-    "price": "integer DBN price scale; raw event identifiers omitted",
-    "passive_side": "B",
-    "executed_size_before_add": 1,
-    "label": "PROBABLE_REPLENISHMENT"
+    "date": "2026-07-31",
+    "level": "CURRENT_RTH_HIGH_SWEEP",
+    "price_es": 7540.25,
+    "label": "PROBABLE_REPLENISHMENT_INTERACTION"
   },
   {
-    "date": "2026-07-20",
-    "price": "integer DBN price scale; raw event identifiers omitted",
-    "passive_side": "A",
-    "executed_size_before_add": 2,
-    "label": "PROBABLE_REPLENISHMENT"
+    "date": "2026-07-31",
+    "level": "CURRENT_RTH_HIGH_SWEEP",
+    "price_es": 7540.0,
+    "label": "PROBABLE_REPLENISHMENT_INTERACTION"
   },
   {
-    "date": "2026-07-20",
-    "price": "integer DBN price scale; raw event identifiers omitted",
-    "passive_side": "A",
-    "executed_size_before_add": 1,
-    "label": "PROBABLE_REPLENISHMENT"
+    "date": "2026-07-31",
+    "level": "CURRENT_RTH_HIGH_SWEEP",
+    "price_es": 7540.0,
+    "label": "PROBABLE_REPLENISHMENT_INTERACTION"
   },
   {
-    "date": "2026-07-20",
-    "price": "integer DBN price scale; raw event identifiers omitted",
-    "passive_side": "A",
-    "executed_size_before_add": 1,
-    "label": "PROBABLE_REPLENISHMENT"
+    "date": "2026-07-31",
+    "level": "CURRENT_RTH_HIGH_SWEEP",
+    "price_es": 7540.0,
+    "label": "PROBABLE_REPLENISHMENT_INTERACTION"
   }
 ]
 ```

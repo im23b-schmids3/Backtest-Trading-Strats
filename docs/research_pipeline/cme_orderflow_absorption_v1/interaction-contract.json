@@ -1,0 +1,24 @@
+{
+  "level_universe": [
+    "PRIOR_RTH_HIGH",
+    "PRIOR_RTH_LOW",
+    "PRIOR_RTH_POC",
+    "PRIOR_RTH_VAH",
+    "PRIOR_RTH_VAL",
+    "CURRENT_RTH_HIGH_SWEEP",
+    "CURRENT_RTH_LOW_SWEEP"
+  ],
+  "vicinity_ticks": 4,
+  "termination": [
+    "more than 4 tick exit",
+    "60 seconds without in-vicinity execution",
+    "RTH end"
+  ],
+  "id": "date:level_name:fixed_point_level:ordinal",
+  "labels": {
+    "PROBABLE_REPLENISHMENT_INTERACTION": "execution causally precedes same-price displayed add",
+    "ABSORPTION_INTERACTION": "execution plus repeated same-price replenishment within interaction"
+  },
+  "aggressor": "T remains unknown; F uses documented resting side only",
+  "future_response": "descriptive signed ticks from interaction end at 5/15/30/60/120 seconds; unavailable unless causally observed"
+}
