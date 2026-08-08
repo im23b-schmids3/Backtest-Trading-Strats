@@ -3,7 +3,7 @@ import json
 from types import SimpleNamespace
 from research_pipeline.cme_orderflow_absorption_v1.engine import CausalMBOBook, BookStateError
 from research_pipeline.cme_orderflow_absorption_v1.analysis import (
-    Diagnostics, RTH_START, TICK, previous_completed_rth, volume_profile,
+    Diagnostics, RTH_START, TICK, DBN_FIXED_POINT_SCALE, previous_completed_rth, volume_profile,
 )
 from research_pipeline.cme_orderflow_absorption_v1.loader import MetadataSummary
 from research_pipeline.cme_orderflow_absorption_v1.report import write_reports
@@ -52,10 +52,12 @@ def test_interaction_groups_timeout_exit_and_replenishment_absorption():
  active = next(iter(d.active.values()))
  assert active.label() == "ABSORPTION_INTERACTION"
  d._touch(day, base + 3_000_000_000, p + 5 * TICK, SimpleNamespace(action='A', side='A', price=p + 5 * TICK, size=1, executed=False), TICK)
- assert d.completed[-1].termination == "VICINITY_EXIT"
- d._touch(day, base + 4_000_000_000, p, SimpleNamespace(action='T', side='A', price=p, size=1, executed=True), TICK)
- d._touch(day, base + 65_000_000_000, p, SimpleNamespace(action='A', side='A', price=p, size=1, executed=False), TICK)
- assert d.completed[-1].termination == "EXECUTION_TIMEOUT"
+ d._touch(day, base + 5_000_000_000, p + 5 * TICK, SimpleNamespace(action='T', side='A', price=p + 5 * TICK, size=1, executed=True), TICK)
+ d._touch(day, base + 6_000_000_000, p + 5 * TICK, SimpleNamespace(action='T', side='A', price=p + 5 * TICK, size=1, executed=True), TICK)
+ assert d.completed[-1].termination == "VICINITY_EXIT_RESET"
+ d._touch(day, base + 5_000_000_000, p, SimpleNamespace(action='T', side='A', price=p, size=1, executed=True), TICK)
+ d._touch(day, base + 66_000_000_000, p, SimpleNamespace(action='T', side='A', price=p, size=1, executed=True), TICK)
+ assert d.completed[-1].termination == "VICINITY_TIMEOUT"
 
 def test_prior_profile_is_frozen_and_never_uses_current_or_future_rth():
  d = Diagnostics(); p = 5_000_000_000_000
@@ -68,12 +70,53 @@ def test_future_response_waits_for_causally_later_horizon_price():
  d = Diagnostics(); day = "2026-07-21"; p = 5_000_000_000_000; d.levels[day] = {"PRIOR_RTH_POC": p}
  base = 1_784_000_000_000_000_000 + RTH_START * 1_000_000_000
  d._touch(day, base, p, SimpleNamespace(action='T', side='A', price=p, size=1, executed=True), TICK)
- d._touch(day, base + 1, p + 5 * TICK, SimpleNamespace(action='A', side='A', price=p + 5 * TICK, size=1, executed=False), TICK)
+ d._touch(day, base + 1, p + 5 * TICK, SimpleNamespace(action='T', side='A', price=p + 5 * TICK, size=1, executed=True), TICK)
+ d._touch(day, base + 1_000_000_001, p + 5 * TICK, SimpleNamespace(action='T', side='A', price=p + 5 * TICK, size=1, executed=True), TICK)
  interaction = d.completed[-1]
  d._resolve_responses(base + 4_000_000_000, p + 9 * TICK)
  assert 5 not in interaction.responses
- d._resolve_responses(base + 5_000_000_001, p + 2 * TICK)
+ d._resolve_responses(base + 6_000_000_002, p + 2 * TICK)
  assert interaction.responses[5] == -3
+
+def test_continuous_multi_event_visit_is_one_interaction_and_book_events_do_not_restart():
+ d = Diagnostics(); day = "2026-07-21"; p = 5_000_000_000_000
+ d.levels[day] = {"PRIOR_RTH_POC": p}; base = 1_784_000_000_000_000_000 + RTH_START * 1_000_000_000
+ for i, action in enumerate(("T", "A", "C", "M", "F")):
+  executed = action in {"T", "F"}
+  d._touch(day, base + i, p, SimpleNamespace(action=action, side="A", price=p, size=1, executed=executed), TICK)
+ assert len(d.active) == 1 and next(iter(d.active.values())).events == 5
+
+def test_current_sweep_revision_persists_one_lifecycle():
+ d = Diagnostics(); day = "2026-07-21"; p = 5_000_000_000_000; base = 1_784_000_000_000_000_000 + RTH_START * 1_000_000_000
+ d.current_extrema[day] = (p, p)
+ d._touch(day, base, p, SimpleNamespace(action="T", side="A", price=p, size=1, executed=True), TICK)
+ d.current_extrema[day] = (p, p + TICK)
+ d._touch(day, base + 1, p + TICK, SimpleNamespace(action="T", side="A", price=p + TICK, size=1, executed=True), TICK)
+ highs = [x for x in d.active.values() if x.level_name == "CURRENT_RTH_HIGH_SWEEP"]
+ assert len(highs) == 1 and highs[0].level_price == p + TICK
+
+def test_fixed_point_price_ticks_and_raw_price_isolation():
+ d = Diagnostics(); p = 5_000_000_000_000
+ assert d.es_price(p) == 5000.0 and DBN_FIXED_POINT_SCALE == 1_000_000_000
+ assert d.response_ticks(p + TICK, p) == 1 and d.response_ticks(p - TICK, p) == -1
+ day = "2026-07-21"; d.levels[day] = {"PRIOR_RTH_POC": p}
+ d._touch(day, 100, p, SimpleNamespace(action="T", side="A", price=p, size=1, executed=True), TICK)
+ d._touch(day, 101, p + 5*TICK, SimpleNamespace(action="T", side="A", price=p + 5*TICK, size=1, executed=True), TICK)
+ d._touch(day, 1_000_000_101, p + 5*TICK, SimpleNamespace(action="T", side="A", price=p + 5*TICK, size=1, executed=True), TICK)
+ interaction = d.completed[-1]
+ d._resolve_responses(5_000_000_100, p + 999*TICK) # arbitrary order record cannot resolve responses
+ assert 5 not in interaction.responses
+ d._resolve_responses(6_000_000_102, p + 2*TICK)
+ assert interaction.responses[5] == -3
+
+def test_response_sanity_violation_is_explicit_and_excluded():
+ d = Diagnostics(); day = "2026-07-21"; p = 5_000_000_000_000; d.levels[day] = {"PRIOR_RTH_POC": p}
+ d._touch(day, 100, p, SimpleNamespace(action="T", side="A", price=p, size=1, executed=True), TICK)
+ d._touch(day, 101, p + 5*TICK, SimpleNamespace(action="T", side="A", price=p + 5*TICK, size=1, executed=True), TICK)
+ d._touch(day, 1_000_000_101, p + 5*TICK, SimpleNamespace(action="T", side="A", price=p + 5*TICK, size=1, executed=True), TICK)
+ interaction = d.completed[-1]
+ d._resolve_responses(6_000_000_102, p + 506*TICK)
+ assert interaction.response_violations[5] == "RESPONSE_SANITY_VIOLATION" and 5 not in interaction.responses
 
 def test_refined_report_emits_causal_example_schema_without_legacy_passive_side(tmp_path):
  d = Diagnostics(); day = "2026-07-21"; p = 5_000_000_000_000

@@ -9,16 +9,26 @@
     "CURRENT_RTH_LOW_SWEEP"
   ],
   "vicinity_ticks": 4,
-  "termination": [
-    "more than 4 tick exit",
-    "60 seconds without in-vicinity execution",
-    "RTH end"
-  ],
+  "lifecycle": {
+    "entry": "first executed ES trade within +/-4 ticks",
+    "termination": [
+      "more-than-4-tick exit persists for one-second sealed reset interval",
+      "60 seconds without an in-vicinity executed trade",
+      "RTH end"
+    ],
+    "non_restart": [
+      "executions",
+      "side/order/depth changes",
+      "inside-vicinity ticks",
+      "each current-session extreme"
+    ],
+    "current_sweep": "one active high/low lifecycle persists while an executed trade revises its extreme; revision supersedes the level price without creating an interaction"
+  },
   "id": "date:level_name:fixed_point_level:ordinal",
   "labels": {
     "PROBABLE_REPLENISHMENT_INTERACTION": "execution causally precedes same-price displayed add",
     "ABSORPTION_INTERACTION": "execution plus repeated same-price replenishment within interaction"
   },
   "aggressor": "T remains unknown; F uses documented resting side only",
-  "future_response": "descriptive signed ticks from interaction end at 5/15/30/60/120 seconds; unavailable unless causally observed"
+  "future_response": "first valid executed ES observation at or after horizon; signed ticks=(future ES price-reference ES price)/0.25; response sanity violations are explicit and excluded from distributions"
 }

@@ -9,13 +9,13 @@ Bounded summary-only probable-replenishment examples:
   {
     "date": "2026-07-31",
     "level": "CURRENT_RTH_HIGH_SWEEP",
-    "price_es": 7540.5,
+    "price_es": 7540.0,
     "label": "PROBABLE_REPLENISHMENT_INTERACTION"
   },
   {
     "date": "2026-07-31",
     "level": "CURRENT_RTH_HIGH_SWEEP",
-    "price_es": 7540.25,
+    "price_es": 7539.75,
     "label": "PROBABLE_REPLENISHMENT_INTERACTION"
   },
   {
