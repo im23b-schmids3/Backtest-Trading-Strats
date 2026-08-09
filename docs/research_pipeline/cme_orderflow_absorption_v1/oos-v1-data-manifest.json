@@ -1,9 +1,9 @@
 {
   "study": "CMEOrderflowAbsorption.ES_V1_BACKTEST",
   "manifest_kind": "OOS_VALIDATION_DATA",
-  "status": "COST_QUOTED_NOT_ACQUIRED",
+  "status": "OOS_DATA_ACQUIRED_AND_SEALED",
   "provenance": "Owner-obtained official Databento evidence; recorded without a new network call.",
-  "data_acquired": false,
+  "data_acquired": true,
   "no_strategy_execution_or_pnl": true,
   "provider": {
     "name": "Databento",
@@ -27,11 +27,46 @@
   "chronology": {
     "time_basis": "UTC; half-open intervals [start, end).",
     "oos_signal_and_performance_interval": {"start": "2026-08-03T00:00:00Z", "end": "2026-08-08T00:00:00Z"},
+    "data_request_interval_governed_by": "ts_recv",
+    "databento_historical_mbo_start_snapshot_policy": {
+      "classification": "EXPECTED_DATABENTO_MBO_START_SNAPSHOT_HISTORY",
+      "rule": "A ts_event before the OOS start is valid only for an F_SNAPSHOT record emitted at a deterministic initial snapshot ts_recv, with action R or A and instrument_id 42140870. It is initialization history, not a coverage gap.",
+      "initial_snapshot_receive_timestamps_utc": ["2026-08-03T00:00:00.000000000Z", "2026-08-04T00:00:00.000000000Z", "2026-08-05T00:00:00.000000000Z", "2026-08-06T00:00:00.000000000Z", "2026-08-07T00:00:00.000000000Z"],
+      "snapshot_records_excluded_from": ["OOS interactions", "scoring", "signal eligibility", "entry eligibility", "trade eligibility", "performance eligibility"],
+      "ordinary_incremental_gate": "Only non-snapshot records after the channel's valid R/A snapshot has completed with F_LAST may be eligible; ordinary records are causally ordered in provider iterator/ts_recv order and must have ts_event in the OOS interval.",
+      "sequence_semantics": "Databento/CME sequence is retained as channel-scoped diagnostic metadata, not imposed as a global strict total-order gate. Only a regression that breaks causal reconstruction fails integrity."
+    },
     "eligible_rth_dates": ["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07"],
     "pilot": {"interval": "2026-07-20 through 2026-07-31 UTC", "role": "DEVELOPMENT_DESIGN_ONLY", "never_oos_profitability_evidence": true},
     "july_31_warmup": {"permitted_only_for": "frozen prior-RTH structural levels used on 2026-08-03", "oos_interactions_or_trades": "PROHIBITED", "oos_excluded": true}
   },
-  "proposed_acquisition": {"status": "NOT_ACQUIRED", "target_path": "data/cme_orderflow_absorption_v1/oos_v1/ESU6/mbo/ESU6_2026-08-03_2026-08-08_mbo.dbn", "file_sha256": null, "file_bytes": null, "record_count": null, "coverage_gaps": null, "no_file_created": true},
+  "proposed_acquisition": {
+    "status": "OOS_DATA_ACQUIRED_AND_SEALED",
+    "target_path": "data/cme_orderflow_absorption_v1/oos_v1/ESU6/mbo/ESU6_2026-08-03_2026-08-08_mbo.dbn",
+    "file_sha256": "BE4B56639E56DF9AACE81621E4E276463EA8AF889104F35F1744400310D53AA3",
+    "file_bytes": 1068425668,
+    "record_count": 61106259,
+    "first_timestamp_utc": "2026-08-02T12:00:06.107501343Z",
+    "last_timestamp_utc": "2026-08-07T21:00:00.065056825Z",
+    "observed_instrument_ids": [42140870],
+    "coverage_gaps": [],
+    "valid_pre_start_history": {
+      "classification": "EXPECTED_DATABENTO_MBO_START_SNAPSHOT_HISTORY",
+      "record_count": 9165,
+      "resets": 5,
+      "adds": 9160,
+      "all_records_f_snapshot": true,
+      "all_records_valid_initialization_actions": true,
+      "all_records_instrument_id": 42140870,
+      "all_records_at_deterministic_snapshot_receive_time": true,
+      "snapshot_completion_f_last": {"required": true, "observed_completed_snapshots": 5, "pass": true},
+      "first_ordinary_incremental_timestamp_utc": "2026-08-03T00:00:00.001557027Z",
+      "ordinary_incremental_causality_pass": true
+    },
+    "acquisition_request_count": 0,
+    "no_file_created": false,
+    "integrity_pass": true
+  },
   "authorized_cost_quote": {
     "status": "QUOTED_OWNER_OBTAINED_OFFICIAL_DATABENTO_EVIDENCE",
     "provenance": "Owner-obtained official Databento evidence; no new network call issued.",
