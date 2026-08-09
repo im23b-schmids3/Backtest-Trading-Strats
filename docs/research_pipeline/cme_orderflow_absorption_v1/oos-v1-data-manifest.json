@@ -1,0 +1,54 @@
+{
+  "study": "CMEOrderflowAbsorption.ES_V1_BACKTEST",
+  "manifest_kind": "OOS_VALIDATION_DATA",
+  "status": "COST_QUOTED_NOT_ACQUIRED",
+  "provenance": "Owner-obtained official Databento evidence; recorded without a new network call.",
+  "data_acquired": false,
+  "no_strategy_execution_or_pnl": true,
+  "provider": {
+    "name": "Databento",
+    "dataset": "GLBX.MDP3",
+    "schema": "mbo",
+    "stype_in": "raw_symbol",
+    "metadata_symbology_evidence": {
+      "provenance": "Owner-obtained official Databento evidence",
+      "endpoint": "symbology.resolve",
+      "input": {"dataset": "GLBX.MDP3", "stype_in": "raw_symbol", "symbols": ["ESU6"], "d0": "2026-08-03", "d1": "2026-08-08"},
+      "result": {"status": "OK", "raw_symbol": "ESU6", "instrument_id": 42140870, "partial": [], "not_found": []}
+    }
+  },
+  "symbol_and_instrument": {
+    "root": "ES",
+    "resolved_raw_symbol": "ESU6",
+    "instrument_ids": [42140870],
+    "resolution_status": "OFFICIAL_DATABENTO_SYMBOLOGY_RESOLVED"
+  },
+  "rollover": {"policy": "No automatic rollover.", "resolved": true, "contracts": ["ESU6"], "evidence": "ESU6 alone covers all five OOS RTH dates; no rollover is required."},
+  "chronology": {
+    "time_basis": "UTC; half-open intervals [start, end).",
+    "oos_signal_and_performance_interval": {"start": "2026-08-03T00:00:00Z", "end": "2026-08-08T00:00:00Z"},
+    "eligible_rth_dates": ["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07"],
+    "pilot": {"interval": "2026-07-20 through 2026-07-31 UTC", "role": "DEVELOPMENT_DESIGN_ONLY", "never_oos_profitability_evidence": true},
+    "july_31_warmup": {"permitted_only_for": "frozen prior-RTH structural levels used on 2026-08-03", "oos_interactions_or_trades": "PROHIBITED", "oos_excluded": true}
+  },
+  "proposed_acquisition": {"status": "NOT_ACQUIRED", "target_path": "data/cme_orderflow_absorption_v1/oos_v1/ESU6/mbo/ESU6_2026-08-03_2026-08-08_mbo.dbn", "file_sha256": null, "file_bytes": null, "record_count": null, "coverage_gaps": null, "no_file_created": true},
+  "authorized_cost_quote": {
+    "status": "QUOTED_OWNER_OBTAINED_OFFICIAL_DATABENTO_EVIDENCE",
+    "provenance": "Owner-obtained official Databento evidence; no new network call issued.",
+    "endpoint": "metadata.get_cost",
+    "exact_inputs": {"dataset": "GLBX.MDP3", "schema": "mbo", "symbols": ["ESU6"], "stype_in": "raw_symbol", "start": "2026-08-03T00:00:00Z", "end": "2026-08-08T00:00:00Z"},
+    "estimated_usd": 5.736491556466,
+    "quote_count": 1,
+    "prohibited_endpoints_not_called": ["timeseries.get_range", "batch downloads", "DBN download/acquisition", "market-data retrieval"]
+  },
+  "frozen_strategy": {
+    "contract_path": "docs/research_pipeline/cme_orderflow_absorption_v1/backtest-contract.json",
+    "absorption_p95": 0.7977986403366786,
+    "replenishment_p95": 0.7785691162188411,
+    "selection": "ABSORPTION_PLUS_REPLENISHMENT only; same completed interaction must be HIGH and STRONG at a mandatory structural level.",
+    "constraints": ["PLUS only; no refit, recalibration, threshold optimization, score calculation, or selection change from OOS data.", "No strategy execution, backtest, PnL calculation, or market-data retrieval is authorized by this manifest."]
+  },
+  "es_economics_from_frozen_backtest_contract": {"tick_size_points": 0.25, "usd_per_tick_per_contract": 12.5, "usd_per_point_per_contract": 50.0, "commission_usd_per_contract_per_side": 3.0, "currency": "USD"},
+  "fixed_usd_risk_budget": 250.00,
+  "stop_buffer_ticks": 5
+}

@@ -1,6 +1,6 @@
 {
   "study": "CMEOrderflowAbsorption.ES_V1_BACKTEST",
-  "status": "SEALED_DESIGN_ONLY_NO_EXECUTION",
+  "status": "BACKTEST_CONTRACT_READY",
   "timezone": "UTC",
   "scope": {
     "contract_sequence": 1,
@@ -11,11 +11,11 @@
     ]
   },
   "validation_chronology": {
-    "status": "YET_TO_BE_ACQUIRED",
+    "status": "COST_QUOTED_NOT_ACQUIRED",
     "start_utc": "2026-08-03T00:00:00Z",
-    "end_utc": "CONTINGENT_ON_SEPARATELY_SEALED_VALIDATION_DATA_MANIFEST",
+    "end_utc": "2026-08-08T00:00:00Z",
     "strictly_later_than_pilot": true,
-    "manifest_requirement": "Before acquisition or any engine run, a separate immutable validation-data manifest must seal the final inclusive UTC end instant, provider dataset/version, file names, hashes, record counts, instrument definitions, session calendar, and coverage gaps. This contract neither acquires nor inspects that data."
+    "manifest_requirement": "The immutable OOS validation-data manifest seals the half-open UTC interval, provider dataset/version, ESU6 instrument ID, target file path, session calendar, and non-acquired file fields. Before acquisition or any engine run, it must additionally be updated with file hashes, record counts, and coverage gaps. This contract neither acquires nor inspects data."
   },
   "required_future_validation_data": {
     "source": "CME Globex MBO (Market-By-Order) event data from the sealed provider dataset",
@@ -53,8 +53,8 @@
   },
   "risk_and_exits": {
     "position_limit": "one position maximum",
-    "sizing": {"manifest_precondition": "Before any validation data is processed, the immutable future run manifest must predeclare FIXED_USD_RISK_BUDGET in USD. This contract neither creates nor seals that manifest.", "entry_fill_accounting": "entry_fill already includes ENTRY_SLIPPAGE=1 adverse ES tick.", "stop_exit_fill_assumption_accounting": "stop_exit_fill_assumption already includes EXIT_SLIPPAGE=1 adverse ES tick.", "formula": "one_contract_price_risk_usd = abs(entry_fill - stop_exit_fill_assumption) * 50.00; round_trip_commission_risk_usd = 2 * 3.00; one_contract_initial_risk_usd = one_contract_price_risk_usd + round_trip_commission_risk_usd; contracts = floor(FIXED_USD_RISK_BUDGET / one_contract_initial_risk_usd).", "anti_double_counting": "Do not add entry or exit slippage a second time as a separate USD component in the sizing denominator: both adverse one-tick slippages are already embodied in entry_fill and stop_exit_fill_assumption and therefore in one_contract_price_risk_usd.", "constraints": "Contracts must be a positive integer. Entered trades have contracts >= 1. If contracts is less than one, do not trade and record INSUFFICIENT_RISK_BUDGET_FOR_ONE_ES_CONTRACT. No fractional ES, MES replacement, risk-budget overrun, or compounding is permitted.", "reporting": "Preserve R reporting from actual entry-to-stop risk. Separately report raw price risk, slippage contribution, commissions, and net economics, plus integer-contract gross USD, fees USD, slippage USD, and net USD.", "reporting_reconciliation": "raw_price_risk_usd = abs(entry_reference_price - stop_price) * 50.00; slippage_contribution_usd = abs(entry_fill - entry_reference_price) * 50.00 + abs(stop_exit_fill_assumption - stop_price) * 50.00; one_contract_price_risk_usd = raw_price_risk_usd + slippage_contribution_usd; one_contract_initial_risk_usd = one_contract_price_risk_usd + round_trip_commission_risk_usd. The slippage contribution is reported separately only and is not added again to the sizing denominator."},
-    "stop": "Fully determine before entry: beyond the completed absorption/sweep zone in the adverse direction plus exactly one ES tick (0.25). LONG stop is zone_low - 0.25; SHORT stop is zone_high + 0.25. Reject missing zone bounds or stop distance <= 0.",
+    "sizing": {"fixed_usd_risk_budget": 250.00, "budget_currency": "USD", "manifest_precondition": "The immutable OOS validation-data manifest predeclares FIXED_USD_RISK_BUDGET=250.00 USD before any validation data is processed.", "entry_fill_accounting": "entry_fill already includes ENTRY_SLIPPAGE=1 adverse ES tick.", "stop_exit_fill_assumption_accounting": "stop_exit_fill_assumption already includes EXIT_SLIPPAGE=1 adverse ES tick.", "formula": "one_contract_price_risk_usd = abs(entry_fill - stop_exit_fill_assumption) * 50.00; round_trip_commission_risk_usd = 2 * 3.00; one_contract_initial_risk_usd = one_contract_price_risk_usd + round_trip_commission_risk_usd; contracts = floor(250.00 / one_contract_initial_risk_usd).", "anti_double_counting": "Do not add entry or exit slippage a second time as a separate USD component in the sizing denominator: both adverse one-tick slippages are already embodied in entry_fill and stop_exit_fill_assumption and therefore in one_contract_price_risk_usd.", "constraints": "Contracts must be a positive integer. Entered trades have contracts >= 1. If contracts is less than one, do not trade and record INSUFFICIENT_RISK_BUDGET_FOR_ONE_ES_CONTRACT. No fractional ES, MES replacement, risk-budget overrun, or compounding is permitted.", "reporting": "Preserve R reporting from actual entry-to-stop risk. Separately report raw price risk, slippage contribution, commissions, and net economics, plus integer-contract gross USD, fees USD, slippage USD, and net USD.", "reporting_reconciliation": "raw_price_risk_usd = abs(entry_reference_price - stop_price) * 50.00; slippage_contribution_usd = abs(entry_fill - entry_reference_price) * 50.00 + abs(stop_exit_fill_assumption - stop_price) * 50.00; one_contract_price_risk_usd = raw_price_risk_usd + slippage_contribution_usd; one_contract_initial_risk_usd = one_contract_price_risk_usd + round_trip_commission_risk_usd. The slippage contribution is reported separately only and is not added again to the sizing denominator."},
+    "stop": "Fully determine before entry from the completed interaction zone, the sole structural anchor: stop_buffer_ticks=5 and ES tick_size_points=0.25. LONG stop = zone_low - (5 * 0.25) = zone_low - 1.25 points; SHORT stop = zone_high + (5 * 0.25) = zone_high + 1.25 points. Do not measure the buffer from entry, level center, or NBBO. Reject missing zone bounds or stop distance <= 0.",
     "target": "Exactly 2R from actual adverse-slippage entry fill: LONG target = entry + 2R; SHORT target = entry - 2R. No partial exits.",
     "fill_ordering": "Use actual chronological MBO market events. Evaluate executable stop/target conditions in event sequence; if both could be inferred from a single aggregate record, classify AMBIGUOUS_COLLISION_UNEXECUTABLE and fail closed. No OHLC collision rule is allowed."
   },
@@ -81,7 +81,7 @@
       "zero positions and zero pending orders exist at every timestamp > 22:45:00.000000000 UTC",
       "every cutoff liquidation uses the last valid executable ES market observation in the inclusive cutoff liquidation window",
       "every cutoff liquidation without a valid executable window observation is counted as CUTOFF_EXECUTION_INTEGRITY_FAILURE and has no invented fill",
-      "the future run manifest predeclares FIXED_USD_RISK_BUDGET before validation data processing",
+      "the OOS validation-data manifest predeclares FIXED_USD_RISK_BUDGET = 250.00 USD before validation data processing",
       "every entered trade has integer contracts >= 1; no fractional contract count exists",
       "each entered trade's actual initial risk is <= FIXED_USD_RISK_BUDGET and its contracts equal floor(FIXED_USD_RISK_BUDGET / one_contract_initial_risk_usd)",
       "every entered trade reconciles one_contract_price_risk_usd = abs(entry_fill - stop_exit_fill_assumption) * 50.00 and one_contract_initial_risk_usd = one_contract_price_risk_usd + (2 * 3.00)",

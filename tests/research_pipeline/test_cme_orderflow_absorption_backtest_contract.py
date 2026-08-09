@@ -80,13 +80,13 @@ def test_missing_valid_cutoff_window_observation_fails_closed():
 
 
 def test_integer_es_sizing_and_insufficient_budget_have_no_fractional_contracts():
-    price_risk, commissions, risk, contracts = synthetic_contracts(1_000.00, 5001.00, 4990.50)
-    assert price_risk == 525.00
+    price_risk, commissions, risk, contracts = synthetic_contracts(250.00, 5001.00, 4996.50)
+    assert price_risk == 225.00
     assert commissions == 6.00
-    assert risk == 531.00
+    assert risk == 231.00
     assert contracts == 1 and isinstance(contracts, int)
-    assert contracts * risk <= 1_000.00
-    _, _, insufficient_risk, insufficient_contracts = synthetic_contracts(530.99, 5001.00, 4990.50)
+    assert contracts * risk <= 250.00
+    _, _, insufficient_risk, insufficient_contracts = synthetic_contracts(230.99, 5001.00, 4996.50)
     assert insufficient_risk == risk
     assert insufficient_contracts == 0
 
@@ -114,6 +114,18 @@ def test_exact_one_tick_entry_and_exit_slippage_are_sealed():
     assert c["execution"]["slippage_constants"] == {"ENTRY_SLIPPAGE": "1 adverse ES tick", "EXIT_SLIPPAGE": "1 adverse ES tick"}
     assert c["execution"]["entry_slippage"] == "ENTRY_SLIPPAGE=1 adverse ES tick. LONG entry fill = ask + 0.25; SHORT entry fill = bid - 0.25."
     assert c["execution"]["exit_slippage"] == "EXIT_SLIPPAGE=1 adverse ES tick. LONG exit fill = bid - 0.25; SHORT exit fill = ask + 0.25."
+
+
+def test_fixed_250_risk_and_exact_five_tick_zone_stops_are_sealed():
+    c = load_contract()
+    sizing = c["risk_and_exits"]["sizing"]
+    assert sizing["fixed_usd_risk_budget"] == 250.00
+    assert sizing["budget_currency"] == "USD"
+    stop = c["risk_and_exits"]["stop"]
+    assert "stop_buffer_ticks=5" in stop
+    assert "zone_low - (5 * 0.25) = zone_low - 1.25" in stop
+    assert "zone_high + (5 * 0.25) = zone_high + 1.25" in stop
+    assert "entry, level center, or NBBO" in stop
 
 
 def test_causal_stop_target_ordering_and_reconciliation_invariants_are_sealed():
