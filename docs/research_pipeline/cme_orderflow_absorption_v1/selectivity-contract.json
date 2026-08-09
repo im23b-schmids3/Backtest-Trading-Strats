@@ -1,0 +1,44 @@
+{
+  "freeze": {
+    "freeze_order": "scores and p95 thresholds are computed before any response distribution",
+    "percentile": "nearest-rank p95 over full pilot interaction distribution",
+    "response_inputs": "none",
+    "weights": "equal 0.20"
+  },
+  "frozen_score_features": {
+    "absorption_score": [
+      "relevant directional aggressive execution volume",
+      "execution count",
+      "absolute directional aggressive imbalance",
+      "inverse through-level price progress",
+      "interaction-end rejection/counter-tick"
+    ],
+    "replenishment_score": [
+      "replenishment count",
+      "replenished volume",
+      "replenished/execution ratio",
+      "repeated same-price execution/replenishment cycles",
+      "displayed queue persistence proxy"
+    ]
+  },
+  "legacy_plus": "ABSORPTION_INTERACTION OR PROBABLE_REPLENISHMENT_INTERACTION (incorrect union)",
+  "response_separation": "future 5s/15s/30s/60s/120s responses are descriptive only and excluded from score construction and p95 choice",
+  "structural_level_requirement": [
+    "PRIOR_RTH_HIGH",
+    "PRIOR_RTH_LOW",
+    "PRIOR_RTH_POC",
+    "PRIOR_RTH_VAH",
+    "PRIOR_RTH_VAL",
+    "CURRENT_RTH_HIGH_SWEEP",
+    "CURRENT_RTH_LOW_SWEEP"
+  ],
+  "thresholds": {
+    "absorption_p95": 0.7977986403366786,
+    "replenishment_p95": 0.7785691162188411
+  },
+  "tiers": {
+    "TIER_ABSORPTION_PLUS_REPLENISHMENT": "same-interaction boolean intersection of HIGH and STRONG",
+    "TIER_HIGH_ABSORPTION": "absorption_score >= full-pilot p95",
+    "TIER_STRONG_REPLENISHMENT": "replenishment_score >= full-pilot p95"
+  }
+}

@@ -6,7 +6,7 @@ from research_pipeline.cme_orderflow_absorption_v1.analysis import (
     Diagnostics, RTH_START, TICK, DBN_FIXED_POINT_SCALE, previous_completed_rth, volume_profile,
 )
 from research_pipeline.cme_orderflow_absorption_v1.loader import MetadataSummary
-from research_pipeline.cme_orderflow_absorption_v1.report import write_reports
+from research_pipeline.cme_orderflow_absorption_v1.report import write_reports, select_tiers
 
 def apply(b, a, s, p, z, oid, seq=1, ts=1): return b.apply(action=a,side=s,price=p,size=z,order_id=oid,sequence=seq,ts_recv=ts)
 def test_add_cancel_modify_multiple_orders_queue_restoration_best_spread():
@@ -130,3 +130,43 @@ def test_refined_report_emits_causal_example_schema_without_legacy_passive_side(
  summary = json.loads((tmp_path / "refined-feature-diagnostic-summary.json").read_text())
  assert summary["tier_counts"]["RAW_INTERACTION"] == 1
  assert "passive_side" not in (tmp_path / "feature-diagnostic-report.md").read_text()
+
+def _selectivity_row(**overrides):
+ base = {"date": "2026-07-21", "level": "PRIOR_RTH_POC", "level_price": 1000,
+         "end_price": 1000, "sell_aggressor_volume": 0, "buy_aggressor_volume": 0,
+         "aggressive_imbalance": 0, "executions": 1, "execution_volume": 1,
+         "replenishment_count": 0, "replenished_volume": 0,
+         "responses_signed_ticks": {5: 999}}
+ base.update(overrides); return base
+
+def test_selectivity_plus_is_intersection_never_legacy_union_and_requires_level():
+ rows = [_selectivity_row(sell_aggressor_volume=i, aggressive_imbalance=-i, executions=i,
+                          execution_volume=i, replenishment_count=i % 3, replenished_volume=i % 3)
+         for i in range(1, 41)]
+ result = select_tiers(rows)
+ plus = set(result["memberships"]["ABSORPTION_PLUS_REPLENISHMENT"])
+ assert plus == (set(result["memberships"]["HIGH_ABSORPTION"]) & set(result["memberships"]["STRONG_REPLENISHMENT"]))
+ assert plus != (set(result["memberships"]["HIGH_ABSORPTION"]) | set(result["memberships"]["STRONG_REPLENISHMENT"]))
+ with pytest.raises(ValueError): select_tiers([_selectivity_row(level="NOT_A_LEVEL")])
+
+def test_selectivity_scores_are_direction_aware_frozen_and_response_free():
+ buyer = _selectivity_row(sell_aggressor_volume=100, aggressive_imbalance=-100, executions=10, execution_volume=100, replenishment_count=5, replenished_volume=100, end_price=1000)
+ seller = _selectivity_row(buy_aggressor_volume=100, aggressive_imbalance=100, executions=10, execution_volume=100, replenishment_count=5, replenished_volume=100, end_price=1000)
+ rows = [buyer, seller] + [_selectivity_row(sell_aggressor_volume=i, aggressive_imbalance=-i, executions=i, execution_volume=i, replenishment_count=i, replenished_volume=i) for i in range(1, 39)]
+ original = select_tiers(rows)
+ changed_responses = [{**row, "responses_signed_ticks": {5: -500, 15: 500}} for row in rows]
+ assert original["memberships"] == select_tiers(changed_responses)["memberships"]
+ assert original["directions"][:2] == ["BUYER_ABSORPTION", "SELLER_ABSORPTION"]
+ assert original["score_construction"]["response_inputs"] == "none"
+ assert original["score_construction"]["freeze_order"].startswith("scores and p95")
+
+def test_selectivity_counts_and_subset_checks_are_deterministic():
+ rows = [_selectivity_row(sell_aggressor_volume=i, aggressive_imbalance=-i, executions=i,
+                          execution_volume=i, replenishment_count=i, replenished_volume=i)
+         for i in range(1, 101)]
+ first, second = select_tiers(rows), select_tiers(list(rows))
+ assert first["memberships"] == second["memberships"]
+ high = set(first["memberships"]["HIGH_ABSORPTION"])
+ strong = set(first["memberships"]["STRONG_REPLENISHMENT"])
+ plus = set(first["memberships"]["ABSORPTION_PLUS_REPLENISHMENT"])
+ assert plus <= high and plus <= strong
