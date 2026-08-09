@@ -1,0 +1,92 @@
+{
+  "study": "CMEOrderflowAbsorption.ES_V1_BACKTEST",
+  "status": "SEALED_DESIGN_ONLY_NO_EXECUTION",
+  "timezone": "UTC",
+  "scope": {
+    "contract_sequence": 1,
+    "pilot_period": "2026-07-20 through 2026-07-31 UTC",
+    "pilot_role": "DEVELOPMENT_DESIGN_ONLY; it must never support an OOS profitability claim",
+    "prohibitions": [
+      "strategy execution", "PnL calculation", "real backtest", "validation-data download", "MBO DBN scan", "market-data modification", "threshold optimization"
+    ]
+  },
+  "validation_chronology": {
+    "status": "YET_TO_BE_ACQUIRED",
+    "start_utc": "2026-08-03T00:00:00Z",
+    "end_utc": "CONTINGENT_ON_SEPARATELY_SEALED_VALIDATION_DATA_MANIFEST",
+    "strictly_later_than_pilot": true,
+    "manifest_requirement": "Before acquisition or any engine run, a separate immutable validation-data manifest must seal the final inclusive UTC end instant, provider dataset/version, file names, hashes, record counts, instrument definitions, session calendar, and coverage gaps. This contract neither acquires nor inspects that data."
+  },
+  "required_future_validation_data": {
+    "source": "CME Globex MBO (Market-By-Order) event data from the sealed provider dataset",
+    "instrument": "ES futures only; the manifest must identify the exact CME ES contract symbol(s), instrument IDs, rollover handling, and multiplier/tick metadata",
+    "coverage": [
+      "continuous chronological MBO add, cancel, modify, fill/trade, and reset records needed to reconstruct the executable ES book",
+      "executed ES trades with exchange/event timestamps, sequence ordering, price, size, and aggressor/resting-side evidence required by the frozen interaction contract",
+      "bid and ask observations sufficient to determine valid NBBO, spread, marketability, and executable entry/exit observations",
+      "all UTC timestamps from the sealed start through sealed end, including every eligible RTH, the 22:45 UTC cutoff observation, and prior completed RTH data needed for each structural level",
+      "provider metadata, schema/version, price scale, time basis, timezone, trading-status/session-calendar data, and explicit outage/gap records"
+    ],
+    "integrity": "Sequence/timestamp ordering and book reconstruction must fail closed on missing, stale, crossed, locked when invalid by provider rules, or otherwise non-executable observations."
+  },
+  "frozen_selection": {
+    "absorption_p95": 0.7977986403366786,
+    "replenishment_p95": 0.7785691162188411,
+    "loading_rule": "Load these numeric literals verbatim from this sealed contract. Validation code must not compute a distribution, percentile, p95, score calibration, or threshold from validation data.",
+    "tradable_tier": "ABSORPTION_PLUS_REPLENISHMENT only: the exact same completed interaction is HIGH (absorption_score >= absorption_p95) AND STRONG (replenishment_score >= replenishment_p95), at one mandatory structural level.",
+    "mandatory_structural_levels": ["PRIOR_RTH_HIGH", "PRIOR_RTH_LOW", "PRIOR_RTH_POC", "PRIOR_RTH_VAH", "PRIOR_RTH_VAL", "CURRENT_RTH_HIGH_SWEEP", "CURRENT_RTH_LOW_SWEEP"],
+    "response_isolation": "No future-response field, response lookup, or response-derived field may be read by selection, eligibility, entry, stop, target, or sizing."
+  },
+  "direction_mapping": {"BUYER_ABSORPTION": "LONG", "SELLER_ABSORPTION": "SHORT"},
+  "exit_architecture": "SINGLE_2R",
+  "instrument_economics": {"symbol": "ES", "tick_size_points": 0.25, "usd_per_tick_per_contract": 12.5, "usd_per_point_per_contract": 50.0, "commission_usd_per_contract_per_side": 3.0, "commission_status": "CONSERVATIVE_RESEARCH_ASSUMPTION"},
+  "execution": {
+    "entry_trigger": "For an eligible completed interaction, submit after deterministic latency and enter only on the first executable ES market observation strictly after interaction_end; never enter at or before interaction_end and never use midprice.",
+    "latency": {"decision_latency": "1 millisecond after interaction_end", "order_latency": "1 millisecond after decision", "rule": "The eligible observation must have timestamp >= interaction_end + 2 milliseconds; equal timestamps are not later."},
+    "marketability": {"LONG": "marketable buy; raw reference is current best ask", "SHORT": "marketable sell; raw reference is current best bid"},
+    "valid_executable_observation": "A chronologically ordered ES MBO book state with positive best bid and ask, best_bid < best_ask, both sides executable at documented displayed size for one contract, and no reconstruction/integrity failure.",
+    "entry_slippage": "ENTRY_SLIPPAGE=1 adverse ES tick. LONG entry fill = ask + 0.25; SHORT entry fill = bid - 0.25.",
+    "exit_slippage": "EXIT_SLIPPAGE=1 adverse ES tick. LONG exit fill = bid - 0.25; SHORT exit fill = ask + 0.25.",
+    "slippage_constants": {"ENTRY_SLIPPAGE": "1 adverse ES tick", "EXIT_SLIPPAGE": "1 adverse ES tick"},
+    "non_trade_audit_outcomes": ["LATENCY_NOT_REACHED", "STALE_OR_ABSENT_EXECUTABLE_MARKET_OBSERVATION", "INVALID_SPREAD", "INSUFFICIENT_DISPLAYED_SIZE", "BOOK_RECONSTRUCTION_FAILURE", "UNEXECUTABLE_MARKET_ORDER", "CUTOFF_CANCELLED", "CUTOFF_EXECUTION_INTEGRITY_FAILURE", "POSITION_ALREADY_OPEN", "INTERACTION_ALREADY_TRADED", "INVALID_OR_NONPOSITIVE_STOP", "INSUFFICIENT_RISK_BUDGET_FOR_ONE_ES_CONTRACT"],
+    "no_fill_inference": "No midpoint, OHLC, interpolation, queue-priority, or assumed fill is permitted."
+  },
+  "risk_and_exits": {
+    "position_limit": "one position maximum",
+    "sizing": {"manifest_precondition": "Before any validation data is processed, the immutable future run manifest must predeclare FIXED_USD_RISK_BUDGET in USD. This contract neither creates nor seals that manifest.", "entry_fill_accounting": "entry_fill already includes ENTRY_SLIPPAGE=1 adverse ES tick.", "stop_exit_fill_assumption_accounting": "stop_exit_fill_assumption already includes EXIT_SLIPPAGE=1 adverse ES tick.", "formula": "one_contract_price_risk_usd = abs(entry_fill - stop_exit_fill_assumption) * 50.00; round_trip_commission_risk_usd = 2 * 3.00; one_contract_initial_risk_usd = one_contract_price_risk_usd + round_trip_commission_risk_usd; contracts = floor(FIXED_USD_RISK_BUDGET / one_contract_initial_risk_usd).", "anti_double_counting": "Do not add entry or exit slippage a second time as a separate USD component in the sizing denominator: both adverse one-tick slippages are already embodied in entry_fill and stop_exit_fill_assumption and therefore in one_contract_price_risk_usd.", "constraints": "Contracts must be a positive integer. Entered trades have contracts >= 1. If contracts is less than one, do not trade and record INSUFFICIENT_RISK_BUDGET_FOR_ONE_ES_CONTRACT. No fractional ES, MES replacement, risk-budget overrun, or compounding is permitted.", "reporting": "Preserve R reporting from actual entry-to-stop risk. Separately report raw price risk, slippage contribution, commissions, and net economics, plus integer-contract gross USD, fees USD, slippage USD, and net USD.", "reporting_reconciliation": "raw_price_risk_usd = abs(entry_reference_price - stop_price) * 50.00; slippage_contribution_usd = abs(entry_fill - entry_reference_price) * 50.00 + abs(stop_exit_fill_assumption - stop_price) * 50.00; one_contract_price_risk_usd = raw_price_risk_usd + slippage_contribution_usd; one_contract_initial_risk_usd = one_contract_price_risk_usd + round_trip_commission_risk_usd. The slippage contribution is reported separately only and is not added again to the sizing denominator."},
+    "stop": "Fully determine before entry: beyond the completed absorption/sweep zone in the adverse direction plus exactly one ES tick (0.25). LONG stop is zone_low - 0.25; SHORT stop is zone_high + 0.25. Reject missing zone bounds or stop distance <= 0.",
+    "target": "Exactly 2R from actual adverse-slippage entry fill: LONG target = entry + 2R; SHORT target = entry - 2R. No partial exits.",
+    "fill_ordering": "Use actual chronological MBO market events. Evaluate executable stop/target conditions in event sequence; if both could be inferred from a single aggregate record, classify AMBIGUOUS_COLLISION_UNEXECUTABLE and fail closed. No OHLC collision rule is allowed."
+  },
+  "session_and_deduplication": {
+    "entry_cutoff_utc": "22:45:00.000000000 UTC",
+    "cutoff_liquidation_window_utc": "22:44:59.000000000 through 22:45:00.000000000 UTC",
+    "rule": "No entry at or after 22:45:00.000000000 UTC. Cancel all pending orders no later than 22:45:00.000000000 UTC. For every open position, select the LAST valid executable ES market observation in the inclusive 22:44:59.000000000 through 22:45:00.000000000 UTC liquidation window and force-flat at that observation using EXIT_SLIPPAGE=1 adverse ES tick and USD 3.00 per-contract-per-side exit commission. If no such observation exists, fail closed and record CUTOFF_EXECUTION_INTEGRITY_FAILURE; never invent or timestamp a fill after cutoff. No position may exist at any timestamp > 22:45:00.000000000 UTC. Reset daily eligibility at 00:00:00.000000000 UTC.",
+    "signal_handling": "While a position is open, ignore every signal, including opposite, overlapping, and repeated-level signals. Permanently mark each interaction ID after its first submission attempt; never trade an interaction twice."
+  },
+  "required_reporting": {
+    "primary": ["trade count", "eligible interaction count", "non-trade audit counts", "R outcomes net and gross of stated commissions", "mean/median/sum R", "win/loss/flat counts", "maximum adverse and favorable excursion in R", "exit-reason counts", "forced-flat count"],
+    "one_contract_es_economics_separate_from_primary_R": ["gross USD", "commission USD", "net USD", "entry/exit prices", "risk points", "risk ticks", "one-contract USD risk"],
+    "breakouts": ["direction", "structural level", "RTH date", "direction x level", "direction x RTH date", "level x RTH date"],
+    "reconciliation_invariants": [
+      "eligible = submitted + all pre-entry non-trade outcomes",
+      "submitted = entered + all post-submission non-trade outcomes",
+      "entered = closed trades; every entered trade has exactly one terminal exit reason",
+      "closed trade count = stop + target + cutoff forced-flat exits",
+      "direction total, level total, and RTH-date total each equal aggregate trade count",
+      "gross USD, commission USD, net USD, and R totals equal sums of immutable per-trade records",
+      "each trade references one unique interaction ID and no interaction ID appears more than once",
+      "no entry timestamp is <= interaction_end",
+      "maximum exit timestamp is <= 22:45:00.000000000 UTC",
+      "zero positions and zero pending orders exist at every timestamp > 22:45:00.000000000 UTC",
+      "every cutoff liquidation uses the last valid executable ES market observation in the inclusive cutoff liquidation window",
+      "every cutoff liquidation without a valid executable window observation is counted as CUTOFF_EXECUTION_INTEGRITY_FAILURE and has no invented fill",
+      "the future run manifest predeclares FIXED_USD_RISK_BUDGET before validation data processing",
+      "every entered trade has integer contracts >= 1; no fractional contract count exists",
+      "each entered trade's actual initial risk is <= FIXED_USD_RISK_BUDGET and its contracts equal floor(FIXED_USD_RISK_BUDGET / one_contract_initial_risk_usd)",
+      "every entered trade reconciles one_contract_price_risk_usd = abs(entry_fill - stop_exit_fill_assumption) * 50.00 and one_contract_initial_risk_usd = one_contract_price_risk_usd + (2 * 3.00)",
+      "every entered trade reports raw price risk and slippage contribution separately, with raw price risk + slippage contribution = one_contract_price_risk_usd; slippage contribution is not separately added to one_contract_initial_risk_usd"
+    ]
+  },
+  "implementation_boundary": "This is a sealed design contract only. Any future engine, data acquisition, manifest sealing, execution, PnL, or report requires a separately authorized phase."
+}
