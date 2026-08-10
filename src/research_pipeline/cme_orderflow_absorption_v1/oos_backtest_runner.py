@@ -195,6 +195,9 @@ def _reconstruct(records:Iterable[Any], manifest:dict[str,Any], state:State)->No
    else: diag.finish_day_context(day)
    state.previous_rth_source_by_oos_date[day]=source_day
    context.add(day)
+  if getattr(rec.action, 'value', rec.action) == 'N':
+   state.counters['ordinary_records_seen'] += 1
+   continue
   applied=book.apply(action=rec.action,side=rec.side,price=rec.price,size=rec.size,order_id=rec.order_id,sequence=rec.sequence,ts_recv=rec.ts_recv,channel_id=rec.channel_id,validate_sequence=False,mutate_execution=False)
   state.counters["ordinary_records_seen"]+=1;state.counters["book_events_processed"]+=1;diag.observe(rec,applied,book.spread())
  diag.finalize(); rows=[r for r in diag.interaction_rows() if r["date"] in eligible]
@@ -248,6 +251,8 @@ def main(argv:list[str]|None=None)->int:
  by_end=sorted(state.interactions,key=lambda r:r["interaction_end"]); pending=list(by_end);book=CausalMBOBook();position=None;cutoff_quote=None
  for rec in DBNStore.from_file(args.dbn):
   if is_snapshot_record(rec,manifest):book.apply(action=rec.action,side=rec.side,price=rec.price,size=rec.size,order_id=rec.order_id,sequence=rec.sequence,ts_recv=rec.ts_recv,channel_id=rec.channel_id,validate_sequence=False,mutate_execution=False);continue
+  if getattr(rec.action, 'value', rec.action) == 'N':
+   continue
   applied=book.apply(action=rec.action,side=rec.side,price=rec.price,size=rec.size,order_id=rec.order_id,sequence=rec.sequence,ts_recv=rec.ts_recv,channel_id=rec.channel_id,validate_sequence=False,mutate_execution=False);day,_=day_and_seconds(rec.ts_recv); quote=_valid(book); cutoff=_cutoff(day)
   if quote and cutoff-1_000_000_000 <= rec.ts_recv <= cutoff: cutoff_quote=(rec.ts_recv, quote)
   if position and rec.ts_recv > position["cutoff_ns"]:
