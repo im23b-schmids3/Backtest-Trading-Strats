@@ -67,3 +67,7 @@ btc-study-prompt.txt
 .pytest-*
 .tmp-*
 
+
+.codex-pytest-temp-*
+.pytest-*
+.tmp-*
