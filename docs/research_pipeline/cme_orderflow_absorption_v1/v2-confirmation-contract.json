@@ -1,0 +1,17 @@
+﻿{
+    "schema_version":  1,
+    "strategy":  "CMEOrderflowAbsorption.ES_V2",
+    "base_signal":  "V1_PLUS",
+    "confirmation_seconds":  15,
+    "minimum_favorable_ticks":  1,
+    "confirmation_reference":  "interaction_end_price",
+    "entry_timing":  "FIRST_EXECUTABLE_OBSERVATION_AFTER_CONFIRMATION",
+    "stop_rule":  "5_ES_TICKS_BEYOND_COMPLETED_INTERACTION_ZONE",
+    "target_rule":  "SINGLE_2R",
+    "risk_budget_usd":  250,
+    "commission_usd_per_side":  3,
+    "cutoff_utc":  "22:45:00",
+    "score_calibration_source":  "DEVELOPMENT_ONLY",
+    "research_basis":  "SEEN_15_RTH_ONLY_NOT_NEW_OOS_EVIDENCE",
+    "v2_rule_frozen":  true
+}

@@ -71,3 +71,14 @@ btc-study-prompt.txt
 .codex-pytest-temp-*
 .pytest-*
 .tmp-*
+
+# Temporary Databento acquisition / quote tooling
+acquire_*.py
+quote_*_cost.py
+download_*_holdout.py
+
+# Temporary acquisition / cost planning artifacts
+docs/research_pipeline/cme_orderflow_absorption_v1/*acquisition*.md
+docs/research_pipeline/cme_orderflow_absorption_v1/*acquisition*.json
+docs/research_pipeline/cme_orderflow_absorption_v1/*completion-plan.md
+docs/research_pipeline/cme_orderflow_absorption_v1/*cost*plan.md

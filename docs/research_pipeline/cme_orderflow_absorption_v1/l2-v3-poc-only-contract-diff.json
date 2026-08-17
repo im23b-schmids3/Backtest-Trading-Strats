@@ -1,0 +1,30 @@
+{
+  "child_strategy_id": "CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY",
+  "child_contract_sha256": "a0ce94eeb78dcbf865cf4464bdf97ebc3f014a8ec5e2f559f99798534dfcbcb4",
+  "changed_strategy_fields": [
+    {
+      "field": "eligible_structural_levels",
+      "v2": [
+        "PRIOR_RTH_HIGH",
+        "PRIOR_RTH_LOW",
+        "PRIOR_RTH_POC",
+        "PRIOR_RTH_VAH",
+        "PRIOR_RTH_VAL",
+        "CURRENT_RTH_HIGH_SWEEP",
+        "CURRENT_RTH_LOW_SWEEP"
+      ],
+      "v3": [
+        "PRIOR_RTH_POC"
+      ]
+    }
+  ],
+  "only_structural_eligibility_changed": true,
+  "parent_contract_sha256": "f6152ed1ca32bb7c93a62ddf672a0708ff6c92abb0beb126eec78bf7ab3ab239",
+  "parent_strategy_id": "CMEOrderflowAbsorption.ES_L2_V2",
+  "unchanged_contract_sections": [
+    "configuration",
+    "interaction_lifecycle",
+    "feature_and_score_semantics",
+    "execution"
+  ]
+}
