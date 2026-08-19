@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>L2 V4 Q45 replay preparation</title>
+  <style>
+    :root { color-scheme: light dark; --ok:#16803c; --muted:#667085; --line:#98a2b3; }
+    body { font: 15px/1.5 system-ui,sans-serif; max-width: 1050px; margin: 2rem auto; padding: 0 1rem; }
+    h1,h2 { line-height:1.2; } code,pre { font-family: ui-monospace,SFMono-Regular,Consolas,monospace; }
+    pre { padding: 1rem; border:1px solid var(--line); border-radius:.5rem; overflow:auto; white-space:pre-wrap; }
+    table { border-collapse:collapse; width:100%; } th,td { text-align:left; padding:.55rem; border-bottom:1px solid var(--line); }
+    .ok { color:var(--ok); font-weight:700; } .muted { color:var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>CMEOrderflowAbsorption.ES_L2_V4_POC_ONLY_Q45</h1>
+  <p class="ok">REPLAY PREPARATION COMPLETE — FULL REPLAY NOT EXECUTED</p>
+  <p>Evidence: <code>PREDECLARED_Q45_CHALLENGER_DEC2025_JAN2026_RETROSPECTIVE_RESEARCH</code>. This challenger was declared after the V3 Dec/Jan result and is not independent validation.</p>
+
+  <h2>Sealed contract</h2>
+  <table>
+    <tr><th>Parent</th><td><code>CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY</code></td></tr>
+    <tr><th>Parent SHA-256</th><td><code>a0ce94eeb78dcbf865cf4464bdf97ebc3f014a8ec5e2f559f99798534dfcbcb4</code></td></tr>
+    <tr><th>V4 SHA-256</th><td><code>1e2e9248cb7661e3c075afbeac38e8ecdf9e10bb1eb58a939ff0c22235286cf9</code></td></tr>
+    <tr><th>Only strategy change</th><td><code>min_quality_score: 0.50 → 0.45</code></td></tr>
+  </table>
+  <p>POC eligibility, score components and weights, penalties, confirmation, latency, stop, target, risk, ES-first/MES fallback, caps, one-position state, and calendar/DST semantics are inherited unchanged.</p>
+
+  <h2>Artifact contract</h2>
+  <p>The manual replay writes a fresh immutable V4 root containing <code>summary.json</code>, <code>daily-results.csv</code>, <code>setup-ledger.csv</code>, <code>trade-ledger.csv</code>, <code>interaction-features.csv</code>, <code>diagnostic-report.md</code>, and <code>v3-v4-comparison.json</code>.</p>
+  <p><code>interaction-features.csv</code> retains every completed <code>PRIOR_RTH_POC</code> interaction before quality selection, including rows below 0.45, all raw feature/component fields, identical V3/V4 scores, both gate decisions, and the 0.45–0.50 incremental-band flag.</p>
+
+  <h2>Validation</h2>
+  <ul>
+    <li>Focused V3/V4, calendar, and supplement tests: <strong>50 passed</strong></li>
+    <li>Compilation: <strong>passed</strong></li>
+    <li><code>git diff --check</code>: <strong>passed</strong></li>
+    <li>Network/download calls: <strong>absent</strong></li>
+    <li>V4 replay and outcome calculation: <strong>not executed</strong></li>
+  </ul>
+
+  <h2>Manual foreground replay</h2>
+  <pre>Set-Location 'C:\Users\sandr\Trading-Bot-Fib'; $logRoot='.tmp-l2-v4-q45-dec2025-jan2026-replay'; if (Test-Path $logRoot) { throw "Log directory already exists: $logRoot" }; New-Item -ItemType Directory $logRoot | Out-Null; python -m research_pipeline.cme_orderflow_absorption_l2_v1.v4_poc_q45_dec2025_jan2026_replay --data-root 'data\cme_orderflow_absorption_l2_v3\dec2025_jan2026' --output-root 'research_runs\CMEOrderflowAbsorption.ES_L2_V4_POC_ONLY_Q45_DEC2025_JAN2026_RETRO' --audit-report 'research_runs\L2_V3_DEC2025_JAN2026_DATA_PREFLIGHT\adapter-audit.json' --v3-artifact-root 'research_runs\CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY_DEC2025_JAN2026_RETRO' 2&gt; "$logRoot\stderr.log" | Tee-Object -FilePath "$logRoot\stdout.log"; $code=$LASTEXITCODE; $code | Set-Content "$logRoot\exitcode.txt"; if ($code -ne 0) { exit $code }</pre>
+  <p class="muted">Expected logs: <code>stdout.log</code>, <code>stderr.log</code>, and <code>exitcode.txt</code> under the stated temporary log directory.</p>
+</body>
+</html>

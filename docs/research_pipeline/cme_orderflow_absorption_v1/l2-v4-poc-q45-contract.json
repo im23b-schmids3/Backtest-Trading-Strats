@@ -1,0 +1,207 @@
+{
+  "contract": {
+    "configuration": {
+      "adverse_progress_penalty_component_weight": 0.2,
+      "aggression_weight": 0.28,
+      "aggressive_volume_saturation": 250.0,
+      "execution_count_saturation": 8.0,
+      "false_refill_penalty_weight": 0.25,
+      "max_through_level_progress_ticks": 4.0,
+      "min_consume_restore_cycles": 1,
+      "min_quality_score": 0.45,
+      "min_rejection_ticks": 0.25,
+      "min_relevant_aggressive_volume": 50,
+      "min_relevant_execution_count": 2,
+      "multi_level_ofi_saturation": 100.0,
+      "multi_level_support_weight": 0.13,
+      "persistence_depth_saturation": 100.0,
+      "persistence_weight": 0.12,
+      "price_resistance_weight": 0.22,
+      "rapid_cancel_ns": 250000000,
+      "rapid_cancel_penalty_component_weight": 0.3,
+      "rejection_saturation_ticks": 3.0,
+      "restoration_latency_saturation_ms": 1000.0,
+      "restoration_ratio_saturation": 1.0,
+      "restoration_weight": 0.25,
+      "restore_cycle_saturation": 3.0,
+      "unexecuted_add_penalty_component_weight": 0.5,
+      "weights_label": "L2_V1_PREDECLARED_RESEARCH_WEIGHTS"
+    },
+    "declared_after_v3_dec_jan_result": true,
+    "eligible_structural_levels": [
+      "PRIOR_RTH_POC"
+    ],
+    "evidence_label": "PREDECLARED_Q45_CHALLENGER_DEC2025_JAN2026_RETROSPECTIVE_RESEARCH",
+    "execution": {
+      "confirmation_favorable_ticks": 3,
+      "confirmation_window_seconds_inclusive": [
+        5.0,
+        15.0
+      ],
+      "entry_latency_ms": 2.0,
+      "es_first": true,
+      "max_es_contracts": 6,
+      "max_mes_contracts": 60,
+      "mes_fallback": true,
+      "risk_budget_usd": 250.0,
+      "stop_buffer_ticks": 5,
+      "target_r": 3.0
+    },
+    "no_further_threshold_search": true,
+    "outcome_parameter_selection": false,
+    "parent_contract_sha256": "a0ce94eeb78dcbf865cf4464bdf97ebc3f014a8ec5e2f559f99798534dfcbcb4",
+    "parent_strategy_id": "CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY",
+    "purpose": "test whether the frozen 0.50 quality gate is unnecessarily selective",
+    "selection_prohibited": true,
+    "strategy_id": "CMEOrderflowAbsorption.ES_L2_V4_POC_ONLY_Q45",
+    "strict_chronological_oos": false,
+    "v3_to_v4_contract_diff": {
+      "changed_strategy_fields": [
+        {
+          "field": "min_quality_score",
+          "v3": 0.5,
+          "v4": 0.45
+        }
+      ],
+      "child_strategy_id": "CMEOrderflowAbsorption.ES_L2_V4_POC_ONLY_Q45",
+      "only_min_quality_score_changed": true,
+      "parent_contract_sha256": "a0ce94eeb78dcbf865cf4464bdf97ebc3f014a8ec5e2f559f99798534dfcbcb4",
+      "parent_strategy_id": "CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY",
+      "unchanged_semantics": {
+        "calendar_and_dst": "inherited_from_finalized_Dec2025_Jan2026_V3_replay",
+        "eligible_structural_levels": [
+          "PRIOR_RTH_POC"
+        ],
+        "execution": {
+          "confirmation_favorable_ticks": 3,
+          "confirmation_window_seconds_inclusive": [
+            5.0,
+            15.0
+          ],
+          "entry_latency_ms": 2.0,
+          "es_first": true,
+          "max_es_contracts": 6,
+          "max_mes_contracts": 60,
+          "mes_fallback": true,
+          "risk_budget_usd": 250.0,
+          "stop_buffer_ticks": 5,
+          "target_r": 3.0
+        },
+        "interaction_lifecycle": "inherited_from_CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY",
+        "position_state": "independent_chronological_V4_replay; one_position_at_a_time",
+        "score_weights_and_penalties": {
+          "adverse_progress_penalty_component_weight": 0.2,
+          "aggression_weight": 0.28,
+          "false_refill_penalty_weight": 0.25,
+          "multi_level_support_weight": 0.13,
+          "persistence_weight": 0.12,
+          "price_resistance_weight": 0.22,
+          "rapid_cancel_penalty_component_weight": 0.3,
+          "restoration_weight": 0.25,
+          "unexecuted_add_penalty_component_weight": 0.5
+        }
+      },
+      "unchanged_strategy_configuration_fields": [
+        "adverse_progress_penalty_component_weight",
+        "aggression_weight",
+        "aggressive_volume_saturation",
+        "execution_count_saturation",
+        "false_refill_penalty_weight",
+        "max_through_level_progress_ticks",
+        "min_consume_restore_cycles",
+        "min_rejection_ticks",
+        "min_relevant_aggressive_volume",
+        "min_relevant_execution_count",
+        "multi_level_ofi_saturation",
+        "multi_level_support_weight",
+        "persistence_depth_saturation",
+        "persistence_weight",
+        "price_resistance_weight",
+        "rapid_cancel_ns",
+        "rapid_cancel_penalty_component_weight",
+        "rejection_saturation_ticks",
+        "restoration_latency_saturation_ms",
+        "restoration_ratio_saturation",
+        "restoration_weight",
+        "restore_cycle_saturation",
+        "unexecuted_add_penalty_component_weight",
+        "weights_label"
+      ]
+    },
+    "variant_label": "L2_V4_POC_ONLY_Q45_DEC2025_JAN2026"
+  },
+  "contract_diff": {
+    "changed_strategy_fields": [
+      {
+        "field": "min_quality_score",
+        "v3": 0.5,
+        "v4": 0.45
+      }
+    ],
+    "child_strategy_id": "CMEOrderflowAbsorption.ES_L2_V4_POC_ONLY_Q45",
+    "only_min_quality_score_changed": true,
+    "parent_contract_sha256": "a0ce94eeb78dcbf865cf4464bdf97ebc3f014a8ec5e2f559f99798534dfcbcb4",
+    "parent_strategy_id": "CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY",
+    "unchanged_semantics": {
+      "calendar_and_dst": "inherited_from_finalized_Dec2025_Jan2026_V3_replay",
+      "eligible_structural_levels": [
+        "PRIOR_RTH_POC"
+      ],
+      "execution": {
+        "confirmation_favorable_ticks": 3,
+        "confirmation_window_seconds_inclusive": [
+          5.0,
+          15.0
+        ],
+        "entry_latency_ms": 2.0,
+        "es_first": true,
+        "max_es_contracts": 6,
+        "max_mes_contracts": 60,
+        "mes_fallback": true,
+        "risk_budget_usd": 250.0,
+        "stop_buffer_ticks": 5,
+        "target_r": 3.0
+      },
+      "interaction_lifecycle": "inherited_from_CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY",
+      "position_state": "independent_chronological_V4_replay; one_position_at_a_time",
+      "score_weights_and_penalties": {
+        "adverse_progress_penalty_component_weight": 0.2,
+        "aggression_weight": 0.28,
+        "false_refill_penalty_weight": 0.25,
+        "multi_level_support_weight": 0.13,
+        "persistence_weight": 0.12,
+        "price_resistance_weight": 0.22,
+        "rapid_cancel_penalty_component_weight": 0.3,
+        "restoration_weight": 0.25,
+        "unexecuted_add_penalty_component_weight": 0.5
+      }
+    },
+    "unchanged_strategy_configuration_fields": [
+      "adverse_progress_penalty_component_weight",
+      "aggression_weight",
+      "aggressive_volume_saturation",
+      "execution_count_saturation",
+      "false_refill_penalty_weight",
+      "max_through_level_progress_ticks",
+      "min_consume_restore_cycles",
+      "min_rejection_ticks",
+      "min_relevant_aggressive_volume",
+      "min_relevant_execution_count",
+      "multi_level_ofi_saturation",
+      "multi_level_support_weight",
+      "persistence_depth_saturation",
+      "persistence_weight",
+      "price_resistance_weight",
+      "rapid_cancel_ns",
+      "rapid_cancel_penalty_component_weight",
+      "rejection_saturation_ticks",
+      "restoration_latency_saturation_ms",
+      "restoration_ratio_saturation",
+      "restoration_weight",
+      "restore_cycle_saturation",
+      "unexecuted_add_penalty_component_weight",
+      "weights_label"
+    ]
+  },
+  "contract_sha256": "1e2e9248cb7661e3c075afbeac38e8ecdf9e10bb1eb58a939ff0c22235286cf9"
+}

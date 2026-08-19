@@ -219,13 +219,23 @@ class NativeMBP10Adapter:
         self.state = "EXECUTABLE"
         update: MBP10Update | None = None
         if action in {"A", "C", "M"} and side in {"A", "B"}:
-            price = _native_price(getattr(record, "price", 0), context="book update")
-            before = self.previous.level_at(side, price) if self.previous else None
-            after = snapshot.level_at(side, price)
-            size_delta = (after.size if after else 0) - (before.size if before else 0)
-            count_delta = (after.order_count if after else 0) - (before.order_count if before else 0)
-            update = MBP10Update(timestamp, side, price, size_delta, count_delta,
-                                 {"A": "ADD", "C": "CANCEL", "M": "MODIFY"}[action])
+            raw_price = int(getattr(record, "price", 0))
+            if raw_price <= 0 or raw_price >= historical.UNDEF_PRICE:
+                raise V3FreshReplayError("invalid native MBP-10 fixed-point price: book update")
+            price = raw_price / RAW_PRICE_SCALE
+            before_rows = self.previous.bids if self.previous and side == "B" else self.previous.asks if self.previous else ()
+            after_rows = snapshot.bids if side == "B" else snapshot.asks
+            before = next((level for level in before_rows if level.price == price), None)
+            after = next((level for level in after_rows if level.price == price), None)
+            # Native MBP-10 may carry a record-level price outside the public
+            # top ten.  If it is absent both before and after, the aggregate
+            # public book did not change and no MBP10Update may be exposed.
+            if before is not None or after is not None:
+                normalized_price = _native_price(raw_price, context="book update")
+                size_delta = (after.size if after else 0) - (before.size if before else 0)
+                count_delta = (after.order_count if after else 0) - (before.order_count if before else 0)
+                update = MBP10Update(timestamp, side, normalized_price, size_delta, count_delta,
+                                     {"A": "ADD", "C": "CANCEL", "M": "MODIFY"}[action])
         execution: Execution | None = None
         if action == "T":
             aggressor = "BUY" if side == "B" else "SELL" if side == "A" else "UNKNOWN"
