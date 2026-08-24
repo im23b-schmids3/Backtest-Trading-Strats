@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>L2 December weight × quality matrix implementation</title>
+  <style>
+    body { color:#17212b; background:#f7f9fb; font:16px/1.5 system-ui,sans-serif; margin:0; }
+    main { max-width:980px; margin:36px auto; padding:0 22px 48px; }
+    h1,h2 { line-height:1.2; } code,pre { background:#edf2f6; border-radius:5px; }
+    code { padding:.12rem .32rem; } pre { padding:14px; overflow:auto; white-space:pre-wrap; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
+    .card { background:white; border:1px solid #d6dee5; border-radius:9px; padding:15px; }
+    .value { font-size:1.5rem; font-weight:750; } .pass { color:#087443; }
+  </style>
+</head>
+<body><main>
+  <h1>December 2025 L2 weight × quality matrix</h1>
+  <p class="pass"><strong>Implementation and synthetic validation complete.</strong> The real 23,256-configuration matrix was not run.</p>
+  <div class="grid">
+    <div class="card"><div class="value">3,876</div>legal weight vectors</div>
+    <div class="card"><div class="value">6</div>quality thresholds</div>
+    <div class="card"><div class="value">23,256</div>independent configurations</div>
+    <div class="card"><div class="value">50 passed</div>matrix + causal focused tests</div>
+  </div>
+  <h2>Execution design</h2>
+  <p>The runner validates the immutable causal master, reproduces the exact V3 December benchmark, and only then starts Stage A. It predicate-filters interactions and events to December before simulation. Each configuration owns independent pending-setup and one-position chronology. A session-local compact quote index answers causal entry, stop, target, and hard-flat paths without DBN reads or repeated full event scans.</p>
+  <h2>Research controls</h2>
+  <p>All 23,256 rows are retained. Rankings require 15 completed December trades. Weight, adjacent-quality, and combined neighborhoods feed descriptive connected-plateau and isolated-peak analyses. January metrics, automatic V5 selection, downloads, Databento calls, and DBN access are absent.</p>
+  <h2>Validation</h2>
+  <p>The published master revalidated as 42 sessions, 1,482 interactions, and 38,706,764 stored causal events with zero DBN/network access. A synthetic compact replay matched the canonical event replay trade fields exactly. Full-grid synthetic topology produced 23,256 rows in each robustness view and one connected component with no selected configuration. Compileall and <code>git diff --check</code> passed.</p>
+  <p>The broader legacy L2 test module remains independently uncollectable because the repository lacks its imported top-level module <code>quote_august_l2_v2_completion_cost</code>; this matrix task did not recreate or alter that unrelated acquisition tool.</p>
+  <h2>Manual Stage-A command</h2>
+  <pre>$logRoot='.tmp-l2-weight-q-dec2025'; New-Item -ItemType Directory -Force -Path $logRoot | Out-Null; $stdout=Join-Path $logRoot 'stdout.log'; $stderr=Join-Path $logRoot 'stderr.log'; &amp; python -m research_pipeline.cme_orderflow_absorption_l2_v1.weight_q_research run --master-root (Resolve-Path 'research_runs\CMEOrderflowAbsorption.ES_L2_CAUSAL_MASTER_DEC2025_JAN2026').Path --output-root (Join-Path (Get-Location) 'research_runs\CMEOrderflowAbsorption.ES_L2_WEIGHT_Q_RESEARCH_DEC2025') 1&gt; $stdout 2&gt; $stderr; $code=$LASTEXITCODE; Set-Content -Path (Join-Path $logRoot 'exitcode.txt') -Value $code; exit $code</pre>
+  <p>Planning estimate: 15–45 minutes on the current machine, dominated by two offline December tape passes and 511,632 lightweight configuration-session evaluations. The runner records measured runtime, Python peak allocation, and throughput.</p>
+</main></body>
+</html>

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from . import historical_runner as historical
-from .model import Execution, MBP10Snapshot, MBP10Update, MBPLevel, StructuralLevel, TICK
+from .model import Execution, L2Config, MBP10Snapshot, MBP10Update, MBPLevel, StructuralLevel, TICK
 from .v2_quality050 import V2_CONFIG
 from .v3_poc_only import (
     ELIGIBLE_STRUCTURAL_LEVELS, EVIDENCE_LABEL, STRATEGY_ID, v3_contract, v3_contract_sha256,
@@ -317,12 +317,19 @@ def _resume_temporary_non_executable_state(runner: historical.HistoricalL2Runner
     })
 
 
-def _run_session(day: str, data_root: Path) -> historical.HistoricalL2Runner:
+def _run_session(
+    day: str,
+    data_root: Path,
+    *,
+    config: L2Config = V2_CONFIG,
+    strategy_id: str = STRATEGY_ID,
+    evidence_label: str = EVIDENCE_LABEL,
+) -> historical.HistoricalL2Runner:
     es_path, mes_path, profile_path = _paths(data_root, day)
     runner = historical.HistoricalL2Runner(
-        date=day, evidence_label=EVIDENCE_LABEL, levels=[_profile_poc(profile_path)],
-        config=V2_CONFIG,
-        strategy_id=STRATEGY_ID, require_native_mes_for_fallback=True,
+        date=day, evidence_label=evidence_label, levels=[_profile_poc(profile_path)],
+        config=config,
+        strategy_id=strategy_id, require_native_mes_for_fallback=True,
     )
     adapter = NativeMBP10Adapter()
     es_iter, mes_iter = iter(_stream_native_mbp10_records(es_path)), iter(historical._stream_mes_quotes(mes_path))

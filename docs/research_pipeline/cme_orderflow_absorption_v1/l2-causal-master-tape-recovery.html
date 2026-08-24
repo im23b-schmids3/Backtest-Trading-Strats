@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>L2 causal master tape recovery</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1020; --card:#141b2d; --ink:#e8edf7; --muted:#9eabc1; --ok:#55d6a4; --line:#2a3550; --accent:#84a7ff; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,Segoe UI,sans-serif; }
+    main { max-width:1100px; margin:auto; padding:40px 22px 72px; }
+    h1,h2 { line-height:1.15; } h1 { margin-bottom:8px; } h2 { margin-top:34px; }
+    .lead,.muted { color:var(--muted); }
+    .status { display:inline-block; padding:5px 10px; border:1px solid var(--ok); border-radius:999px; color:var(--ok); font-weight:700; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:22px 0; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+    .card b { display:block; font-size:24px; color:var(--ok); }
+    table { width:100%; border-collapse:collapse; background:var(--card); }
+    th,td { padding:9px 11px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--accent); }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    pre { overflow:auto; padding:14px; background:#080c17; border:1px solid var(--line); border-radius:10px; }
+    .pass { color:var(--ok); font-weight:700; }
+    details { margin-top:16px; }
+  </style>
+</head>
+<body><main>
+  <span class="status">RECOVERED · EXACT REPRODUCTION PASS</span>
+  <h1>Dec 2025 / Jan 2026 L2 causal master tape recovery</h1>
+  <p class="lead">Recovery audit completed 2026-08-20. The completed staging tree was validated and atomically published without reopening a DBN, contacting Databento, or running parameter research.</p>
+
+  <div class="grid">
+    <div class="card"><span>Files</span><b>175</b></div>
+    <div class="card"><span>Total bytes</span><b>1,000,726,739</b></div>
+    <div class="card"><span>Sessions</span><b>42 / 42</b></div>
+    <div class="card"><span>Interactions</span><b>1,482</b></div>
+    <div class="card"><span>Stored events</span><b>38,706,764</b></div>
+    <div class="card"><span>Unfinished files</span><b>0</b></div>
+  </div>
+
+  <h2>Recovery result</h2>
+  <table>
+    <tr><th>Check</th><th>Result</th></tr>
+    <tr><td>Original <code>.building</code> root</td><td>Complete and recoverable; absent after atomic publish</td></tr>
+    <tr><td>Final immutable root</td><td><code>research_runs/CMEOrderflowAbsorption.ES_L2_CAUSAL_MASTER_DEC2025_JAN2026</code></td></tr>
+    <tr><td>Event partitions / checkpoints</td><td>42 / 42, exact frozen calendar order</td></tr>
+    <tr><td>Master / index cardinality</td><td>1,482 / 1,482, unique IDs reconciled</td></tr>
+    <tr><td>Parquet validation</td><td>128 footers readable; event schema exact; non-empty session schemas and root schemas validated</td></tr>
+    <tr><td>Checkpoint integrity</td><td>All per-session file sizes, row counts, and SHA-256 values match</td></tr>
+    <tr><td>Temporary artifacts</td><td>Zero <code>.part</code> or <code>.tmp</code> files</td></tr>
+    <tr><td>DBN/network activity</td><td>0 DBN files opened; 0 network calls</td></tr>
+  </table>
+
+  <h2>Windows publish root cause</h2>
+  <p>The worker-pool hypothesis was rejected: the original <code>with ProcessPoolExecutor(...)</code> block completed <code>shutdown(wait=True)</code> before artifact combination, three reproduction passes, report emission, and the final rename. The final destination did not exist, its parent ACL allowed modification, and a normal same-directory <code>Path.replace</code> probe succeeded.</p>
+  <p>The defect was nondeterministic reader-handle lifetime. <code>_iter_parquet_rows()</code> created <code>pyarrow.parquet.ParquetFile</code> objects without an explicit <code>close()</code>, and <code>_read_parquet_rows()</code> did not own an explicit reader lifecycle. On Windows, an open PyArrow Parquet reader prevents renaming its containing directory. A controlled local probe reproduced the exact failure as <code>[WinError 5] Zugriff verweigert</code> while the reader was open. The original process attempted its final directory rename without a deterministic all-readers-closed barrier.</p>
+  <p>The repair explicitly closes every Parquet reader in <code>finally</code>, closes early-terminated iterators, explicitly joins the process pool with <code>shutdown(wait=True)</code>, validates the complete staging tree, releases wrapper cycles, and then uses a same-parent <code>os.rename</code>. The unchanged 1.0 GB tree published successfully through that path.</p>
+
+  <h2>Required root artifacts</h2>
+  <table>
+    <tr><th>Artifact</th><th>Bytes</th></tr>
+    <tr><td>interaction-master.parquet</td><td>313,119</td></tr>
+    <tr><td>interaction-event-index.parquet</td><td>50,374</td></tr>
+    <tr><td>metadata.json</td><td>2,103</td></tr>
+    <tr><td>calendar.json</td><td>22,018</td></tr>
+    <tr><td>build-summary.json</td><td>645</td></tr>
+    <tr><td>reproduction-gates.json</td><td>3,029</td></tr>
+    <tr><td>diagnostic-report.md</td><td>1,181</td></tr>
+  </table>
+
+  <details>
+    <summary>All 42 causal-event session partitions</summary>
+    <table>
+      <tr><th>Partition</th><th>Bytes</th><th>Partition</th><th>Bytes</th></tr>
+      <tr><td>2025-12-01.parquet</td><td>22,225,534</td><td>2025-12-02.parquet</td><td>23,855,326</td></tr>
+      <tr><td>2025-12-03.parquet</td><td>20,968,498</td><td>2025-12-04.parquet</td><td>21,379,117</td></tr>
+      <tr><td>2025-12-05.parquet</td><td>19,102,393</td><td>2025-12-08.parquet</td><td>16,526,980</td></tr>
+      <tr><td>2025-12-09.parquet</td><td>13,590,401</td><td>2025-12-10.parquet</td><td>28,767,156</td></tr>
+      <tr><td>2025-12-11.parquet</td><td>27,203,520</td><td>2025-12-12.parquet</td><td>37,705,475</td></tr>
+      <tr><td>2025-12-15.parquet</td><td>29,019,713</td><td>2025-12-16.parquet</td><td>40,806,837</td></tr>
+      <tr><td>2025-12-17.parquet</td><td>38,638,826</td><td>2025-12-18.parquet</td><td>34,541,314</td></tr>
+      <tr><td>2025-12-19.parquet</td><td>19,249,104</td><td>2025-12-22.parquet</td><td>12,352,638</td></tr>
+      <tr><td>2025-12-23.parquet</td><td>10,331,840</td><td>2025-12-24.parquet</td><td>4,583,790</td></tr>
+      <tr><td>2025-12-26.parquet</td><td>9,293,567</td><td>2025-12-29.parquet</td><td>12,192,417</td></tr>
+      <tr><td>2025-12-30.parquet</td><td>9,616,505</td><td>2025-12-31.parquet</td><td>12,308,147</td></tr>
+      <tr><td>2026-01-02.parquet</td><td>29,842,849</td><td>2026-01-05.parquet</td><td>18,386,522</td></tr>
+      <tr><td>2026-01-06.parquet</td><td>14,397,795</td><td>2026-01-07.parquet</td><td>15,930,502</td></tr>
+      <tr><td>2026-01-08.parquet</td><td>19,873,604</td><td>2026-01-09.parquet</td><td>21,479,959</td></tr>
+      <tr><td>2026-01-12.parquet</td><td>12,373,500</td><td>2026-01-13.parquet</td><td>22,655,233</td></tr>
+      <tr><td>2026-01-14.parquet</td><td>34,543,729</td><td>2026-01-15.parquet</td><td>22,405,446</td></tr>
+      <tr><td>2026-01-16.parquet</td><td>19,755,907</td><td>2026-01-20.parquet</td><td>40,637,502</td></tr>
+      <tr><td>2026-01-21.parquet</td><td>52,232,187</td><td>2026-01-22.parquet</td><td>23,986,837</td></tr>
+      <tr><td>2026-01-23.parquet</td><td>22,143,341</td><td>2026-01-26.parquet</td><td>14,608,293</td></tr>
+      <tr><td>2026-01-27.parquet</td><td>13,492,822</td><td>2026-01-28.parquet</td><td>26,925,277</td></tr>
+      <tr><td>2026-01-29.parquet</td><td>48,343,419</td><td>2026-01-30.parquet</td><td>60,656,114</td></tr>
+    </table>
+  </details>
+
+  <h2>Exact reproduction</h2>
+  <table>
+    <tr><th>Gate</th><th>Trades</th><th>W/L</th><th>Total R</th><th>Net PnL</th><th>PF</th><th>Max DD R</th></tr>
+    <tr><td>V3 December Q0.50</td><td>38</td><td>10 / 28</td><td>-3.790261594206621</td><td>-793.75</td><td>0.8745901963107793</td><td>-12.946378636204262</td></tr>
+    <tr><td>V3 Dec+Jan Q0.50</td><td>65</td><td>21 / 44</td><td>9.383354585327483</td><td>2,136.50</td><td>1.2172233236744445</td><td>-12.946378636204262</td></tr>
+    <tr><td>V4 Dec+Jan Q0.45</td><td>73</td><td>22 / 51</td><td>5.063008264981163</td><td>1,116.00</td><td>1.0972549019607842</td><td>-17.946378636204265</td></tr>
+  </table>
+  <p class="pass">EXACT_REPRODUCTION_GATES_PASS</p>
+  <p>No Q0.35, Q0.40, Q0.55, or Q0.60 performance run was executed. No threshold matrix, weight grid, ranking, or selection was performed.</p>
+
+  <h2>Commands</h2>
+  <p>Finalize-only command used:</p>
+  <pre>python -m research_pipeline.cme_orderflow_absorption_l2_v1.causal_master_tape finalize `
+  --building-root .\research_runs\CMEOrderflowAbsorption.ES_L2_CAUSAL_MASTER_DEC2025_JAN2026.building `
+  --output-root .\research_runs\CMEOrderflowAbsorption.ES_L2_CAUSAL_MASTER_DEC2025_JAN2026</pre>
+  <p>Final-root reproduction command used:</p>
+  <pre>python -m research_pipeline.cme_orderflow_absorption_l2_v1.causal_master_tape reproduce `
+  --master-root .\research_runs\CMEOrderflowAbsorption.ES_L2_CAUSAL_MASTER_DEC2025_JAN2026</pre>
+</main></body></html>

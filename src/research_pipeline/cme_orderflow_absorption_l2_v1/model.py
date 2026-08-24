@@ -11,6 +11,7 @@ outcome/PnL calibration here.  All thresholds are predeclared research values.
 """
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass, field, fields
 from math import floor, isfinite
 from statistics import median
@@ -204,14 +205,18 @@ class MBOToMBP10View:
         self._orders: dict[int, _RestingOrder] = {}
         self._depth: dict[str, dict[float, int]] = {"B": {}, "A": {}}
         self._counts: dict[str, dict[float, int]] = {"B": {}, "A": {}}
+        self._price_heaps: dict[str, list[float]] = {"B": [], "A": []}
 
     def _adjust(self, side: Literal["B", "A"], price: float, size_delta: int, count_delta: int) -> None:
-        size = self._depth[side].get(price, 0) + size_delta
+        prior_size = self._depth[side].get(price, 0)
+        size = prior_size + size_delta
         count = self._counts[side].get(price, 0) + count_delta
         if size < 0 or count < 0:
             raise L2ValidationError("MBO adapter would create negative aggregate depth")
         if size:
             self._depth[side][price] = size
+            if not prior_size:
+                heapq.heappush(self._price_heaps[side], -price if side == "B" else price)
         else:
             self._depth[side].pop(price, None)
         if count:
@@ -225,6 +230,19 @@ class MBOToMBP10View:
         asks = tuple(MBPLevel(price, self._depth["A"][price], self._counts["A"][price])
                      for price in sorted(self._depth["A"])[:10])
         return MBP10Snapshot(timestamp_ns, bids, asks)
+
+    def best_bid_ask(self) -> tuple[float | None, float | None]:
+        """Return the aggregate BBO without rendering/sorting the full top ten."""
+        result: list[float | None] = []
+        for side in ("B", "A"):
+            heap = self._price_heaps[side]
+            while heap:
+                price = -heap[0] if side == "B" else heap[0]
+                if price in self._depth[side]:
+                    break
+                heapq.heappop(heap)
+            result.append((-heap[0] if side == "B" else heap[0]) if heap else None)
+        return result[0], result[1]
 
     def order(self, order_id: int) -> _RestingOrder | None:
         """Private adapter inspection only; no identity escapes the L2 model."""
@@ -260,6 +278,7 @@ class MBOToMBP10View:
             )
         if event.action == "R":
             self._orders.clear(); self._depth = {"B": {}, "A": {}}; self._counts = {"B": {}, "A": {}}
+            self._price_heaps = {"B": [], "A": []}
             return result(MBP10Update(event.timestamp_ns, event.side, event.price, 0, 0, "RESET"))
         old = self._orders.get(event.order_id)
         if event.action == "T":

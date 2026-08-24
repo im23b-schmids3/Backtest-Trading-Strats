@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>L2 causal master tape — implementation readiness</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#f5f7fa;--card:#fff;--ink:#17202a;--muted:#5d6d7e;--line:#d9e1e8;--ok:#08783e;--code:#eef3f9}
+    @media(prefers-color-scheme:dark){:root{--bg:#11161b;--card:#192129;--ink:#edf2f7;--muted:#aebdca;--line:#34414c;--ok:#6ee7a8;--code:#222d37}}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}
+    main{max-width:1080px;margin:0 auto;padding:36px 22px 64px}h1{font-size:30px;line-height:1.15;margin:0 0 8px}h2{margin-top:34px;font-size:20px}
+    .status{color:var(--ok);font-weight:800}.muted{color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:22px 0}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}.card strong{display:block;font-size:22px;margin-top:3px}
+    table{width:100%;border-collapse:collapse;background:var(--card)}th,td{padding:10px;border:1px solid var(--line);text-align:left;vertical-align:top}th{font-weight:700}
+    code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--code)}code{padding:2px 4px;border-radius:4px}pre{padding:14px;overflow:auto;border:1px solid var(--line);border-radius:8px;white-space:pre-wrap}
+    li{margin:6px 0}.warning{border-left:4px solid #b7791f;padding-left:12px}
+  </style>
+</head>
+<body><main>
+  <h1>Dec 2025 / Jan 2026 L2 causal master tape</h1>
+  <p class="status">IMPLEMENTATION READY — REAL HEAVY BUILD NOT EXECUTED</p>
+  <p class="muted">Infrastructure-only preparation for <code>CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY</code>. No threshold matrix, weight grid, strategy selection, network call, download, or DBN scan occurred.</p>
+
+  <div class="grid">
+    <div class="card">Expected interactions<strong>1,482</strong></div>
+    <div class="card">Target sessions<strong>42</strong></div>
+    <div class="card">Expected DBN passes<strong>1</strong></div>
+    <div class="card">Focused tests<strong>47 passed</strong></div>
+    <div class="card">Sealed source bytes<strong>14,195,202,562</strong></div>
+    <div class="card">Stored score mismatches<strong>0 / 1,482</strong></div>
+  </div>
+
+  <h2>Architecture</h2>
+  <table>
+    <thead><tr><th>Artifact</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>interaction-master.parquet</code></td><td>Every completed <code>PRIOR_RTH_POC</code> interaction before the quality gate, including all raw feature inputs, five positive components, frozen penalty component, original V3 score, geometry, direction, and timestamps.</td></tr>
+      <tr><td><code>causal-event-tape/&lt;session&gt;.parquet</code></td><td>Shared, non-duplicated causal observations: all ES executions, changed executable ES BBOs, changed native MES BBOs, first post-2ms entry probes, book-state transitions, and hard-flat boundaries.</td></tr>
+      <tr><td><code>interaction-event-index.parquet</code></td><td>Maps every interaction to its shared session partition, inclusive +5s/+15s confirmation range, derived first confirmation for integrity, first entry-probe ordinal, and path end.</td></tr>
+      <tr><td><code>calendar.json</code></td><td>Finalized winter RTH, maintenance, scheduled-close, prior-session, and effective hard-flat semantics.</td></tr>
+      <tr><td><code>metadata.json</code></td><td>Source manifest hashes, V3/V4 hashes, event/order schema versions, supported thresholds, and future legal-weight contract.</td></tr>
+      <tr><td><code>reproduction-gates.json</code></td><td>Exact V3 December, V3 full, and V4 full integrity gates. The build is not published if any gate differs.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Causal ordering and compression</h2>
+  <p>The stable key is <code>(timestamp_ns, stream_priority, source_index)</code>, with native MES priority 0, ES priority 1, and calendar boundaries priority 2. Equal-time MES observations therefore precede ES exactly as in the frozen replay merge loop.</p>
+  <p>Unchanged ordinary BBO observations are omitted only when they cannot affect state. Every ES execution remains. Every BBO change remains. The first ordinary observation at or after each interaction's possible confirmation plus 2ms remains as an indexed entry probe. Stop/target paths need only BBO changes; hard-flat rows carry the last causal quote and its true source timestamp. This avoids an event-by-interaction Cartesian expansion.</p>
+
+  <h2>Counterfactual coverage</h2>
+  <ul>
+    <li>Low-quality and primitive-rejected interactions are registered before filtering and receive the same confirmation window and session path index.</li>
+    <li>Originally position-blocked interactions are not assigned permanent outcomes. Each later configuration creates an independent chronological portfolio state and can replay them if unblocked.</li>
+    <li>Thresholds 0.35, 0.40, 0.45, 0.50, 0.55, and 0.60 require zero further DBN scans.</li>
+    <li>Alternative legal five-component weights require zero further DBN scans because raw components and frozen penalty inputs are stored.</li>
+    <li>No existing trade ledger is read or used as a hypothetical outcome source.</li>
+  </ul>
+
+  <h2>Mandatory build-time gates</h2>
+  <p>The manual build executes only the required V3 q0.50 December/full and V4 q0.45 full reproductions. It does not run or rank the six-threshold matrix. Any count, R, PnL, PF, or drawdown mismatch leaves the output in the <code>.building</code> staging directory and does not publish the immutable final root.</p>
+
+  <h2>Expected resource envelope</h2>
+  <p>The sealed inputs total 14.20 GB (8.56 GB ES MBP-10, 5.40 GB MES MBP-1, and 0.24 GB profile trades including supplements). A planning estimate is 1–4 hours with eight workers and approximately 2–12 GB of compressed tape output, depending on realized BBO-change density. The actual build writes measured runtime, event count, bytes, and bounded-memory diagnostics to <code>build-summary.json</code>.</p>
+
+  <h2>Manual heavy build</h2>
+  <pre>$logRoot='.tmp-l2-causal-master-dec2025-jan2026'; New-Item -ItemType Directory -Force $logRoot | Out-Null; &amp; python -m research_pipeline.cme_orderflow_absorption_l2_v1.causal_master_tape build --data-root .\data\cme_orderflow_absorption_l2_v3\dec2025_jan2026 --output-root .\research_runs\CMEOrderflowAbsorption.ES_L2_CAUSAL_MASTER_DEC2025_JAN2026 --workers 8 1&gt; "$logRoot\stdout.log" 2&gt; "$logRoot\stderr.log"; $code=$LASTEXITCODE; Set-Content -LiteralPath "$logRoot\exitcode.txt" -Value $code; exit $code</pre>
+  <p>Progress is emitted per session and every 5,000,000 decoded records. Resume a verified session checkpoint by adding <code>--resume</code>; unknown or hash-mismatched partial outputs fail closed.</p>
+
+  <h2>Reproduction-only command</h2>
+  <pre>python -m research_pipeline.cme_orderflow_absorption_l2_v1.causal_master_tape reproduce --master-root .\research_runs\CMEOrderflowAbsorption.ES_L2_CAUSAL_MASTER_DEC2025_JAN2026</pre>
+
+  <h2>Validation performed</h2>
+  <ul>
+    <li>47 directly related V3/V4/master-tape tests passed.</li>
+    <li><code>python -m compileall -q src\research_pipeline</code> passed.</li>
+    <li><code>git diff --check</code> passed.</li>
+    <li>All 1,482 compact pre-quality rows reproduced their frozen V3 score from stored components with zero mismatches; this was a CSV-only integrity audit, not a DBN replay.</li>
+  </ul>
+  <p class="warning">A separate pre-existing broad L2 test module cannot collect because the repository-root module <code>quote_august_l2_v2_completion_cost</code> is absent. That unrelated module was not created or repaired in this task.</p>
+</main></body></html>

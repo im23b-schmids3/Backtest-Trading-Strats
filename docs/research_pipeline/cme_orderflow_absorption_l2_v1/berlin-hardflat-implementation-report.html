@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>L2 Berlin Hard-Flat Execution Contract</title>
+  <style>
+    :root { color-scheme: light; --ink:#17212b; --muted:#5d6b78; --line:#d5dde5; --blue:#1e5aa8; --green:#146c43; --amber:#8a5700; --bg:#f5f7fa; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:1100px; margin:0 auto; padding:32px 24px 64px; }
+    section { background:white; border:1px solid var(--line); border-radius:12px; padding:22px; margin:16px 0; box-shadow:0 2px 8px #17212b0a; }
+    h1,h2 { line-height:1.2; } h1 { margin-bottom:6px; } h2 { font-size:19px; margin-top:0; }
+    .sub { color:var(--muted); } .ok { color:var(--green); font-weight:700; } .warn { color:var(--amber); font-weight:700; }
+    code { background:#edf2f7; padding:2px 5px; border-radius:4px; word-break:break-all; }
+    pre { overflow:auto; background:#111827; color:#f8fafc; border-radius:8px; padding:14px; white-space:pre-wrap; }
+    table { width:100%; border-collapse:collapse; } th,td { text-align:left; border-bottom:1px solid var(--line); padding:8px; vertical-align:top; }
+    th { color:var(--muted); font-size:13px; } ul { margin-bottom:0; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
+    .kpi { border:1px solid var(--line); border-radius:9px; padding:14px; } .kpi strong { display:block; font-size:24px; color:var(--blue); }
+  </style>
+</head>
+<body><main>
+  <h1>CME L2 Berlin hard-flat execution correction</h1>
+  <p class="sub">Implementation and compact-tape audit report. No corrected baseline or Weight × Q optimizer was executed.</p>
+
+  <section>
+    <h2>Outcome</h2>
+    <div class="grid">
+      <div class="kpi"><strong>87</strong>compact sessions audited</div>
+      <div class="kpi"><strong>372</strong>historical boundary paths reclassified</div>
+      <div class="kpi"><strong>0</strong>unpriced paths</div>
+      <div class="kpi"><strong>0</strong>open positions at maintenance</div>
+    </div>
+    <p class="ok">The existing compact causal tapes are sufficient. No local tape rebuild and no network acquisition are required.</p>
+  </section>
+
+  <section>
+    <h2>Historical bug and corrected contract</h2>
+    <p>The historical execution layer interpreted the session hard flat as a fixed <code>22:45 UTC</code>. The owner-defined rule is <code>22:45 Europe/Berlin</code>, so the historical interpretation was 120 minutes late during CEST and 60 minutes late during CET.</p>
+    <table>
+      <thead><tr><th>Example</th><th>Berlin instruction</th><th>Correct UTC</th><th>Historical UTC</th></tr></thead>
+      <tbody>
+        <tr><td>2026-07-13 (CEST)</td><td>22:45 +02:00</td><td>20:45 UTC</td><td>22:45 UTC</td></tr>
+        <tr><td>2026-01-12 (CET)</td><td>22:45 +01:00</td><td>21:45 UTC</td><td>22:45 UTC</td></tr>
+      </tbody>
+    </table>
+    <p>The new implementation uses the IANA <code>Europe/Berlin</code> zone per date; no fixed UTC hour is encoded. The 87-session audit contains 45 CEST sessions with a 120-minute correction and 42 CET sessions with a 60-minute correction. US/EU DST mismatch dates keep the Berlin definition and surface a fatal calendar conflict if an open position would reach exchange maintenance.</p>
+  </section>
+
+  <section>
+    <h2>Versioned identity and preserved provenance</h2>
+    <p>Corrected strategy ID: <code>CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY_BERLIN_HARDFLAT</code></p>
+    <p>Corrected contract SHA-256: <code>1aa8d9658b9ce8bfe8117f2ff87993ecd4db57acc73b59a8868aaf2562802b24</code></p>
+    <p>Historical V3 SHA-256, preserved unchanged: <code>a0ce94eeb78dcbf865cf4464bdf97ebc3f014a8ec5e2f559f99798534dfcbcb4</code></p>
+    <p>Signal eligibility, interaction logic, five quality components, 3,876-vector grid, six Q thresholds, +3-tick/15-second confirmation, 2 ms latency, zone stop, 3R target, $250 risk, ES-first/MES fallback, and caps are unchanged. The corrected contract has 23,256 configurations; the 3-second gap and Berlin hard-flat constants are not optimizer dimensions.</p>
+  </section>
+
+  <section>
+    <h2>Terminal execution semantics</h2>
+    <ul>
+      <li><b>HARD_FLAT_BERLIN:</b> at 22:45 Berlin, cancel working orders, block later entries, and liquidate long at the first causally executable native bid or short at the native ask, with normal adverse exit slippage.</li>
+      <li><b>DATA_GAP_3S_FORCE_FLAT:</b> a fresh native BBO returning at or before exactly 3.000 seconds resumes normal monitoring. A longer gap exits at the last valid native BBO; no stop/target fill is invented inside the unavailable interval.</li>
+      <li><b>SOURCE_END_FORCE_FLAT_LAST_VALID_BBO:</b> source end exits at the last defensible native bid/ask and records source, decision, and BBO-age timestamps.</li>
+      <li><b>UNPRICED_SOURCE_INTEGRITY_FAILURE:</b> no price is invented when a defensible native BBO does not exist.</li>
+      <li><b>Maintenance:</b> an open position at the evidenced exchange-maintenance start is a fatal regression, not an unresolved result.</li>
+    </ul>
+    <p>All entered trades must terminate as TARGET, STOP, HARD_FLAT_BERLIN, DATA_GAP_3S_FORCE_FLAT, or SOURCE_END_FORCE_FLAT_LAST_VALID_BBO. Successful configurations require <code>unresolved = 0</code>.</p>
+  </section>
+
+  <section>
+    <h2>372-path compact audit</h2>
+    <table>
+      <thead><tr><th>Classification</th><th>Total</th><th>Period detail</th></tr></thead>
+      <tbody>
+        <tr><td>A — HARD_FLAT_BERLIN_BEFORE_MAINTENANCE</td><td>2</td><td>May 1; Aug 10–14 block 1</td></tr>
+        <tr><td>B — TEMP_GAP_RESUMED_WITHIN_3S</td><td>366</td><td>May 136; Jun/Jul 195; Aug 3–6 block 35</td></tr>
+        <tr><td>C — DATA_GAP_3S_FORCE_FLAT</td><td>3</td><td>May 2; Aug 3–6 block 1</td></tr>
+        <tr><td>D — SOURCE_END_FORCE_FLAT_LAST_VALID_BBO</td><td>0</td><td>No prior affected path ended this way</td></tr>
+        <tr><td>E — NEVER_ENTERED_POSITION</td><td>1</td><td>May 1</td></tr>
+        <tr><td>F — UNPRICED_SOURCE_INTEGRITY_FAILURE</td><td>0</td><td>None</td></tr>
+      </tbody>
+    </table>
+    <p>The two old paths crossing the intended local hard flat occurred on 2026-05-07 and 2026-08-10. Scheduled maintenance produced zero open-position unresolved outcomes. The calendar artifact records the actual hard-flat and maintenance UTC timestamps for every session.</p>
+  </section>
+
+  <section>
+    <h2>Tape sufficiency</h2>
+    <p>The compact Parquet schema retains independent ES/MES bid, ask, native quote timestamp, executable/non-executable transitions, source terminal, and the stop/target path. The corrected reader indexes fresh native observations rather than treating carried quotes on the other instrument stream as a reopen. All required forced exits in the 372-path audit had a defensible last BBO.</p>
+    <p><b>Conclusion:</b> existing tapes are sufficient; <code>local_tape_rebuild_required = false</code>. Audit input was Parquet only: DBN files opened 0, network calls 0, downloads 0.</p>
+  </section>
+
+  <section>
+    <h2>Baseline, preflight, and optimizer</h2>
+    <p>The baseline writes per-period and aggregate performance with distinct target, stop, Berlin-flat, gap-flat, source-end-flat, ES/MES, unresolved, and integrity-failure counts. Historical V3 is included only as a separate descriptive reference.</p>
+    <p>The preflight binds the corrected baseline and verifies unchanged setup identities, unchanged signal constants, identical historical target/stop trades before the first corrected forced transition, allowed execution-only differences, and zero unresolved outcomes. It does not require reproduction of the historical 90-trade result.</p>
+    <p>The optimizer preserves the 23,256-grid and all-period robustness outputs without selecting a configuration. Each period checkpoint is atomically published as <code>&lt;period&gt;.part → &lt;period&gt;</code> and bound to the corrected contract, period tape files/hashes, grid, Q set, semantic/code hash, and period. A valid completed period is resumed; a mismatched or partial published checkpoint fails closed.</p>
+  </section>
+
+  <section>
+    <h2>Verification</h2>
+    <ul>
+      <li><span class="ok">PASS</span> — 82 focused corrected-contract and related all-period tests.</li>
+      <li><span class="ok">PASS</span> — <code>python -m compileall -q src\research_pipeline</code>.</li>
+      <li><span class="ok">PASS</span> — <code>git diff --check</code>.</li>
+      <li><span class="ok">PASS</span> — 87-session compact audit; 0 DBNs, 0 downloads, 0 network calls.</li>
+    </ul>
+    <p class="warn">Not executed: corrected 87-session performance baseline, corrected semantic preflight, and 23,256-configuration optimizer.</p>
+  </section>
+
+  <section>
+    <h2>Manual commands</h2>
+    <p>Corrected baseline:</p>
+    <pre>python -m research_pipeline.cme_orderflow_absorption_l2_v1.berlin_hardflat_all_period baseline --repository-root C:\Users\sandr\Trading-Bot-Fib</pre>
+    <p>Corrected-contract preflight (after baseline succeeds):</p>
+    <pre>python -m research_pipeline.cme_orderflow_absorption_l2_v1.berlin_hardflat_all_period preflight --repository-root C:\Users\sandr\Trading-Bot-Fib</pre>
+    <p>New all-period Weight × Q optimizer (after preflight succeeds):</p>
+    <pre>python -m research_pipeline.cme_orderflow_absorption_l2_v1.berlin_hardflat_all_period optimize --repository-root C:\Users\sandr\Trading-Bot-Fib</pre>
+    <p>Rerun the same optimizer command after interruption to reuse every hash-valid completed period checkpoint.</p>
+  </section>
+</main></body></html>

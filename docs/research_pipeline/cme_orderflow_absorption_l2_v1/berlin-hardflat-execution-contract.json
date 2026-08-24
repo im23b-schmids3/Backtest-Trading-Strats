@@ -1,0 +1,53 @@
+{
+  "contract_sha256": "1aa8d9658b9ce8bfe8117f2ff87993ecd4db57acc73b59a8868aaf2562802b24",
+  "execution_contract": {
+    "apex_caps": {
+      "ES": 6,
+      "MES": 60
+    },
+    "fixed_risk_usd": 250.0,
+    "gap_at_exact_threshold": "RESUME_IF_FRESH_EXECUTABLE_BBO_RETURNS_WITHIN_OR_AT_3_SECONDS",
+    "gap_force_exit": "LAST_VALID_EXECUTABLE_NATIVE_BBO_WITH_NORMAL_ADVERSE_EXIT_SLIPPAGE",
+    "hard_flat_local_time": "22:45:00",
+    "hard_flat_actions": [
+      "CANCEL_ALL_WORKING_ORDERS",
+      "LIQUIDATE_OPEN_POSITION",
+      "BLOCK_NEW_ENTRIES_FOR_SESSION"
+    ],
+    "hard_flat_timezone": "Europe/Berlin",
+    "instrument_preference": "ES_FIRST_MES_FALLBACK",
+    "max_executable_bbo_gap_seconds": 3.0,
+    "maintenance_invariant": "OPEN_POSITION_AT_MAINTENANCE_IS_FATAL",
+    "source_end_exit": "LAST_VALID_EXECUTABLE_NATIVE_BBO_WITH_NORMAL_ADVERSE_EXIT_SLIPPAGE",
+    "stop": "COMPLETED_INTERACTION_ZONE_PLUS_5_TICKS",
+    "long_liquidation_reference": "FRESH_NATIVE_EXECUTABLE_BID",
+    "short_liquidation_reference": "FRESH_NATIVE_EXECUTABLE_ASK",
+    "target_r": 3.0,
+    "terminal_exit_reasons": [
+      "TARGET",
+      "STOP",
+      "HARD_FLAT_BERLIN",
+      "DATA_GAP_3S_FORCE_FLAT",
+      "SOURCE_END_FORCE_FLAT_LAST_VALID_BBO"
+    ],
+    "unresolved_trade_policy": "FORBIDDEN"
+  },
+  "historical_v3_contract_sha256": "a0ce94eeb78dcbf865cf4464bdf97ebc3f014a8ec5e2f559f99798534dfcbcb4",
+  "semantic_version": "BERLIN_HARDFLAT_DATA_GAP_3S_SOURCE_END_V1",
+  "signal_contract": {
+    "confirmation_favorable_ticks": 3,
+    "confirmation_horizon_seconds": 15,
+    "eligible_levels": [
+      "PRIOR_RTH_POC"
+    ],
+    "entry_latency_ms": 2,
+    "quality_components": [
+      "aggression_score",
+      "restoration_score",
+      "price_resistance_score",
+      "persistence_score",
+      "multi_level_support_score"
+    ]
+  },
+  "strategy_id": "CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY_BERLIN_HARDFLAT"
+}

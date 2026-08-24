@@ -167,15 +167,15 @@ def _run_retro_session(day: str, repository_root: Path) -> historical.Historical
         es_ts = es.timestamp_ns if es is not None else 2**63 - 1
         mes_ts = mes[0] if mes is not None else 2**63 - 1
         if mes_ts < es_ts:
-            if mes_ts >= start_ns:
+            if mes_ts >= start_ns and adapter.state not in {"TEMPORARILY_NON_EXECUTABLE", "WAITING_FOR_REOPEN_BOOK"}:
                 runner.observe_mes_quote(*mes)
             mes = historical._next(mes_iter)
             continue
         record, es = es, historical._next(es_iter)
         records += 1
         public = adapter.feed(record, materialize_public=record.timestamp_ns >= start_ns)
-        if public is not None and public.timestamp_ns >= start_ns:
-            runner.observe_public(public)
+        if record.timestamp_ns >= start_ns:
+            historical.route_mbo_public_event(runner, adapter, public, record.timestamp_ns)
         if records % 5_000_000 == 0:
             print(f"  {day} records={records:,} completed={len(runner.interaction_ledger):,} accepted={sum(bool(row['accepted']) for row in runner.setup_ledger):,}", flush=True)
     adapter.finish()

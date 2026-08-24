@@ -143,7 +143,8 @@ def _run_once(*, repository_root: Path, completion_root: Path) -> list[historica
             continue
         runner = runners[day]
         while mes_next[day] is not None and mes_next[day][0] < record.timestamp_ns:
-            runner.observe_mes_quote(*mes_next[day])
+            if adapters[day].state not in {"TEMPORARILY_NON_EXECUTABLE", "WAITING_FOR_REOPEN_BOOK"}:
+                runner.observe_mes_quote(*mes_next[day])
             mes_next[day] = historical._next(mes_iters[day])
         if record.timestamp_ns >= cutoffs[day]:
             runner.force_flat_from_last_causal_cutoff_quote(cutoffs[day])
@@ -155,8 +156,8 @@ def _run_once(*, repository_root: Path, completion_root: Path) -> list[historica
             public = adapters[day].feed(record, materialize_public=record.timestamp_ns >= historical._clock_ns(day, historical.RTH_START_SECONDS))
         except historical.L2ValidationError as exc:
             raise AugustReplayError(f"invalid August MBO record day={day} timestamp_ns={record.timestamp_ns}") from exc
-        if public is not None and public.timestamp_ns >= historical._clock_ns(day, historical.RTH_START_SECONDS):
-            runner.observe_public(public)
+        if record.timestamp_ns >= historical._clock_ns(day, historical.RTH_START_SECONDS):
+            historical.route_mbo_public_event(runner, adapters[day], public, record.timestamp_ns)
         if records % 5_000_000 == 0:
             print(f"  August ES MBO records={records:,} completed={sum(len(item.interaction_ledger) for item in runners.values()):,}", flush=True)
     if closed != set(TARGET_DATES):

@@ -17,7 +17,7 @@ from typing import Any
 
 from . import historical_runner as historical
 from . import v3_poc_fresh_august_replay as native
-from .model import StructuralLevel
+from .model import L2Config, StructuralLevel
 from .v2_quality050 import V2_CONFIG
 from .v3_poc_only import ELIGIBLE_STRUCTURAL_LEVELS, STRATEGY_ID, v3_contract, v3_contract_sha256
 
@@ -226,12 +226,19 @@ def _validated_prior_rth_poc(profile_path: Path) -> StructuralLevel:
     return level
 
 
-def _run_session(day: str, data_root: Path) -> historical.HistoricalL2Runner:
+def _run_session(
+    day: str,
+    data_root: Path,
+    *,
+    config: L2Config = V2_CONFIG,
+    strategy_id: str = STRATEGY_ID,
+    evidence_label: str = EVIDENCE_LABEL,
+) -> historical.HistoricalL2Runner:
     es_path, mes_path, profile_path = _paths(data_root, day)
     level = _validated_prior_rth_poc(profile_path)
     runner = historical.HistoricalL2Runner(
-        date=day, evidence_label=EVIDENCE_LABEL, levels=[level], config=V2_CONFIG,
-        strategy_id=STRATEGY_ID, require_native_mes_for_fallback=True,
+        date=day, evidence_label=evidence_label, levels=[level], config=config,
+        strategy_id=strategy_id, require_native_mes_for_fallback=True,
     )
     adapter = native.NativeMBP10Adapter()
     es_iter, mes_iter = iter(native._stream_native_mbp10_records(es_path)), iter(historical._stream_mes_quotes(mes_path))

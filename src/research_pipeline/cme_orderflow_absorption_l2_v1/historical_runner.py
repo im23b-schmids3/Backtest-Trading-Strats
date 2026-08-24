@@ -153,6 +153,12 @@ class HistoricalMBOToMBP10Adapter:
         self._book_valid = False
         self._anomalies: dict[int, SourceAnomaly] = {}
         self._completed_anomalies: list[SourceAnomaly] = []
+        self.state = "UNINITIALIZED"
+        self.first_valid_book_ns: int | None = None
+        self.temporary_non_executable_started_ns: int | None = None
+        self.temporary_non_executable_records = 0
+        self.last_transient: dict[str, Any] | None = None
+        self._last_timestamp_ns: int | None = None
 
     @staticmethod
     def _offbook_source_price(price: float) -> bool:
@@ -207,7 +213,51 @@ class HistoricalMBOToMBP10Adapter:
     def book_valid(self) -> bool:
         return self._book_valid
 
+    def current_public_snapshot(self, timestamp_ns: int) -> MBP10Snapshot:
+        """Render aggregate public depth for source-layer diagnostics only."""
+        return self._view.snapshot(timestamp_ns)
+
+    @staticmethod
+    def _is_executable(snapshot: MBP10Snapshot) -> bool:
+        return _quote(snapshot) is not None
+
+    def current_public_bbo(self) -> tuple[float | None, float | None]:
+        """Return aggregate best prices without materializing the top ten."""
+        return self._view.best_bid_ask()
+
+    @staticmethod
+    def _bbo_is_executable(bbo: tuple[float | None, float | None]) -> bool:
+        bid, ask = bbo
+        return bid is not None and ask is not None and ask > bid
+
+    def _suspend_public_book(self, timestamp_ns: int) -> None:
+        if self.state != "TEMPORARILY_NON_EXECUTABLE":
+            self.temporary_non_executable_started_ns = timestamp_ns
+            self.temporary_non_executable_records = 0
+        self.temporary_non_executable_records += 1
+        self.state = "TEMPORARILY_NON_EXECUTABLE"
+
+    def _open_public_book(self, timestamp_ns: int) -> bool:
+        """Open/reopen an executable book; return whether this was a reopen."""
+        reopened = self.state in {"TEMPORARILY_NON_EXECUTABLE", "WAITING_FOR_REOPEN_BOOK"}
+        if self.first_valid_book_ns is None:
+            self.first_valid_book_ns = timestamp_ns
+        if self.state == "TEMPORARILY_NON_EXECUTABLE":
+            assert self.temporary_non_executable_started_ns is not None
+            self.last_transient = {
+                "start_timestamp_ns": self.temporary_non_executable_started_ns,
+                "reopen_timestamp_ns": timestamp_ns,
+                "non_executable_records": self.temporary_non_executable_records,
+            }
+        self.temporary_non_executable_started_ns = None
+        self.temporary_non_executable_records = 0
+        self.state = "EXECUTABLE"
+        return reopened
+
     def feed(self, record: PrivateMBORecord, *, materialize_public: bool = True) -> PublicBookEvent | None:
+        if self._last_timestamp_ns is not None and record.timestamp_ns < self._last_timestamp_ns:
+            raise HistoricalReplayError("MBO receive timestamps decreased")
+        self._last_timestamp_ns = record.timestamp_ns
         snapshot = bool(record.flags & F_SNAPSHOT)
         last = bool(record.flags & F_LAST)
         if snapshot:
@@ -227,11 +277,13 @@ class HistoricalMBOToMBP10Adapter:
                     raise HistoricalReplayError("MBO snapshot F_LAST must complete an add sequence")
                 self._snapshot_open = False
                 self._book_valid = True
+                if not self._bbo_is_executable(self._view.best_bid_ask()):
+                    self.state = "WAITING_FOR_REOPEN_BOOK"
+                    return None
+                self._open_public_book(record.timestamp_ns)
                 if not materialize_public:
                     return None
                 public_snapshot = self._view.snapshot(record.timestamp_ns)
-                if public_snapshot is None:
-                    raise HistoricalReplayError("MBO F_LAST did not materialize the initial MBP-10 snapshot")
                 return PublicBookEvent(record.timestamp_ns, public_snapshot, update, None)
             return None
         if self._snapshot_open:
@@ -249,20 +301,28 @@ class HistoricalMBOToMBP10Adapter:
             record.timestamp_ns, book_action, record.side, record.price, record.size, record.order_id,
         ), materialize_snapshot=False, materialize_update=not anomaly_record)
         self._audit_anomalies(record)
+        if not self._bbo_is_executable(self._view.best_bid_ask()):
+            self._suspend_public_book(record.timestamp_ns)
+            return None
+        reopened = self._open_public_book(record.timestamp_ns)
         if not materialize_public:
             return None
         public_snapshot = self._view.snapshot(record.timestamp_ns)
-        if public_snapshot is None:
-            raise HistoricalReplayError("public MBO record did not materialize an MBP-10 snapshot")
         execution = None
         if not anomaly_record and record.action in {"F", "T"} and record.size > 0:
             from .model import Execution  # Keeps public source types explicit at this boundary.
             execution = Execution(record.timestamp_ns, record.price, record.size, _aggressor(record.side))
-        return PublicBookEvent(record.timestamp_ns, public_snapshot, None if anomaly_record else update, execution)
+        # A reopen snapshot is a fresh absolute public state.  Suppress the
+        # transition record's delta because its invalid predecessor was never
+        # exposed; forwarding only the delta would invent public chronology.
+        public_update = None if anomaly_record or reopened else update
+        return PublicBookEvent(record.timestamp_ns, public_snapshot, public_update, execution)
 
     def finish(self) -> None:
         if self._snapshot_open or not self._book_valid:
             raise HistoricalReplayError("incomplete MBO source: no completed F_LAST snapshot")
+        if self.state != "EXECUTABLE":
+            raise HistoricalReplayError(f"incomplete MBO source: public book remained {self.state}")
 
 
 def assert_no_order_identity_in_strategy_layer() -> None:
@@ -569,6 +629,51 @@ class HistoricalL2Runner:
         return result
 
 
+def route_mbo_public_event(
+    runner: HistoricalL2Runner,
+    adapter: HistoricalMBOToMBP10Adapter,
+    public: PublicBookEvent | None,
+    timestamp_ns: int,
+) -> bool:
+    """Route one MBO adapter result without retaining a stale BBO.
+
+    A bounded reconstruction transition is source state, not a market signal.
+    During it no strategy clock, snapshot, execution, entry, or exit is
+    observed.  Processing resumes only on a fresh uncrossed two-sided book.
+    """
+    started = getattr(runner, "_mbo_transient_started_ns", None)
+    if public is not None:
+        if started is not None:
+            if runner.signals.position is not None or bool(getattr(runner, "_mbo_transient_position_open", False)):
+                raise HistoricalReplayError("temporary MBO public-book outage overlapped an open position")
+            runner.diagnostic_events.append({
+                "event": "EXECUTABLE_MBO_BOOK_REOPENED",
+                "timestamp_ns": timestamp_ns,
+                "non_executable_duration_ns": timestamp_ns - int(started),
+            })
+            del runner._mbo_transient_started_ns
+            del runner._mbo_transient_position_open
+        runner.observe_public(public)
+        return True
+    if adapter.state == "TEMPORARILY_NON_EXECUTABLE":
+        if started is None:
+            if runner.signals.position is not None:
+                raise HistoricalReplayError("temporary MBO public-book outage overlapped an open position")
+            runner._mbo_transient_started_ns = timestamp_ns
+            runner._mbo_transient_position_open = False
+            runner.diagnostic_events.append({
+                "event": "TEMPORARILY_NON_EXECUTABLE_MBO_BOOK", "timestamp_ns": timestamp_ns,
+            })
+        runner.es_quote = runner.mes_quote = None
+        runner.es_quote_timestamp_ns = runner.mes_quote_timestamp_ns = None
+        return False
+    if adapter.state in {"WAITING_FOR_REOPEN_BOOK", "UNINITIALIZED"}:
+        runner.es_quote = runner.mes_quote = None
+        runner.es_quote_timestamp_ns = runner.mes_quote_timestamp_ns = None
+        return False
+    raise HistoricalReplayError(f"unsupported MBO public-book state: {adapter.state}")
+
+
 def _rows_write(path: Path, rows: list[dict[str, Any]], fallback: list[str]) -> None:
     names = sorted({key for row in rows for key, value in row.items() if not isinstance(value, (dict, list))}) or fallback
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -678,27 +783,38 @@ def normalize_source_mbo_price(raw_price: int, action: str) -> float:
     return price
 
 
+def private_mbo_record_from_dbn(record: object) -> PrivateMBORecord | None:
+    """Normalize one DBN MBO row while retaining no provider client state."""
+    action, side = _code(getattr(record, "action", "")), _code(getattr(record, "side", ""))
+    raw_price = int(getattr(record, "price", 0))
+    if action not in {"A", "C", "M", "F", "R", "T"} or side not in {"A", "B", "N"}:
+        return None
+    if action == "R":
+        side = "B"  # Reset has no public side; its private adapter ignores it.
+    if side not in {"A", "B"}:
+        return None
+    try:
+        price = normalize_source_mbo_price(raw_price, action)
+    except HistoricalReplayError as exc:
+        raise HistoricalReplayError(
+            f"{exc} ts_event={int(getattr(record, 'ts_event', 0))} "
+            f"ts_recv={int(getattr(record, 'ts_recv', getattr(record, 'ts_event', 0)))} "
+            f"side={side} size={int(getattr(record, 'size', 0))} flags={int(getattr(record, 'flags', 0))}"
+        ) from exc
+    return PrivateMBORecord(
+        int(getattr(record, "ts_recv", getattr(record, "ts_event", 0))), action, side,
+        price, int(getattr(record, "size", 0)), int(getattr(record, "order_id", 0)),
+        int(getattr(record, "flags", 0)), raw_price,
+    )
+
+
 def _stream_private_mbo(path: Path) -> Iterator[PrivateMBORecord]:
     """Local-only DBN reader, imported lazily so synthetic tests need no client."""
     from databento import DBNStore
     for record in DBNStore.from_file(path):
-        action, side = _code(getattr(record, "action", "")), _code(getattr(record, "side", ""))
-        raw_price = int(getattr(record, "price", 0))
-        if action not in {"A", "C", "M", "F", "R", "T"} or side not in {"A", "B", "N"}:
-            continue
-        if action == "R":
-            side = "B"  # Reset has no public side; its private adapter ignores it.
-        if side not in {"A", "B"}:
-            continue
-        try:
-            price = normalize_source_mbo_price(raw_price, action)
-        except HistoricalReplayError as exc:
-            raise HistoricalReplayError(
-                f"{exc} ts_event={int(record.ts_event)} ts_recv={int(getattr(record, 'ts_recv', record.ts_event))} "
-                f"side={side} size={int(record.size)} flags={int(getattr(record, 'flags', 0))}"
-            ) from exc
-        yield PrivateMBORecord(int(getattr(record, "ts_recv", record.ts_event)), action, side,
-                               price, int(record.size), int(record.order_id), int(getattr(record, "flags", 0)), raw_price)
+        normalized = private_mbo_record_from_dbn(record)
+        if normalized is not None:
+            yield normalized
 
 
 def _stream_mes_quotes(path: Path) -> Iterator[tuple[int, float, float]]:
@@ -829,7 +945,7 @@ def _run_may_session(day: str, data_root: Path, *, config: L2Config = L2Config()
             runner.finish(cutoff_ns)
             break
         if mes_ts < es_ts:
-            if mes_ts >= start_ns:
+            if mes_ts >= start_ns and adapter.state not in {"TEMPORARILY_NON_EXECUTABLE", "WAITING_FOR_REOPEN_BOOK"}:
                 runner.observe_mes_quote(*mes)
             mes = _next(mes_iter)
             continue
@@ -842,8 +958,8 @@ def _run_may_session(day: str, data_root: Path, *, config: L2Config = L2Config()
                 f"invalid normalized MBO record day={day} timestamp_ns={record.timestamp_ns} "
                 f"action={record.action} side={record.side} price={record.price} size={record.size}"
             ) from exc
-        if public is not None and public.timestamp_ns >= start_ns:
-            runner.observe_public(public)
+        if record.timestamp_ns >= start_ns:
+            route_mbo_public_event(runner, adapter, public, record.timestamp_ns)
         if records % 5_000_000 == 0:
             print(f"  {day} records={records:,} completed={len(runner.interaction_ledger):,} accepted={sum(bool(row['accepted']) for row in runner.setup_ledger):,}", flush=True)
     else:
@@ -877,8 +993,7 @@ def run_manifest(session_manifest: Path, output_dir: Path) -> dict[str, Any]:
         runner = HistoricalL2Runner(date=str(session["date"]), evidence_label=str(session["evidence_period_label"]), levels=_session_levels(session))
         for record in _stream_private_mbo(path):
             public = adapter.feed(record)
-            if public is not None:
-                runner.observe_public(public)
+            route_mbo_public_event(runner, adapter, public, record.timestamp_ns)
         adapter.finish()
         runner.source_integrity_diagnostics = adapter.source_integrity_diagnostics()
         runner.finish(int(session["session_end_ns"]))
