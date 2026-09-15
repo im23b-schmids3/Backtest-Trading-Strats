@@ -3,7 +3,14 @@
 schema_version: 1
 period_id: DEVELOPMENT_PERIOD_NAME
 interaction_master: path/to/interaction-master.parquet
+# New generic masters may contain a target_session column. When present, it
+# must equal the selected strategy session; legacy masters without it preserve
+# their existing single-session behavior.
 interaction_index: path/to/interaction-event-index.parquet
+# Optional but required for every cross-session strategy. This JSON catalog
+# contains explicit target/source session relationships plus timestamped
+# completed-profile and dynamic-extremum observations.
+level_catalog: path/to/causal-level-catalog.json
 sessions:
   - date: YYYY-MM-DD
     event_tape: path/to/causal-event-tape/YYYY-MM-DD.parquet

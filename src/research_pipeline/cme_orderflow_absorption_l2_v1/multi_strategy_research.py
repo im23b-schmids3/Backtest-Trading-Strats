@@ -25,6 +25,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import yaml
 
 from . import causal_master_tape as master
+from . import causal_level_resolver as levels
 from . import weight_q_research as matrix
 
 
@@ -70,9 +71,16 @@ class MultiStrategyResearchError(RuntimeError):
 class StrategySpec:
     strategy_id: str
     session: str
+    source_session: str
     reference_level: str
+    reference_semantics: str
+    causal_availability_rule: str
     long_short_behavior: str
     uses_shared_absorption_engine: bool
+    implementation_status: str
+    level_resolver_required: bool
+    stage1_enabled: bool
+    stage2_enabled: bool
     trigger_options: Mapping[str, Any]
     baseline_quality: Mapping[str, Any]
     allowed_research_parameters: Mapping[str, Any]
@@ -84,6 +92,7 @@ class PeriodSpec:
     interaction_master: Path
     interaction_index: Path
     sessions: tuple[tuple[str, Path], ...]
+    level_catalog: Path | None = None
 
 
 def _canonical(value: object) -> bytes:
@@ -124,10 +133,20 @@ def load_strategy_manifest(path: Path) -> tuple[StrategySpec, ...]:
         required = ("strategy_id", "session", "reference_level", "long_short_behavior", "uses_shared_absorption_engine")
         if any(not item.get(name) for name in required):
             raise MultiStrategyResearchError(f"strategy lacks required fields: {item}")
+        for field in ("trigger_options", "baseline_quality", "allowed_research_parameters"):
+            if field in item and item[field] is not None and not isinstance(item[field], Mapping):
+                raise MultiStrategyResearchError(f"strategy {field} must be an object: {item['strategy_id']}")
         specs.append(StrategySpec(
             strategy_id=str(item["strategy_id"]), session=str(item["session"]),
+            source_session=str(item.get("source_session") or item["session"]),
             reference_level=str(item["reference_level"]), long_short_behavior=str(item["long_short_behavior"]),
+            reference_semantics=str(item.get("reference_semantics") or "UNSPECIFIED"),
+            causal_availability_rule=str(item.get("causal_availability_rule") or "UNSPECIFIED"),
             uses_shared_absorption_engine=bool(item["uses_shared_absorption_engine"]),
+            implementation_status=str(item.get("implementation_status") or "UNSPECIFIED"),
+            level_resolver_required=bool(item.get("level_resolver_required", False)),
+            stage1_enabled=bool(item.get("stage1_enabled", True)),
+            stage2_enabled=bool(item.get("stage2_enabled", True)),
             trigger_options=dict(item.get("trigger_options") or {}),
             baseline_quality=dict(item.get("baseline_quality") or {}),
             allowed_research_parameters=dict(item.get("allowed_research_parameters") or {}),
@@ -136,6 +155,8 @@ def load_strategy_manifest(path: Path) -> tuple[StrategySpec, ...]:
         raise MultiStrategyResearchError("strategy IDs must be non-empty and unique")
     if any(not item.uses_shared_absorption_engine for item in specs):
         raise MultiStrategyResearchError("this workflow currently requires the shared absorption engine")
+    if any(not item.stage1_enabled or not item.stage2_enabled for item in specs):
+        raise MultiStrategyResearchError("selected strategies must enable both Stage 1 and Stage 2")
     return tuple(sorted(specs, key=lambda item: item.strategy_id))
 
 
@@ -153,11 +174,14 @@ def load_period_manifest(path: Path) -> PeriodSpec:
     days = tuple(day for day, _path in sessions)
     if not sessions or len(days) != len(set(days)) or tuple(sorted(days)) != days:
         raise MultiStrategyResearchError("period sessions must be non-empty, unique, and chronologically sorted")
-    required = (interaction_master, interaction_index, *(item[1] for item in sessions))
+    level_catalog = ((root / str(raw["level_catalog"])).resolve()
+                     if raw.get("level_catalog") not in (None, "") else None)
+    required = (interaction_master, interaction_index, *(item[1] for item in sessions),
+                *((level_catalog,) if level_catalog is not None else ()))
     missing = [str(item) for item in required if not item.is_file()]
     if missing:
         raise MultiStrategyResearchError(f"period causal artifacts missing: {missing[:3]}")
-    return PeriodSpec(str(raw.get("period_id") or "unnamed-period"), interaction_master, interaction_index, sessions)
+    return PeriodSpec(str(raw.get("period_id") or "unnamed-period"), interaction_master, interaction_index, sessions, level_catalog)
 
 
 def _safe_name(value: str) -> str:
@@ -186,20 +210,67 @@ def _identity(strategy: StrategySpec, period: PeriodSpec, *, stage: str, extra: 
         "interactions": _file_sha(period.interaction_master), "indexes": _file_sha(period.interaction_index),
         "sessions": {day: _file_sha(path) for day, path in period.sessions},
     }
+    if period.level_catalog is not None:
+        sources["level_catalog"] = _file_sha(period.level_catalog)
     return _sha({"stage": stage, "strategy": strategy.__dict__, "period": period.period_id, "sources": sources, "extra": extra})
+
+
+def _signal_timestamp(row: Mapping[str, Any]) -> int:
+    value = row.get("interaction_start_ns", row.get("interaction_end_ns"))
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise MultiStrategyResearchError(f"interaction lacks causal signal timestamp: {row.get('interaction_id')}") from exc
+
+
+def _resolved_provenance(rows_by_day: Mapping[str, Sequence[Mapping[str, Any]]], strategy: StrategySpec) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for day, interactions in rows_by_day.items():
+        for interaction in interactions:
+            provenance = interaction.get("level_resolution")
+            if isinstance(provenance, Mapping):
+                rows.append(dict(provenance))
+            else:
+                rows.append({
+                    "strategy_id": strategy.strategy_id, "trading_date": day, "target_session": strategy.session,
+                    "source_session": strategy.source_session, "source_date": None,
+                    "level_type": str(interaction.get("level")), "level_value": interaction.get("level_price"),
+                    "source_artifact": "interaction-master-legacy-level", "source_artifact_sha256": None,
+                    "causal_availability_timestamp_ns": None, "prior_current_semantics": strategy.reference_semantics,
+                    "observation_mode": "LEGACY_PRE_RESOLVED", "available": True, "unavailable_reason": None,
+                })
+    unique = {json.dumps(row, sort_keys=True, separators=(",", ":")): row for row in rows}
+    return [unique[key] for key in sorted(unique)]
 
 
 def _load_population(period: PeriodSpec, strategy: StrategySpec) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
     interactions = master._read_parquet_rows(period.interaction_master)
     indexes = {str(row["interaction_id"]): dict(row) for row in master._read_parquet_rows(period.interaction_index)}
     result: dict[str, list[dict[str, Any]]] = {day: [] for day, _path in period.sessions}
+    if period.level_catalog is None and strategy.level_resolver_required:
+        raise MultiStrategyResearchError(f"level catalog required for cross-session strategy: {strategy.strategy_id}")
+    resolver = levels.CausalLevelResolver.from_path(period.level_catalog) if period.level_catalog is not None else None
     for row in interactions:
         day = str(row.get("session_date"))
-        if day in result and str(row.get("level")) == strategy.reference_level:
+        target_session = row.get("target_session")
+        if (day in result and str(row.get("level")) == strategy.reference_level
+                and (target_session in (None, "", strategy.session))):
             identifier = str(row["interaction_id"])
             if identifier not in indexes:
                 raise MultiStrategyResearchError(f"interaction index missing: {strategy.strategy_id}/{identifier}")
-            result[day].append(dict(row))
+            resolved_row = dict(row)
+            if resolver is not None:
+                resolution = resolver.resolve(strategy, trading_date=day, signal_timestamp_ns=_signal_timestamp(row))
+                if not resolution.available:
+                    continue
+                if not math.isclose(float(row["level_price"]), float(resolution.level_value), rel_tol=0.0, abs_tol=1e-9):
+                    # The prebuilt interaction must be tied to exactly the level
+                    # known at its own signal time; a later profile/extremum is
+                    # never substituted into its zone geometry.
+                    continue
+                resolved_row["level_resolution"] = resolution.provenance()
+                resolved_row["level_resolution_catalog_sha256"] = resolver.catalog_sha256
+            result[day].append(resolved_row)
     return result, indexes
 
 
@@ -310,6 +381,14 @@ def _run_stage1_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path)
     if reused:
         return {"strategy_id": strategy.strategy_id, "status": "REUSED", "root": str(strategy_root), **reused}
     rows_by_day, indexes = _load_population(period, strategy)
+    provenance = _resolved_provenance(rows_by_day, strategy)
+    provenance_sha256 = _sha(provenance)
+    _write_json(strategy_root / "level-provenance.json", {
+        "strategy_id": strategy.strategy_id, "period_id": period.period_id,
+        "level_catalog": None if period.level_catalog is None else str(period.level_catalog),
+        "level_catalog_sha256": None if period.level_catalog is None else _file_sha(period.level_catalog),
+        "provenance_sha256": provenance_sha256, "resolutions": provenance,
+    })
     rows: list[dict[str, Any]] = []
     tape_cache: dict[tuple[str, float, int], matrix.SessionCausalTape] = {}
     for rr in STAGE1_RR:
@@ -324,7 +403,8 @@ def _run_stage1_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path)
     _write_csv(strategy_root / "stage1-matrix.csv", rows, ("config_id",))
     _write_json(strategy_root / "selection.json", selection)
     complete = {"stage": "stage1", "status": "COMPLETE", "input_identity": identity, "strategy_id": strategy.strategy_id,
-                "configuration_count": len(rows), "selection": selection, "evidence_label": EVIDENCE_LABEL}
+                "configuration_count": len(rows), "selection": selection, "level_provenance_sha256": provenance_sha256,
+                "evidence_label": EVIDENCE_LABEL}
     _write_json(strategy_root / "complete.json", complete)
     return {"strategy_id": strategy.strategy_id, "status": "COMPLETE", "root": str(strategy_root), **complete}
 
@@ -449,6 +529,10 @@ def _run_stage2_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path,
     if not selection_path.is_file():
         raise MultiStrategyResearchError(f"missing Stage 1 selection: {strategy.strategy_id}")
     execution = json.loads(selection_path.read_text(encoding="utf-8"))["stage2_execution_configuration"]
+    stage1_complete_path = stage1_dir / "complete.json"
+    if not stage1_complete_path.is_file():
+        raise MultiStrategyResearchError(f"missing Stage 1 completion marker: {strategy.strategy_id}")
+    stage1_complete = json.loads(stage1_complete_path.read_text(encoding="utf-8"))
     weights_grid = tuple(grid or matrix.generate_weight_grid())
     identity = _identity(strategy, period, stage="stage2", extra={"stage1_selection": execution, "q": [str(value) for value in STAGE2_Q], "weight_grid_sha": _sha(weights_grid)})
     strategy_root = root / "strategies" / _safe_name(strategy.strategy_id)
@@ -463,6 +547,10 @@ def _run_stage2_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path,
     else:
         _write_json(progress_path, {"stage": "stage2", "input_identity": identity, "status": "IN_PROGRESS"})
     rows_by_day, indexes = _load_population(period, strategy)
+    provenance = _resolved_provenance(rows_by_day, strategy)
+    provenance_sha256 = _sha(provenance)
+    if stage1_complete.get("level_provenance_sha256") != provenance_sha256:
+        raise MultiStrategyResearchError(f"Stage 2 level provenance differs from Stage 1: {strategy.strategy_id}")
     results: list[dict[str, Any]] = []
     rr, stop = float(execution["rr"]), int(execution["stop_ticks"])
     tape_cache: dict[tuple[str, float, int], matrix.SessionCausalTape] = {}
@@ -502,7 +590,8 @@ def _run_stage2_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path,
     _write_csv(strategy_root / "robust-best-daily-results.csv", daily, ("date",))
     _write_json(strategy_root / "selection.json", selection); _write_json(strategy_root / "plateau-analysis.json", plateau)
     complete = {"stage": "stage2", "status": "COMPLETE", "input_identity": identity, "strategy_id": strategy.strategy_id,
-                "configuration_count": len(results), "rr": rr, "stop_ticks": stop, "selection": selection, "evidence_label": EVIDENCE_LABEL}
+                "configuration_count": len(results), "rr": rr, "stop_ticks": stop, "selection": selection,
+                "level_provenance_sha256": provenance_sha256, "evidence_label": EVIDENCE_LABEL}
     _write_json(strategy_root / "complete.json", complete)
     return {"strategy_id": strategy.strategy_id, "status": "COMPLETE", "root": str(strategy_root), **complete}
 
@@ -536,6 +625,17 @@ def run_stage2(*, strategies_path: Path, period_path: Path, stage1_root: Path, o
     return summary
 
 
+def audit_candidate_executability(*, strategies_path: Path) -> dict[str, Any]:
+    """Perform a no-data capability audit of the selected strategy manifest."""
+    rows = levels.candidate_executability_audit(load_strategy_manifest(strategies_path))
+    return {
+        "status": "COMPLETE", "historical_data_opened": False,
+        "strategies": rows,
+        "executable_with_supported_inputs": sum(row["classification"] == "EXECUTABLE_WITH_SUPPORTED_INPUTS" for row in rows),
+        "not_executable": sum(row["classification"] == "NOT_EXECUTABLE" for row in rows),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -546,13 +646,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     optimize.add_argument("--strategies", type=Path, required=True); optimize.add_argument("--period", type=Path, required=True)
     optimize.add_argument("--stage1-results", type=Path, required=True); optimize.add_argument("--output", type=Path, required=True)
     optimize.add_argument("--workers", type=int, default=1)
+    audit = sub.add_parser("multi-strategy-level-audit", help="Offline structural-level capability audit; opens no market data")
+    audit.add_argument("--strategies", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.workers < 1:
+        if getattr(args, "workers", 1) < 1:
             raise MultiStrategyResearchError("workers must be at least one")
-        result = (run_stage1(strategies_path=args.strategies, period_path=args.period, output_root=args.output, workers=args.workers)
-                  if args.command == "multi-strategy-screen" else
-                  run_stage2(strategies_path=args.strategies, period_path=args.period, stage1_root=args.stage1_results, output_root=args.output, workers=args.workers))
+        if args.command == "multi-strategy-level-audit":
+            result = audit_candidate_executability(strategies_path=args.strategies)
+        elif args.command == "multi-strategy-screen":
+            result = run_stage1(strategies_path=args.strategies, period_path=args.period, output_root=args.output, workers=args.workers)
+        else:
+            result = run_stage2(strategies_path=args.strategies, period_path=args.period, stage1_root=args.stage1_results, output_root=args.output, workers=args.workers)
     except Exception as exc:
         print(f"ERROR: {exc}")
         return 1

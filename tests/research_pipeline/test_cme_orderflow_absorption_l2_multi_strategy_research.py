@@ -12,6 +12,7 @@ from research_pipeline.cme_orderflow_absorption_l2_v1 import weight_q_research a
 
 
 DAY = "2026-09-01"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _interaction(identifier: str, level: str) -> dict[str, object]:
@@ -127,3 +128,29 @@ def test_stop_geometry_is_the_existing_zone_stop_concept():
     assert prices["stop"] == 98.25
     assert prices["target"] == pytest.approx(104.25)
     assert len(matrix.generate_weight_grid()) == 3_876
+
+
+def test_explicit_candidate_universe_is_causal_and_requires_no_implicit_execution():
+    universe = REPOSITORY_ROOT / "examples/research_pipeline/cme_l2_candidate_universe.example.yaml"
+    specs = multi.load_strategy_manifest(universe)
+    assert len(specs) == 51
+    assert len({spec.strategy_id for spec in specs}) == 51
+    same_session = [spec for spec in specs if spec.session == spec.source_session]
+    cross_session = [spec for spec in specs if spec.session != spec.source_session]
+    assert len(same_session) == 21
+    assert len(cross_session) == 30
+    assert all(not spec.level_resolver_required for spec in same_session)
+    assert all(spec.level_resolver_required for spec in cross_session)
+    assert all(spec.stage1_enabled and spec.stage2_enabled for spec in specs)
+    assert all(spec.uses_shared_absorption_engine for spec in specs)
+    assert all("BUYER_ABSORPTION_LONG" in spec.long_short_behavior for spec in specs)
+    assert not {spec.strategy_id for spec in specs if spec.strategy_id.startswith("EU_PRIOR_ASIA_")}
+    completed_europe = {spec.strategy_id: spec for spec in specs if spec.strategy_id.startswith("NY_COMPLETED_EU_")}
+    assert set(completed_europe) == {"NY_COMPLETED_EU_POC", "NY_COMPLETED_EU_VAH", "NY_COMPLETED_EU_VAL"}
+    assert all("16:30 London" in spec.causal_availability_rule for spec in completed_europe.values())
+
+
+def test_focused_example_manifest_keeps_mapping_metadata_valid():
+    specs = multi.load_strategy_manifest(REPOSITORY_ROOT / "examples/research_pipeline/cme_l2_multi_strategy.example.yaml")
+    assert len(specs) == 4
+    assert all(spec.baseline_quality == {"profile": "common_stage1_median_w04"} for spec in specs)

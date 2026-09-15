@@ -1,0 +1,485 @@
+# Development candidate universe only.  Passing this manifest is an explicit
+# user choice; cme-l2-research never discovers or runs it automatically.
+schema_version: 1
+shared_engine: &shared_engine
+  long_short_behavior: shared_absorption_reversal__BUYER_ABSORPTION_LONG__SELLER_ABSORPTION_SHORT
+  uses_shared_absorption_engine: true
+  trigger_options: {}
+  baseline_quality:
+    profile: common_stage1_median_w04
+  allowed_research_parameters:
+    rr: [1.5, 2.0, 2.5, 3.0, 4.0]
+    stop_buffer_ticks: [3, 5, 7]
+  stage1_enabled: true
+  stage2_enabled: true
+
+strategies:
+  # SAME_SESSION — existing target-session level resolvers.
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_EU_HIGH
+    session: EUROPE
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_HIGH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Europe profile is sealed before the next Europe session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_EU_LOW
+    session: EUROPE
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_LOW
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Europe profile is sealed before the next Europe session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_EU_POC
+    session: EUROPE
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_POC
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Europe profile is sealed before the next Europe session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_EU_VAH
+    session: EUROPE
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_VAH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Europe profile is sealed before the next Europe session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_EU_VAL
+    session: EUROPE
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_VAL
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Europe profile is sealed before the next Europe session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: EU_CURRENT_EU_HIGH
+    session: EUROPE
+    source_session: EUROPE
+    reference_level: CURRENT_EUROPE_HIGH_SWEEP
+    reference_semantics: CURRENT_SOURCE_EXTREMUM
+    causal_availability_rule: Europe high is maintained from target-session events observed no later than the interaction event.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: EU_CURRENT_EU_LOW
+    session: EUROPE
+    source_session: EUROPE
+    reference_level: CURRENT_EUROPE_LOW_SWEEP
+    reference_semantics: CURRENT_SOURCE_EXTREMUM
+    causal_availability_rule: Europe low is maintained from target-session events observed no later than the interaction event.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_NY_HIGH
+    session: NEW_YORK_RTH
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_RTH_HIGH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Prior completed RTH profile is sealed before the next RTH signal window opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_NY_LOW
+    session: NEW_YORK_RTH
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_RTH_LOW
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Prior completed RTH profile is sealed before the next RTH signal window opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_NY_POC
+    session: NEW_YORK_RTH
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_RTH_POC
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Prior completed RTH profile is sealed before the next RTH signal window opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_NY_VAH
+    session: NEW_YORK_RTH
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_RTH_VAH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Prior completed RTH profile is sealed before the next RTH signal window opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_NY_VAL
+    session: NEW_YORK_RTH
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_RTH_VAL
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Prior completed RTH profile is sealed before the next RTH signal window opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: NY_CURRENT_NY_HIGH
+    session: NEW_YORK_RTH
+    source_session: NEW_YORK_RTH
+    reference_level: CURRENT_RTH_HIGH_SWEEP
+    reference_semantics: CURRENT_SOURCE_EXTREMUM
+    causal_availability_rule: RTH high is maintained from target-session events observed no later than the interaction event.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: NY_CURRENT_NY_LOW
+    session: NEW_YORK_RTH
+    source_session: NEW_YORK_RTH
+    reference_level: CURRENT_RTH_LOW_SWEEP
+    reference_semantics: CURRENT_SOURCE_EXTREMUM
+    causal_availability_rule: RTH low is maintained from target-session events observed no later than the interaction event.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_ASIA_HIGH
+    session: ASIA
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_HIGH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Asia profile is sealed before the next Asia session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_ASIA_LOW
+    session: ASIA
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_LOW
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Asia profile is sealed before the next Asia session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_ASIA_POC
+    session: ASIA
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_POC
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Asia profile is sealed before the next Asia session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_ASIA_VAH
+    session: ASIA
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_VAH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Asia profile is sealed before the next Asia session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_ASIA_VAL
+    session: ASIA
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_VAL
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: Immediately preceding completed Asia profile is sealed before the next Asia session opens.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: ASIA_CURRENT_ASIA_HIGH
+    session: ASIA
+    source_session: ASIA
+    reference_level: CURRENT_ASIA_HIGH_SWEEP
+    reference_semantics: CURRENT_SOURCE_EXTREMUM
+    causal_availability_rule: Asia high is maintained from target-session events observed no later than the interaction event.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+  - <<: *shared_engine
+    strategy_id: ASIA_CURRENT_ASIA_LOW
+    session: ASIA
+    source_session: ASIA
+    reference_level: CURRENT_ASIA_LOW_SWEEP
+    reference_semantics: CURRENT_SOURCE_EXTREMUM
+    causal_availability_rule: Asia low is maintained from target-session events observed no later than the interaction event.
+    implementation_status: EXISTING_TARGET_SESSION_LEVEL_RESOLVER
+    level_resolver_required: false
+
+  # CROSS_SESSION_VALID — every row needs a target-session cross-level resolver.
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_NY_HIGH
+    session: EUROPE
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_HIGH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding NY RTH profile completed before the following Europe session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_NY_LOW
+    session: EUROPE
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_LOW
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding NY RTH profile completed before the following Europe session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_NY_POC
+    session: EUROPE
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_POC
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding NY RTH profile completed before the following Europe session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_NY_VAH
+    session: EUROPE
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_VAH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding NY RTH profile completed before the following Europe session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: EU_PRIOR_NY_VAL
+    session: EUROPE
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_VAL
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding NY RTH profile completed before the following Europe session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+
+  - <<: *shared_engine
+    strategy_id: NY_CURRENT_EU_HIGH
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: CURRENT_EUROPE_HIGH_SWEEP
+    reference_semantics: CURRENT_SOURCE_EXTREMUM
+    causal_availability_rule: Europe high is updated only from events no later than each NY interaction; it is valid during the NY-Europe overlap and remains final after Europe closes.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_CURRENT_EU_LOW
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: CURRENT_EUROPE_LOW_SWEEP
+    reference_semantics: CURRENT_SOURCE_EXTREMUM
+    causal_availability_rule: Europe low is updated only from events no later than each NY interaction; it is valid during the NY-Europe overlap and remains final after Europe closes.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_COMPLETED_EU_POC
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: COMPLETED_EUROPE_SESSION_POC
+    reference_semantics: COMPLETED_CURRENT_DATE_SOURCE_PROFILE
+    causal_availability_rule: Europe POC is emitted only after the Europe 16:30 London profile window closes; NY signal eligibility begins after that boundary.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_COMPLETED_EU_VAH
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: COMPLETED_EUROPE_SESSION_VAH
+    reference_semantics: COMPLETED_CURRENT_DATE_SOURCE_PROFILE
+    causal_availability_rule: Europe VAH is emitted only after the Europe 16:30 London profile window closes; NY signal eligibility begins after that boundary.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_COMPLETED_EU_VAL
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: COMPLETED_EUROPE_SESSION_VAL
+    reference_semantics: COMPLETED_CURRENT_DATE_SOURCE_PROFILE
+    causal_availability_rule: Europe VAL is emitted only after the Europe 16:30 London profile window closes; NY signal eligibility begins after that boundary.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_EU_HIGH
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_HIGH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding completed Europe profile is sealed before the target-date NY RTH opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_EU_LOW
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_LOW
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding completed Europe profile is sealed before the target-date NY RTH opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_EU_POC
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_POC
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding completed Europe profile is sealed before the target-date NY RTH opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_EU_VAH
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_VAH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding completed Europe profile is sealed before the target-date NY RTH opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_EU_VAL
+    session: NEW_YORK_RTH
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_VAL
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding completed Europe profile is sealed before the target-date NY RTH opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_ASIA_HIGH
+    session: NEW_YORK_RTH
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_HIGH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The target-date Asia session ends at 08:00 UTC before NY RTH begins at 13:30 UTC.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_ASIA_LOW
+    session: NEW_YORK_RTH
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_LOW
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The target-date Asia session ends at 08:00 UTC before NY RTH begins at 13:30 UTC.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_ASIA_POC
+    session: NEW_YORK_RTH
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_POC
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The target-date Asia session ends at 08:00 UTC before NY RTH begins at 13:30 UTC.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_ASIA_VAH
+    session: NEW_YORK_RTH
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_VAH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The target-date Asia session ends at 08:00 UTC before NY RTH begins at 13:30 UTC.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: NY_PRIOR_ASIA_VAL
+    session: NEW_YORK_RTH
+    source_session: ASIA
+    reference_level: PRIOR_ASIA_SESSION_VAL
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The target-date Asia session ends at 08:00 UTC before NY RTH begins at 13:30 UTC.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_NY_HIGH
+    session: ASIA
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_HIGH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date NY RTH completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_NY_LOW
+    session: ASIA
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_LOW
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date NY RTH completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_NY_POC
+    session: ASIA
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_POC
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date NY RTH completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_NY_VAH
+    session: ASIA
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_VAH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date NY RTH completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_NY_VAL
+    session: ASIA
+    source_session: NEW_YORK_RTH
+    reference_level: PRIOR_NY_RTH_VAL
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date NY RTH completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_EU_HIGH
+    session: ASIA
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_HIGH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date Europe session completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_EU_LOW
+    session: ASIA
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_LOW
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date Europe session completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_EU_POC
+    session: ASIA
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_POC
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date Europe session completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_EU_VAH
+    session: ASIA
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_VAH
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date Europe session completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true
+  - <<: *shared_engine
+    strategy_id: ASIA_PRIOR_EU_VAL
+    session: ASIA
+    source_session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_VAL
+    reference_semantics: PRIOR_COMPLETED_SOURCE_SESSION_PROFILE
+    causal_availability_rule: The preceding-date Europe session completed before the 00:00 UTC Asia session opens.
+    implementation_status: CROSS_SESSION_RESOLVER_REQUIRED
+    level_resolver_required: true

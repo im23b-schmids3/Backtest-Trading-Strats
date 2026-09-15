@@ -18,7 +18,36 @@ trigger options, and whether it uses the shared absorption engine. Interactions
 are filtered by `reference_level`; all strategies can share a period's event
 tapes and interaction master.
 
-See the two manifests in `examples/research_pipeline/` for the exact format.
+For an auditable candidate universe, a strategy may additionally declare its
+`source_session`, `reference_semantics`, `causal_availability_rule`,
+`implementation_status`, and `level_resolver_required`. These fields bind the
+provenance of a level; they do not relax causality. A cross-session row can run
+only after a causal-tape builder has emitted that exact `reference_level` for
+the target-session interaction population. The workflow will not construct a
+profile from future target-session data.
+
+Cross-session strategies additionally require one shared `level_catalog` JSON
+sidecar in the period manifest. It contains generic `session_relationships`
+(`target_session`, trading date, source session/date, and semantic relation)
+and `level_observations` (family, value, causal availability timestamp, mode,
+and source-artifact provenance). It is not a file per strategy. Prior-session
+relationships are explicit rather than date arithmetic, so gaps and weekends
+remain canonical. Dynamic high/low rows use the latest observation at or before
+the interaction start; completed POC/VAH/VAL rows are unavailable until their
+recorded profile-completion timestamp.
+
+`multi-strategy-level-audit --strategies strategies.yaml` performs a no-data
+capability audit. It reports supported resolver modes, not the presence of
+historical market data or a performance result.
+
+See the manifests in `examples/research_pipeline/` for the exact format.
+The small `cme_l2_multi_strategy.example.yaml` remains suitable for focused
+runs. `cme_l2_candidate_universe.example.yaml` is an explicit development
+universe and is never chosen automatically; users must still pass it (or a
+smaller copied subset) with `--strategies`.
+
+The causal rationale, accepted/rejected cross-session references, and scale
+estimate are recorded in `candidate-universe.md`.
 
 ## Commands
 
