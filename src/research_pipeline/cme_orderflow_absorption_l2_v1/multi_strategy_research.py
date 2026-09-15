@@ -1335,11 +1335,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     journal.add_argument("--selection", choices=("robust-best", "raw-best"), default="robust-best"); journal.add_argument("--workers", type=int, default=1)
     audit = sub.add_parser("multi-strategy-level-audit", help="Offline structural-level capability audit; opens no market data")
     audit.add_argument("--strategies", type=Path, required=True)
+    algoseek = sub.add_parser("algoseek-input-audit", help="Validate local Algoseek source files; never run research")
+    for name in ("es-depth", "es-taq", "mes-taq"):
+        algoseek.add_argument(f"--{name}", type=Path, action="append", required=True)
     args = parser.parse_args(argv)
     try:
         if getattr(args, "workers", 1) < 1:
             raise MultiStrategyResearchError("workers must be at least one")
-        if args.command == "multi-strategy-level-audit":
+        if args.command == "algoseek-input-audit":
+            # Provider ingestion is intentionally isolated from Stage 1/2/3.
+            from .algoseek_adapter import audit_inputs
+            result = audit_inputs(es_depth_paths=args.es_depth, es_taq_paths=args.es_taq, mes_taq_paths=args.mes_taq)
+        elif args.command == "multi-strategy-level-audit":
             result = audit_candidate_executability(strategies_path=args.strategies)
         elif args.command == "multi-strategy-screen":
             result = run_stage1(strategies_path=args.strategies, period_path=args.period, output_root=args.output, workers=args.workers)
