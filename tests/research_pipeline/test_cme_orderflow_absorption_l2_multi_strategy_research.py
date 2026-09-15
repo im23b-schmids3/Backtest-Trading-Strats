@@ -80,6 +80,12 @@ def test_manifest_stage1_matrix_outputs_and_resume(tmp_path: Path):
         assert len((root / "stage1-matrix.csv").read_text(encoding="utf-8").splitlines()) == 16
         selection = json.loads((root / "selection.json").read_text(encoding="utf-8"))
         assert set(selection["stage2_execution_configuration"]) == {"config_id", "rr", "stop_ticks"}
+    important = multi._read_csv_rows(tmp_path / "stage1" / "stage1-important-summary.csv")
+    assert {row["strategy_id"] for row in important} == {"Europe High", "NY POC"}
+    assert all(row["baseline_weights"] for row in important)
+    assert all(row["Q"] == "0.50" for row in important)
+    assert all(row["raw_best_rr"] and row["robust_best_stop_ticks"] for row in important)
+    assert all("TOP5_ROBUST_RANK" in row["summary_roles"] or "RAW_BEST" in row["summary_roles"] or "ROBUST_BEST" in row["summary_roles"] for row in important)
     resumed = multi.run_stage1(strategies_path=strategies, period_path=period, output_root=tmp_path / "stage1")
     assert {item["status"] for item in resumed["strategies"]} == {"REUSED"}
 
@@ -107,8 +113,78 @@ def test_stage2_uses_canonical_weight_generator_q_grid_and_separate_outputs(tmp_
     assert all(item["status"] == "COMPLETE" for item in summary["strategies"])
     roots = [Path(item["root"]) for item in summary["strategies"]]
     assert roots[0] != roots[1]
-    assert all(len((root / "weight-q-results.csv").read_text(encoding="utf-8").splitlines()) == 21 for root in roots)
+    full_before = {root: (root / "weight-q-results.csv").read_bytes() for root in roots}
+    compact_before = {
+        root: {
+            "top": (root / "top-1000-configurations.csv").read_bytes(),
+            "important": (root / "important-summary.csv").read_bytes(),
+        }
+        for root in roots
+    }
+    assert all(len(payload.splitlines()) == 21 for payload in full_before.values())
     assert all(len(list((root / "weight-q-checkpoints").glob("*.json"))) == 2 for root in roots)
+    for root in roots:
+        selection = json.loads((root / "selection.json").read_text(encoding="utf-8"))
+        top = multi._read_csv_rows(root / "top-1000-configurations.csv")
+        important = multi._read_csv_rows(root / "important-summary.csv")
+        assert len(top) == 20
+        assert len(top) <= 1000
+        assert len(important) <= 25
+        assert {selection["raw_best"]["config_id"], selection["robust_best"]["config_id"]}.issubset({row["config_id"] for row in important})
+        assert all(row["strategy_id"] in {"Europe High", "NY POC"} for row in top)
+    global_important = multi._read_csv_rows(tmp_path / "stage2" / "research-important-summary.csv")
+    global_strategy = multi._read_csv_rows(tmp_path / "stage2" / "research-strategy-summary.csv")
+    payload = json.loads((tmp_path / "stage2" / "research-summary.json").read_text(encoding="utf-8"))
+    assert {row["strategy_id"] for row in global_important} == {"Europe High", "NY POC"}
+    assert len(global_strategy) == 2
+    assert payload["run_identity"]
+    assert payload["strategy_list"] == ["Europe High", "NY POC"]
+    assert payload["session_dates"] == [DAY]
+    assert payload["sessions"] == [{"date": DAY, "event_tape": str(tmp_path / "artifacts" / "day.parquet")}]
+    assert payload["input_artifact_hashes"]
+    resumed = multi.run_stage2(strategies_path=strategies, period_path=period, stage1_root=tmp_path / "stage1", output_root=tmp_path / "stage2")
+    assert {item["status"] for item in resumed["strategies"]} == {"REUSED"}
+    assert full_before == {root: (root / "weight-q-results.csv").read_bytes() for root in roots}
+    assert compact_before == {
+        root: {
+            "top": (root / "top-1000-configurations.csv").read_bytes(),
+            "important": (root / "important-summary.csv").read_bytes(),
+        }
+        for root in roots
+    }
+
+
+def test_top_1000_summary_caps_a_larger_static_full_result_file(tmp_path: Path):
+    strategies, _period = _make_manifests(tmp_path)
+    strategy = multi.load_strategy_manifest(strategies)[0]
+    root = tmp_path / "stage2" / "strategies" / "static"; root.mkdir(parents=True)
+    rows = []
+    combined = []
+    for index in range(1_001):
+        identifier = f"STATIC-{index:04d}"
+        rows.append({
+            "config_id": identifier, "G1": 0.2, "G2": 0.2, "G3": 0.2, "G4": 0.2, "G5": 0.2,
+            "quality_threshold": "0.30", "rr": 2.0, "stop_ticks": 5, "trades": 10,
+            "sessions_evaluated": 1, "trades_per_session": 10.0, "total_r": float(index),
+            "expectancy_r_per_trade": float(index) / 10, "expectancy_r_per_session": float(index),
+            "max_cumulative_drawdown_r": -1.0, "profit_factor": 2.0, "win_rate": 0.6,
+        })
+        combined.append({"config_id": identifier, "combined_neighbor_count": 1,
+                         "worst_neighbor_total_r": float(index), "median_neighbor_total_r": float(index),
+                         "proportion_neighbors_profitable": 1.0})
+    multi._write_csv(root / "weight-q-results.csv", rows, ("config_id",))
+    multi._write_csv(root / "combined-neighbors.csv", combined, ("config_id",))
+    multi._write_json(root / "selection.json", {"raw_best": {"config_id": "STATIC-1000"},
+                                                  "robust_best": {"config_id": "STATIC-1000"}})
+    multi._write_json(root / "plateau-analysis.json", {"plateaus": []})
+
+    summary = multi._generate_stage2_strategy_summaries(strategy, root)
+
+    top = multi._read_csv_rows(root / "top-1000-configurations.csv")
+    assert summary["full_configuration_count"] == 1_001
+    assert len(top) == 1_000
+    assert top[0]["config_id"] == "STATIC-1000"
+    assert "STATIC-0000" not in {row["config_id"] for row in top}
 
 
 def test_robust_stage1_selection_rejects_an_isolated_total_r_peak():

@@ -348,6 +348,75 @@ def _finite_sort(value: object) -> float:
     return float(value) if value is not None and math.isfinite(float(value)) else -1_000_000_000.0
 
 
+def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            return [dict(row) for row in csv.DictReader(handle)]
+    except OSError as exc:
+        raise MultiStrategyResearchError(f"missing summary input: {path}") from exc
+
+
+def _number(row: Mapping[str, Any], name: str, default: float = 0.0) -> float:
+    value = row.get(name)
+    try:
+        return float(value) if value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _stage1_rank_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        _number(row, "neighbor_profitable_fraction"), _finite_sort(row.get("neighbor_worst_total_r")),
+        _number(row, "expectancy_r_per_session"), _number(row, "total_r"),
+        _number(row, "max_cumulative_drawdown_r"), _finite_sort(row.get("profit_factor")),
+        _number(row, "trades"), str(row.get("config_id", "")),
+    )
+
+
+def _stage1_important_rows(strategy: StrategySpec, strategy_root: Path) -> list[dict[str, Any]]:
+    rows = _read_csv_rows(strategy_root / "stage1-matrix.csv")
+    selection = json.loads((strategy_root / "selection.json").read_text(encoding="utf-8"))
+    by_id = {str(row["config_id"]): row for row in rows}
+    raw_id = str(selection["raw_best"]["config_id"])
+    robust_id = str(selection["stage2_execution_configuration"]["config_id"])
+    if raw_id not in by_id or robust_id not in by_id:
+        raise MultiStrategyResearchError(f"Stage 1 summary selection is absent from matrix: {strategy.strategy_id}")
+    chosen: dict[str, set[str]] = {}
+
+    def add(identifier: str, role: str) -> None:
+        if identifier in by_id:
+            chosen.setdefault(identifier, set()).add(role)
+
+    for rank, row in enumerate(sorted(rows, key=_stage1_rank_key, reverse=True)[:5], 1):
+        add(str(row["config_id"]), f"TOP5_ROBUST_RANK_{rank}")
+    add(raw_id, "RAW_BEST")
+    add(robust_id, "ROBUST_BEST_STAGE2_GEOMETRY")
+    output: list[dict[str, Any]] = []
+    for rank, row in enumerate(sorted((by_id[key] for key in chosen), key=_stage1_rank_key, reverse=True), 1):
+        output.append({
+            "important_rank": rank, "summary_roles": ";".join(sorted(chosen[str(row["config_id"])])),
+            "strategy_id": strategy.strategy_id, "raw_best_config_id": raw_id, "robust_best_config_id": robust_id,
+            "raw_best_rr": selection["raw_best"]["rr"], "raw_best_stop_ticks": selection["raw_best"]["stop_ticks"],
+            "robust_best_rr": selection["stage2_execution_configuration"]["rr"],
+            "robust_best_stop_ticks": selection["stage2_execution_configuration"]["stop_ticks"],
+            "Q": str(STAGE1_Q), "stage1_quality_threshold": str(STAGE1_Q),
+            "baseline_weights": json.dumps({key: str(value) for key, value in COMMON_BASELINE_WEIGHTS.items()}, sort_keys=True),
+            **row,
+        })
+    return output
+
+
+def _generate_stage1_summaries(strategies: Sequence[StrategySpec], output_root: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for strategy in sorted(strategies, key=lambda item: item.strategy_id):
+        strategy_root = output_root / "strategies" / _safe_name(strategy.strategy_id)
+        if (strategy_root / "complete.json").is_file():
+            rows.extend(_stage1_important_rows(strategy, strategy_root))
+    rows.sort(key=lambda row: (str(row["strategy_id"]), int(row["important_rank"]), str(row["config_id"])))
+    _write_csv(output_root / "stage1-important-summary.csv", rows, ("important_rank", "strategy_id", "config_id"))
+    return rows
+
+
 def _select_stage1(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     raw = max(rows, key=lambda item: (float(item["total_r"]), float(item["expectancy_r_per_session"]), str(item["config_id"])))
     robust = max(rows, key=lambda item: (
@@ -379,7 +448,7 @@ def _run_stage1_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path)
     strategy_root = root / "strategies" / _safe_name(strategy.strategy_id)
     reused = _complete_or_raise(strategy_root, identity)
     if reused:
-        return {"strategy_id": strategy.strategy_id, "status": "REUSED", "root": str(strategy_root), **reused}
+        return {**reused, "strategy_id": strategy.strategy_id, "status": "REUSED", "root": str(strategy_root)}
     rows_by_day, indexes = _load_population(period, strategy)
     provenance = _resolved_provenance(rows_by_day, strategy)
     provenance_sha256 = _sha(provenance)
@@ -420,11 +489,12 @@ def run_stage1(*, strategies_path: Path, period_path: Path, output_root: Path, w
     else:
         results = [_run_stage1_worker(item) for item in args]
     results.sort(key=lambda item: item["strategy_id"])
+    important_rows = _generate_stage1_summaries(strategies, output_root)
     _write_csv(output_root / "cross-strategy-stage1-summary.csv", results, ("strategy_id", "status"))
     summary = {"stage": "stage1", "status": "COMPLETE", "evidence_label": EVIDENCE_LABEL, "stage1_quality_threshold": str(STAGE1_Q),
                "common_baseline_weights": {key: str(value) for key, value in COMMON_BASELINE_WEIGHTS.items()},
                "baseline_derivation": BASELINE_DERIVATION, "matrix_per_strategy": len(STAGE1_RR) * len(STAGE1_STOP_TICKS),
-               "strategies": results, "workers": workers}
+               "important_summary_rows": len(important_rows), "strategies": results, "workers": workers}
     _write_json(output_root / "stage1-summary.json", summary)
     return summary
 
@@ -523,6 +593,126 @@ def _plateau(rows: Sequence[Mapping[str, Any]], combined: Sequence[Mapping[str, 
             "plateau_count": len(components), "plateaus": [{"plateau_id": f"PLATEAU-{i:04d}", "configuration_count": len(values), "config_ids": values} for i, values in enumerate(components, 1)]}
 
 
+def _stage2_rank_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    """The existing robust research ordering, expressed for summary exports."""
+    return (
+        _number(row, "proportion_neighbors_profitable"), _finite_sort(row.get("worst_neighbor_total_r")),
+        _finite_sort(row.get("median_neighbor_total_r")), _number(row, "expectancy_r_per_session"),
+        _number(row, "total_r"), _number(row, "max_cumulative_drawdown_r"),
+        _finite_sort(row.get("profit_factor")), _number(row, "trades"), str(row.get("config_id", "")),
+    )
+
+
+def _stage2_summary_row(
+    row: Mapping[str, Any], *, strategy_id: str, rank: int, roles: Sequence[str], plateau_by_config: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    plateau = plateau_by_config.get(str(row["config_id"]), {})
+    return {
+        "rank": rank, "summary_roles": ";".join(sorted(set(roles))), "strategy_id": strategy_id,
+        "config_id": row["config_id"], "G1": row.get("G1"), "G2": row.get("G2"), "G3": row.get("G3"),
+        "G4": row.get("G4"), "G5": row.get("G5"), "Q": row.get("quality_threshold"),
+        "quality_threshold": row.get("quality_threshold"), "frozen_rr": row.get("rr"),
+        "frozen_stop_ticks": row.get("stop_ticks"), "trades": row.get("trades"),
+        "sessions_evaluated": row.get("sessions_evaluated"), "trades_per_session": row.get("trades_per_session"),
+        "total_r": row.get("total_r"), "expectancy_r_per_trade": row.get("expectancy_r_per_trade"),
+        "expectancy_r_per_session": row.get("expectancy_r_per_session"),
+        "max_cumulative_drawdown_r": row.get("max_cumulative_drawdown_r"), "profit_factor": row.get("profit_factor"),
+        "win_rate": row.get("win_rate"),
+        "neighbor_profitability": row.get("proportion_neighbors_profitable"),
+        "worst_neighbor_result": row.get("worst_neighbor_total_r"),
+        "median_neighbor_result": row.get("median_neighbor_total_r"),
+        "combined_neighbor_count": row.get("combined_neighbor_count"),
+        "robustness_score_neighbor_profitability": row.get("proportion_neighbors_profitable"),
+        "plateau_id": plateau.get("plateau_id"), "plateau_configuration_count": plateau.get("configuration_count"),
+    }
+
+
+def _plateau_index(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    output: dict[str, Mapping[str, Any]] = {}
+    for plateau in payload.get("plateaus", []):
+        if not isinstance(plateau, Mapping):
+            continue
+        for identifier in plateau.get("config_ids", []):
+            output[str(identifier)] = plateau
+    return output
+
+
+def _stage2_important_ids(
+    rows: Sequence[Mapping[str, Any]], selection: Mapping[str, Any], plateau_by_config: Mapping[str, Mapping[str, Any]], *, limit: int = 25,
+) -> dict[str, set[str]]:
+    """Preserve raw/robust winners while showing their local and plateau context."""
+    by_id = {str(row["config_id"]): row for row in rows}
+    chosen: dict[str, set[str]] = {}
+
+    def add(identifier: str, role: str) -> None:
+        if identifier in by_id and len(chosen) < limit:
+            chosen.setdefault(identifier, set()).add(role)
+        elif identifier in chosen:
+            chosen[identifier].add(role)
+
+    raw_id = str(selection["raw_best"]["config_id"])
+    robust_id = str(selection["robust_best"]["config_id"])
+    add(raw_id, "RAW_BEST")
+    add(robust_id, "ROBUST_BEST")
+    rank = {str(row["config_id"]): index for index, row in enumerate(sorted(rows, key=_stage2_rank_key, reverse=True), 1)}
+    for anchor, role in ((raw_id, "RAW_BEST_NEIGHBOR"), (robust_id, "ROBUST_BEST_NEIGHBOR")):
+        row = by_id.get(anchor)
+        if row is None:
+            continue
+        units = tuple(int(round(_number(row, f"G{i}") / 0.05)) for i in range(1, 6))
+        thresholds = _stage2_neighbor_ids(units, Decimal(str(row["quality_threshold"])))
+        for identifier in sorted(set((*thresholds[0], *thresholds[1])), key=lambda value: (rank.get(value, 10**9), value)):
+            add(identifier, role)
+    # Preserve a comparable best row from every Q region before using remaining
+    # space for plateau members. This prevents a large local plateau from hiding
+    # the quality-threshold sensitivity that the compact export is meant to show.
+    for threshold in STAGE2_Q:
+        candidates = [row for row in rows if Decimal(str(row["quality_threshold"])) == threshold]
+        if candidates:
+            add(str(max(candidates, key=_stage2_rank_key)["config_id"]), "QUALITY_REGION_REPRESENTATIVE")
+    for anchor, role in ((raw_id, "RAW_BEST_PLATEAU"), (robust_id, "ROBUST_BEST_PLATEAU")):
+        plateau = plateau_by_config.get(anchor)
+        if plateau is not None:
+            for identifier in sorted((str(item) for item in plateau.get("config_ids", [])), key=lambda value: (rank.get(value, 10**9), value)):
+                add(identifier, role)
+    for plateau_id in sorted({str(value.get("plateau_id")) for value in plateau_by_config.values()}):
+        members = [identifier for identifier, item in plateau_by_config.items() if str(item.get("plateau_id")) == plateau_id]
+        if members:
+            add(min(members, key=lambda value: (rank.get(value, 10**9), value)), "PLATEAU_REPRESENTATIVE")
+    for row in sorted(rows, key=_stage2_rank_key, reverse=True):
+        add(str(row["config_id"]), "ROBUST_TOP")
+    return chosen
+
+
+def _generate_stage2_strategy_summaries(strategy: StrategySpec, strategy_root: Path) -> dict[str, Any]:
+    """Regenerate compact exports from complete result files without simulation."""
+    rows = _read_csv_rows(strategy_root / "weight-q-results.csv")
+    combined = {str(row["config_id"]): row for row in _read_csv_rows(strategy_root / "combined-neighbors.csv")}
+    if set(combined) != {str(row["config_id"]) for row in rows}:
+        raise MultiStrategyResearchError(f"Stage 2 neighbor summary does not match full results: {strategy.strategy_id}")
+    merged = [{**row, **combined[str(row["config_id"])]} for row in rows]
+    selection = json.loads((strategy_root / "selection.json").read_text(encoding="utf-8"))
+    plateau_by_config = _plateau_index(json.loads((strategy_root / "plateau-analysis.json").read_text(encoding="utf-8")))
+    ranked = sorted(merged, key=_stage2_rank_key, reverse=True)
+    by_id = {str(row["config_id"]): row for row in merged}
+    top = [_stage2_summary_row(row, strategy_id=strategy.strategy_id, rank=index, roles=("TOP1000_ROBUST",), plateau_by_config=plateau_by_config)
+           for index, row in enumerate(ranked[:1000], 1)]
+    important_ids = _stage2_important_ids(merged, selection, plateau_by_config)
+    important = [_stage2_summary_row(row, strategy_id=strategy.strategy_id, rank=index,
+                                     roles=tuple(important_ids[str(row["config_id"])]), plateau_by_config=plateau_by_config)
+                 for index, row in enumerate(sorted((by_id[identifier] for identifier in important_ids),
+                                                     key=_stage2_rank_key, reverse=True), 1)]
+    _write_csv(strategy_root / "top-1000-configurations.csv", top, ("rank", "strategy_id", "config_id"))
+    _write_csv(strategy_root / "important-summary.csv", important, ("rank", "strategy_id", "config_id"))
+    return {"strategy_id": strategy.strategy_id, "root": str(strategy_root), "full_configuration_count": len(rows),
+            "top_configuration_count": len(top), "important_configuration_count": len(important),
+            "raw_best": _stage2_summary_row(by_id[str(selection["raw_best"]["config_id"])], strategy_id=strategy.strategy_id,
+                                               rank=0, roles=("RAW_BEST",), plateau_by_config=plateau_by_config),
+            "robust_best": _stage2_summary_row(by_id[str(selection["robust_best"]["config_id"])], strategy_id=strategy.strategy_id,
+                                                  rank=0, roles=("ROBUST_BEST",), plateau_by_config=plateau_by_config),
+            "important": important}
+
+
 def _run_stage2_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path, stage1_root: Path, *, grid: Sequence[tuple[int, int, int, int, int]] | None = None) -> dict[str, Any]:
     stage1_dir = stage1_root / "strategies" / _safe_name(strategy.strategy_id)
     selection_path = stage1_dir / "selection.json"
@@ -538,7 +728,9 @@ def _run_stage2_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path,
     strategy_root = root / "strategies" / _safe_name(strategy.strategy_id)
     reused = _complete_or_raise(strategy_root, identity)
     if reused:
-        return {"strategy_id": strategy.strategy_id, "status": "REUSED", "root": str(strategy_root), **reused}
+        summary = _generate_stage2_strategy_summaries(strategy, strategy_root)
+        return {**reused, "strategy_id": strategy.strategy_id, "status": "REUSED", "root": str(strategy_root),
+                "important_summary_rows": summary["important_configuration_count"], "summary_regenerated": True}
     progress_path = strategy_root / "in-progress.json"
     if progress_path.is_file():
         progress = json.loads(progress_path.read_text(encoding="utf-8"))
@@ -589,11 +781,14 @@ def _run_stage2_strategy(strategy: StrategySpec, period: PeriodSpec, root: Path,
     _write_csv(strategy_root / "quality-threshold-sensitivity.csv", sensitivity, ("quality_threshold",))
     _write_csv(strategy_root / "robust-best-daily-results.csv", daily, ("date",))
     _write_json(strategy_root / "selection.json", selection); _write_json(strategy_root / "plateau-analysis.json", plateau)
+    summary = _generate_stage2_strategy_summaries(strategy, strategy_root)
     complete = {"stage": "stage2", "status": "COMPLETE", "input_identity": identity, "strategy_id": strategy.strategy_id,
                 "configuration_count": len(results), "rr": rr, "stop_ticks": stop, "selection": selection,
-                "level_provenance_sha256": provenance_sha256, "evidence_label": EVIDENCE_LABEL}
+                "level_provenance_sha256": provenance_sha256, "summary_configuration_count": summary["important_configuration_count"],
+                "evidence_label": EVIDENCE_LABEL}
     _write_json(strategy_root / "complete.json", complete)
-    return {"strategy_id": strategy.strategy_id, "status": "COMPLETE", "root": str(strategy_root), **complete}
+    return {**complete, "strategy_id": strategy.strategy_id, "status": "COMPLETE", "root": str(strategy_root),
+            "important_summary_rows": summary["important_configuration_count"]}
 
 
 def _run_stage2_worker(args: tuple[StrategySpec, PeriodSpec, Path, Path]) -> dict[str, Any]:
@@ -606,6 +801,88 @@ def _run_stage2_worker(args: tuple[StrategySpec, PeriodSpec, Path, Path]) -> dic
         return {"strategy_id": strategy.strategy_id, "status": "FAILED", "error": str(exc), "root": str(failure_root)}
 
 
+def _period_input_hashes(period: PeriodSpec) -> dict[str, Any]:
+    return {
+        "interaction_master": {"path": str(period.interaction_master), "sha256": _file_sha(period.interaction_master)},
+        "interaction_index": {"path": str(period.interaction_index), "sha256": _file_sha(period.interaction_index)},
+        "event_tapes": [{"date": day, "path": str(path), "sha256": _file_sha(path)} for day, path in period.sessions],
+        "level_catalog": None if period.level_catalog is None else {"path": str(period.level_catalog), "sha256": _file_sha(period.level_catalog)},
+    }
+
+
+def _generate_research_summaries(
+    strategies: Sequence[StrategySpec], period: PeriodSpec, stage1_root: Path, output_root: Path,
+    statuses: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build global compact summaries from completed strategy result files only."""
+    status_by_id = {str(row["strategy_id"]): dict(row) for row in statuses}
+    important_rows: list[dict[str, Any]] = []
+    strategy_rows: list[dict[str, Any]] = []
+    strategy_json: list[dict[str, Any]] = []
+    for strategy in sorted(strategies, key=lambda item: item.strategy_id):
+        strategy_root = output_root / "strategies" / _safe_name(strategy.strategy_id)
+        stage1_dir = stage1_root / "strategies" / _safe_name(strategy.strategy_id)
+        status = status_by_id.get(strategy.strategy_id, {"strategy_id": strategy.strategy_id, "status": "NOT_RUN"})
+        if not (strategy_root / "complete.json").is_file() or not (stage1_dir / "selection.json").is_file():
+            strategy_rows.append({"strategy_id": strategy.strategy_id, "completion_status": status.get("status"),
+                                  "output_directory": str(strategy_root), "missing_result_files": True})
+            strategy_json.append({"strategy_id": strategy.strategy_id, "completion_status": status.get("status"),
+                                  "output_directory": str(strategy_root), "missing_result_files": True})
+            continue
+        summary = _generate_stage2_strategy_summaries(strategy, strategy_root)
+        stage1_selection = json.loads((stage1_dir / "selection.json").read_text(encoding="utf-8"))
+        raw, robust = summary["raw_best"], summary["robust_best"]
+        for row in summary["important"]:
+            important_rows.append({**row, "output_directory": str(strategy_root)})
+        strategy_row = {
+            "strategy_id": strategy.strategy_id,
+            "stage1_selected_rr": stage1_selection["stage2_execution_configuration"]["rr"],
+            "stage1_selected_stop_ticks": stage1_selection["stage2_execution_configuration"]["stop_ticks"],
+            "raw_best_G1": raw["G1"], "raw_best_G2": raw["G2"], "raw_best_G3": raw["G3"],
+            "raw_best_G4": raw["G4"], "raw_best_G5": raw["G5"], "raw_best_Q": raw["Q"],
+            "raw_best_total_r": raw["total_r"], "raw_best_expectancy_r_per_session": raw["expectancy_r_per_session"],
+            "raw_best_max_cumulative_drawdown_r": raw["max_cumulative_drawdown_r"],
+            "robust_best_G1": robust["G1"], "robust_best_G2": robust["G2"], "robust_best_G3": robust["G3"],
+            "robust_best_G4": robust["G4"], "robust_best_G5": robust["G5"], "robust_best_Q": robust["Q"],
+            "robust_best_total_r": robust["total_r"], "robust_best_expectancy_r_per_session": robust["expectancy_r_per_session"],
+            "robust_best_max_cumulative_drawdown_r": robust["max_cumulative_drawdown_r"],
+            "trade_count": robust["trades"], "sessions": robust["sessions_evaluated"],
+            "profit_factor": robust["profit_factor"], "win_rate": robust["win_rate"],
+            "robustness_neighbor_profitability": robust["neighbor_profitability"],
+            "robustness_worst_neighbor_result": robust["worst_neighbor_result"],
+            "robustness_median_neighbor_result": robust["median_neighbor_result"],
+            "plateau_id": robust["plateau_id"], "plateau_configuration_count": robust["plateau_configuration_count"],
+            "output_directory": str(strategy_root), "completion_status": status.get("status"),
+        }
+        strategy_rows.append(strategy_row)
+        strategy_json.append({
+            "strategy_id": strategy.strategy_id, "strategy": strategy.__dict__, "completion_status": status.get("status"),
+            "output_directory": str(strategy_root), "stage1_selection": stage1_selection,
+            "raw_best": raw, "robust_best": robust, "important_candidates": summary["important"],
+        })
+    important_rows.sort(key=lambda row: (str(row["strategy_id"]), int(row["rank"]), str(row["config_id"])))
+    strategy_rows.sort(key=lambda row: str(row["strategy_id"]))
+    _write_csv(output_root / "research-important-summary.csv", important_rows, ("rank", "strategy_id", "config_id"))
+    _write_csv(output_root / "research-strategy-summary.csv", strategy_rows, ("strategy_id", "output_directory"))
+    hashes = _period_input_hashes(period)
+    run_identity = _sha({"period_id": period.period_id, "strategies": [item.__dict__ for item in strategies], "input_artifact_hashes": hashes})
+    payload = {
+        "run_identity": run_identity, "period_id": period.period_id,
+        "strategy_list": [item.strategy_id for item in sorted(strategies, key=lambda item: item.strategy_id)],
+        "session_dates": [day for day, _path in period.sessions],
+        "sessions": [{"date": day, "event_tape": str(path)} for day, path in period.sessions],
+        "input_artifact_hashes": hashes,
+        "strategies": strategy_json,
+        "completion_resume_status": [{"strategy_id": item.strategy_id, "status": status_by_id.get(item.strategy_id, {}).get("status", "NOT_RUN")}
+                                     for item in sorted(strategies, key=lambda item: item.strategy_id)],
+        "all_configurations_embedded": False,
+        "important_summary_row_count": len(important_rows),
+    }
+    _write_json(output_root / "research-summary.json", payload)
+    return {"run_identity": run_identity, "important_summary_rows": len(important_rows),
+            "strategy_summary_rows": len(strategy_rows), "strategies": strategy_json}
+
+
 def run_stage2(*, strategies_path: Path, period_path: Path, stage1_root: Path, output_root: Path, workers: int = 1) -> dict[str, Any]:
     strategies, period = load_strategy_manifest(strategies_path), load_period_manifest(period_path)
     output_root = output_root.resolve(); output_root.mkdir(parents=True, exist_ok=True)
@@ -616,10 +893,12 @@ def run_stage2(*, strategies_path: Path, period_path: Path, stage1_root: Path, o
     else:
         results = [_run_stage2_worker(item) for item in args]
     results.sort(key=lambda item: item["strategy_id"])
+    global_summaries = _generate_research_summaries(strategies, period, stage1_root.resolve(), output_root, results)
     _write_csv(output_root / "cross-strategy-stage2-summary.csv", results, ("strategy_id", "status"))
     summary = {"stage": "stage2", "status": "COMPLETE", "evidence_label": EVIDENCE_LABEL,
                "quality_thresholds": [str(value) for value in STAGE2_Q], "weight_count": len(matrix.generate_weight_grid()),
                "configuration_count_per_strategy": len(matrix.generate_weight_grid()) * len(STAGE2_Q), "strategies": results, "workers": workers,
+               "global_summary": {key: value for key, value in global_summaries.items() if key != "strategies"},
                "automatic_production_promotion": False}
     _write_json(output_root / "stage2-summary.json", summary)
     return summary

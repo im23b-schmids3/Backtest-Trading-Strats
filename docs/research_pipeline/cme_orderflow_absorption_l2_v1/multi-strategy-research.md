@@ -81,3 +81,28 @@ than mixed. Stage 2 also checkpoints one complete ten-Q batch per legal weight
 vector, so an interrupted strategy resumes from verified batches rather than
 discarding already-completed weight evaluations. Different strategies can run
 in separate processes with stable, sorted combined summaries.
+
+## Compact summary exports
+
+The full `stage1-matrix.csv` and `weight-q-results.csv` artifacts remain the
+complete source of research results. Compact exports are deterministic views of
+those completed files and never cause a causal-tape replay.
+
+- `stage1-important-summary.csv` at the Stage-1 root contains each strategy's
+  robust top five RR/stop cells plus the raw-best and Stage-2 geometry cells,
+  with Q, baseline weights, performance, and geometry-neighbor metrics.
+- Each Stage-2 strategy directory contains `top-1000-configurations.csv`,
+  ordered by the existing robust neighbor/expectancy/drawdown ranking, and
+  `important-summary.csv`, a plateau-aware set of at most 25 rows. The latter
+  retains raw-best and robust-best, their immediate legal neighbors, plateau
+  representatives, and Q-region representatives before filling with
+  robust-ranked alternatives.
+- The Stage-2 root contains `research-important-summary.csv`,
+  `research-strategy-summary.csv`, and `research-summary.json`. The JSON binds
+  run identity, selected strategies, period dates, input hashes, Stage-1
+  selections, raw/robust winners, compact important rows, and completion or
+  resume status. It never embeds the full grid.
+
+Re-running `multi-strategy-optimize` with an unchanged completed identity
+regenerates missing compact exports from result files and reports `REUSED`; it
+does not rerun the optimization.
