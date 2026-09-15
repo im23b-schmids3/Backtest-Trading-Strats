@@ -82,3 +82,4 @@ docs/research_pipeline/cme_orderflow_absorption_v1/*acquisition*.md
 docs/research_pipeline/cme_orderflow_absorption_v1/*acquisition*.json
 docs/research_pipeline/cme_orderflow_absorption_v1/*completion-plan.md
 docs/research_pipeline/cme_orderflow_absorption_v1/*cost*plan.md
+.DS_Store
