@@ -187,6 +187,76 @@ def test_top_1000_summary_caps_a_larger_static_full_result_file(tmp_path: Path):
     assert "STATIC-0000" not in {row["config_id"] for row in top}
 
 
+def test_stage3_trade_journal_uses_one_frozen_config_and_exit_time_portfolio_accounting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    strategies, period = _make_manifests(tmp_path)
+    multi.run_stage1(strategies_path=strategies, period_path=period, output_root=tmp_path / "stage1")
+    legal = ((4, 2, 6, 4, 4), (3, 3, 6, 4, 4))
+    monkeypatch.setattr(matrix, "generate_weight_grid", lambda: legal)
+
+    def small_neighbors(rows):
+        common = [{"config_id": row["config_id"], "neighbor_count": 1, "worst_neighbor_total_r": row["total_r"],
+                   "median_neighbor_total_r": row["total_r"], "proportion_neighbors_profitable": 1.0} for row in rows]
+        return common, common, common
+
+    def forbidden_dbn(*_args, **_kwargs):
+        raise AssertionError("Stage 3 must not read DBN data")
+
+    monkeypatch.setattr(multi, "_stage2_robustness", small_neighbors)
+    monkeypatch.setattr(historical, "_stream_private_mbo", forbidden_dbn)
+    multi.run_stage2(strategies_path=strategies, period_path=period, stage1_root=tmp_path / "stage1", output_root=tmp_path / "stage2")
+    result = multi.run_stage3(strategies_path=strategies, period_path=period, stage1_root=tmp_path / "stage1",
+                              stage2_root=tmp_path / "stage2", output_root=tmp_path / "stage3")
+    assert result["selection_type"] == "robust-best"
+    journal = multi._read_csv_rows(tmp_path / "stage3" / "research-trades.csv")
+    assert journal == sorted(journal, key=multi._stage3_entry_key)
+    assert len(journal) == sum(int(item["trade_count"]) for item in result["strategies"])
+    assert {row["configuration_selection_type"] for row in journal} == {"robust-best"}
+    assert {row["strategy_balance_before_trade"] for row in journal} == {"50000.0"}
+    assert journal[0]["overall_balance_before_trade"] == "50000.0"
+    assert [int(row["overall_realization_sequence"]) for row in sorted(journal, key=multi._stage3_realization_key)] == list(range(1, len(journal) + 1))
+    for strategy in multi.load_strategy_manifest(strategies):
+        selected = json.loads((tmp_path / "stage2" / "strategies" / multi._safe_name(strategy.strategy_id) / "selection.json").read_text())
+        assert {row["stage2_config_id"] for row in journal if row["strategy_id"] == strategy.strategy_id} <= {selected["robust_best"]["config_id"]}
+    assert (tmp_path / "stage3" / "research-daily-summary.csv").is_file()
+    assert (tmp_path / "stage3" / "research-overall-daily-summary.csv").is_file()
+    assert (tmp_path / "stage3" / "research-stage3-strategy-summary.csv").is_file()
+    assert (tmp_path / "stage3" / "research-stage3-overall-summary.csv").is_file()
+    assert (tmp_path / "stage3" / "research-trade-journal.md").is_file()
+    before = (tmp_path / "stage3" / "research-trades.csv").read_bytes()
+    resumed = multi.run_stage3(strategies_path=strategies, period_path=period, stage1_root=tmp_path / "stage1",
+                               stage2_root=tmp_path / "stage2", output_root=tmp_path / "stage3")
+    assert {item["status"] for item in resumed["strategies"]} == {"REUSED"}
+    assert before == (tmp_path / "stage3" / "research-trades.csv").read_bytes()
+
+    raw = multi.run_stage3(strategies_path=strategies, period_path=period, stage1_root=tmp_path / "stage1",
+                           stage2_root=tmp_path / "stage2", output_root=tmp_path / "stage3-raw", selection="raw-best")
+    assert raw["selection_type"] == "raw-best"
+    assert {row["configuration_selection_type"] for row in multi._read_csv_rows(tmp_path / "stage3-raw" / "research-trades.csv")} == {"raw-best"}
+
+
+def test_stage3_independent_and_aggregated_equity_use_exit_time_realization_order():
+    early_open_late_close = {"strategy_id": "A", "trading_date": DAY, "entry_timestamp": 10, "exit_timestamp": 40,
+                             "trade_number_global_for_strategy": 1, "canonical_trade_id": "A-1", "pnl_usd": 100.0, "result_r": 1.0}
+    late_open_early_close = {"strategy_id": "B", "trading_date": DAY, "entry_timestamp": 20, "exit_timestamp": 30,
+                             "trade_number_global_for_strategy": 1, "canonical_trade_id": "B-1", "pnl_usd": -50.0, "result_r": -0.5}
+    multi._stage3_apply_equity([early_open_late_close], prefix="strategy", starting_balance=50_000.0)
+    multi._stage3_apply_equity([late_open_early_close], prefix="strategy", starting_balance=50_000.0)
+    assert early_open_late_close["strategy_balance_after_trade"] == 50_100.0
+    assert late_open_early_close["strategy_balance_after_trade"] == 49_950.0
+
+    realized = sorted([early_open_late_close, late_open_early_close], key=multi._stage3_realization_key)
+    multi._stage3_apply_equity(realized, prefix="overall", starting_balance=50_000.0)
+    assert realized == [late_open_early_close, early_open_late_close]
+    assert late_open_early_close["overall_balance_before_trade"] == 50_000.0
+    assert late_open_early_close["overall_balance_after_trade"] == 49_950.0
+    assert late_open_early_close["overall_drawdown_usd"] == 50.0
+    assert early_open_late_close["overall_balance_after_trade"] == 50_050.0
+    assert early_open_late_close["overall_cumulative_pnl_usd"] == 50.0
+    assert early_open_late_close["overall_cumulative_r"] == 0.5
+
+
 def test_robust_stage1_selection_rejects_an_isolated_total_r_peak():
     rows = multi._stage1_neighbors([
         {"config_id": "stable-a", "rr": 2.0, "stop_ticks": 5, "total_r": 5.0, "expectancy_r_per_session": 1.0, "max_cumulative_drawdown_r": -1.0, "profit_factor": 1.5, "trades": 10},

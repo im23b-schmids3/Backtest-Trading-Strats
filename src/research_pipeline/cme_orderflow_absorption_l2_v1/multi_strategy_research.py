@@ -1,10 +1,12 @@
-"""Reusable two-stage, offline-first research orchestration for CME ES L2.
+"""Reusable three-stage, offline-first research orchestration for CME ES L2.
 
 Stage 1 screens the *existing causal tapes* with a fixed quality gate and one
 common legal weight vector while varying only target R and the canonical zone
 stop buffer.  Stage 2 freezes that geometry per strategy and evaluates the
 existing legal five-weight grid without opening DBN files.  Both stages are
 development research only; neither selects or promotes a production strategy.
+Stage 3 replays exactly one persisted Stage-2 selection per strategy and builds
+independent plus aggregate-research accounting journals from canonical trades.
 """
 from __future__ import annotations
 
@@ -904,6 +906,407 @@ def run_stage2(*, strategies_path: Path, period_path: Path, stage1_root: Path, o
     return summary
 
 
+STAGE3_STARTING_BALANCE_USD = 50_000.00
+STAGE3_PORTFOLIO_TYPE = "AGGREGATED_RESEARCH_PORTFOLIO"
+STAGE3_PORTFOLIO_WARNING = "NOT_A_SIMULTANEOUS_CAPITAL_CONSTRAINED_PORTFOLIO_BACKTEST"
+
+
+def _stage3_selection_key(selection: str) -> str:
+    normalized = str(selection).strip().lower()
+    if normalized not in {"robust-best", "raw-best"}:
+        raise MultiStrategyResearchError("Stage 3 selection must be robust-best or raw-best")
+    return normalized
+
+
+def _stage3_selected_config(
+    strategy: StrategySpec, *, stage1_root: Path, stage2_root: Path, selection: str,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    stage1_dir = stage1_root / "strategies" / _safe_name(strategy.strategy_id)
+    stage2_dir = stage2_root / "strategies" / _safe_name(strategy.strategy_id)
+    if not (stage1_dir / "complete.json").is_file() or not (stage2_dir / "complete.json").is_file():
+        raise MultiStrategyResearchError(f"Stage 3 requires completed Stage 1 and 2 results: {strategy.strategy_id}")
+    stage1 = json.loads((stage1_dir / "selection.json").read_text(encoding="utf-8"))
+    stage2_marker = json.loads((stage2_dir / "complete.json").read_text(encoding="utf-8"))
+    stage2_selection = json.loads((stage2_dir / "selection.json").read_text(encoding="utf-8"))
+    selected = dict(stage2_selection["robust_best" if selection == "robust-best" else "raw_best"])
+    frozen_geometry = stage1["stage2_execution_configuration"]
+    if (float(selected["rr"]), int(selected["stop_ticks"])) != (
+        float(frozen_geometry["rr"]), int(frozen_geometry["stop_ticks"])
+    ):
+        raise MultiStrategyResearchError(f"Stage 2 geometry no longer matches Stage 1: {strategy.strategy_id}")
+    result = next((row for row in _read_csv_rows(stage2_dir / "weight-q-results.csv")
+                   if str(row["config_id"]) == str(selected["config_id"])), None)
+    if result is None:
+        raise MultiStrategyResearchError(f"Stage 2 selected configuration is absent from full result: {strategy.strategy_id}")
+    for name in ("rr", "G1", "G2", "G3", "G4", "G5", "quality_threshold"):
+        if Decimal(str(result[name])) != Decimal(str(selected[name])):
+            raise MultiStrategyResearchError(f"Stage 2 selected configuration mismatch for {strategy.strategy_id}/{name}")
+    if int(result["stop_ticks"]) != int(selected["stop_ticks"]):
+        raise MultiStrategyResearchError(f"Stage 2 selected configuration mismatch for {strategy.strategy_id}/stop_ticks")
+    config_identity = _sha({"stage2_input_identity": stage2_marker["input_identity"], "selection": selection, "configuration": selected})
+    return selected, stage2_marker, config_identity
+
+
+def _stage3_replay_strategy(
+    *, strategy: StrategySpec, period: PeriodSpec, selected: Mapping[str, Any], config_identity: str, selection: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Replay exactly one persisted Stage-2 configuration using causal Parquet tapes only."""
+    weights = {name: Decimal(str(selected[f"G{index}"])) for index, name in enumerate(SCORE_FIELDS, 1)}
+    threshold, rr, stop_ticks = Decimal(str(selected["quality_threshold"])), float(selected["rr"]), int(selected["stop_ticks"])
+    rows_by_day, indexes = _load_population(period, strategy)
+    provenance_sha256 = _sha(_resolved_provenance(rows_by_day, strategy))
+    trades: list[dict[str, Any]] = []
+    daily: list[dict[str, Any]] = []
+    for day, tape_path in period.sessions:
+        candidates = _accepted(rows_by_day[day], weights, threshold)
+        candidate_indexes = {str(row["interaction_id"]): indexes[str(row["interaction_id"])] for row in candidates}
+        tape = matrix.SessionCausalTape.from_parquet(day, tape_path, stop_buffer_ticks=stop_ticks, target_r=rr)
+        session = matrix.simulate_independent_session(tape, candidates, candidate_indexes)
+        by_source = {str(row["source_interaction_id"]): row for row in candidates}
+        daily.append({
+            "strategy_id": strategy.strategy_id, "trading_date": day, "sessions": 1,
+            "unresolved_trades": session.unresolved, "accepted_setups": session.accepted_setups,
+            "confirmation_expiries": session.confirmation_expiries,
+            "active_position_blocks": session.active_position_blocks,
+            "other_terminal_count": sum(session.other_terminal.values()),
+        })
+        for trade in session.trades:
+            interaction = by_source.get(str(trade["interaction_id"]))
+            if interaction is None:
+                raise MultiStrategyResearchError(f"Stage 3 trade lacks its accepted interaction: {strategy.strategy_id}")
+            resolution = interaction.get("level_resolution")
+            trades.append({
+                "strategy_id": strategy.strategy_id, "trading_date": day,
+                "target_session": strategy.session, "source_session": strategy.source_session,
+                "reference_level": strategy.reference_level,
+                "reference_level_price": interaction.get("level_price"), "side": trade["direction"],
+                "signal_timestamp": _signal_timestamp(interaction), "entry_timestamp": trade["entry_timestamp_ns"],
+                "exit_timestamp": trade["exit_timestamp_ns"], "q_score": float(master.recompute_quality(interaction, weights)),
+                "q_threshold": str(threshold),
+                **{f"G{index}": str(weights[name]) for index, name in enumerate(SCORE_FIELDS, 1)},
+                **{f"W{index}": str(weights[name]) for index, name in enumerate(SCORE_FIELDS, 1)},
+                "rr": rr, "stop_ticks": stop_ticks, "instrument": trade["instrument"], "quantity": trade["contracts"],
+                "entry_price": trade["entry"], "stop_price": trade["stop"], "target_price": trade["target"],
+                "exit_price": trade["exit"], "exit_reason": trade["exit_reason"],
+                "result_r": trade["r_multiple"], "pnl_usd": trade["net_pnl_usd"],
+                "configuration_selection_type": selection, "stage2_config_id": selected["config_id"],
+                "stage2_config_identity": config_identity,
+                "source_tape_session_identity": f"{day}:{_file_sha(tape_path)}",
+                "causal_level_provenance_identity": _sha(resolution) if isinstance(resolution, Mapping) else None,
+                "canonical_trade_id": trade["trade_id"],
+            })
+    return trades, daily, provenance_sha256
+
+
+def _stage3_entry_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (int(row["entry_timestamp"]), int(row["exit_timestamp"]), str(row["strategy_id"]),
+            int(row.get("trade_number_global_for_strategy", 0)), str(row["canonical_trade_id"]))
+
+
+def _stage3_realization_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (int(row["exit_timestamp"]), int(row["entry_timestamp"]), str(row["strategy_id"]),
+            int(row["trade_number_global_for_strategy"]), str(row["canonical_trade_id"]))
+
+
+def _stage3_apply_equity(rows: Sequence[dict[str, Any]], *, prefix: str, starting_balance: float) -> None:
+    balance = peak = float(starting_balance)
+    cumulative_pnl = cumulative_r = 0.0
+    for row in rows:
+        pnl, result_r = float(row["pnl_usd"]), float(row["result_r"] or 0.0)
+        row[f"{prefix}_starting_balance_usd"] = starting_balance
+        row[f"{prefix}_balance_before_trade"] = balance
+        balance += pnl; cumulative_pnl += pnl; cumulative_r += result_r; peak = max(peak, balance)
+        drawdown = peak - balance
+        row[f"{prefix}_balance_after_trade"] = balance
+        row[f"{prefix}_peak_balance"] = peak
+        row[f"{prefix}_drawdown_usd"] = drawdown
+        row[f"{prefix}_drawdown_pct"] = (drawdown / peak * 100.0) if peak else 0.0
+        row[f"{prefix}_cumulative_pnl_usd"] = cumulative_pnl
+        row[f"{prefix}_cumulative_r"] = cumulative_r
+
+
+def _stage3_daily_rows(
+    strategy: StrategySpec, journal: Sequence[Mapping[str, Any]], daily_inputs: Sequence[Mapping[str, Any]],
+    *, starting_balance: float = STAGE3_STARTING_BALANCE_USD,
+) -> list[dict[str, Any]]:
+    by_day: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in journal:
+        by_day[str(row["trading_date"])].append(row)
+    output: list[dict[str, Any]] = []
+    balance = peak = float(starting_balance)
+    for item in sorted(daily_inputs, key=lambda value: str(value["trading_date"])):
+        day, rows = str(item["trading_date"]), sorted(by_day.get(str(item["trading_date"]), []), key=_stage3_entry_key)
+        values = [float(row["pnl_usd"]) for row in rows]
+        start = float(rows[0]["strategy_balance_before_trade"]) if rows else balance
+        end = float(rows[-1]["strategy_balance_after_trade"]) if rows else balance
+        latest = rows[-1] if rows else None
+        peak = float(latest["strategy_peak_balance"]) if latest is not None else peak
+        drawdown = peak - end
+        output.append({
+            "strategy_id": strategy.strategy_id, "trading_date": day, "trades": len(rows),
+            "wins": sum(value > 0 for value in values), "losses": sum(value < 0 for value in values),
+            "breakeven": sum(value == 0 for value in values), "total_r": sum(float(row["result_r"] or 0.0) for row in rows),
+            "pnl_usd": sum(values), "strategy_starting_balance_for_day": start,
+            "strategy_ending_balance_for_day": end,
+            "strategy_peak_balance_to_date": peak,
+            "strategy_drawdown_usd_to_date": drawdown,
+            "strategy_drawdown_pct_to_date": (drawdown / peak * 100.0) if peak else 0.0,
+            "win_rate": sum(value > 0 for value in values) / len(values) if values else 0.0,
+            "target_exits": sum(row["exit_reason"] == "TARGET" for row in rows),
+            "stop_exits": sum(row["exit_reason"] == "STOP" for row in rows),
+            "hard_flat_exits": sum(str(row["exit_reason"]).startswith("HARD_") for row in rows),
+            "unresolved_trades": item["unresolved_trades"],
+        })
+        balance = end
+    return output
+
+
+def _stage3_strategy_summary(
+    *, strategy: StrategySpec, selected: Mapping[str, Any], journal: Sequence[Mapping[str, Any]],
+    daily_rows: Sequence[Mapping[str, Any]], starting_balance: float, selection: str,
+) -> dict[str, Any]:
+    ordered = sorted(journal, key=_stage3_entry_key)
+    pnl = [float(row["pnl_usd"]) for row in ordered]
+    gross_profit, gross_loss = sum(value for value in pnl if value > 0), -sum(value for value in pnl if value < 0)
+    ending = float(ordered[-1]["strategy_balance_after_trade"]) if ordered else starting_balance
+    max_dd_usd = max((float(row["strategy_drawdown_usd"]) for row in ordered), default=0.0)
+    max_dd_pct = max((float(row["strategy_drawdown_pct"]) for row in ordered), default=0.0)
+    return {
+        "strategy_id": strategy.strategy_id, "selection_type": selection, "RR": selected["rr"],
+        "stop_ticks": selected["stop_ticks"], **{f"G{index}": selected[f"G{index}"] for index in range(1, 6)},
+        "Q": selected["quality_threshold"], "sessions": len(daily_rows), "trades": len(ordered),
+        "wins": sum(value > 0 for value in pnl), "losses": sum(value < 0 for value in pnl),
+        "win_rate": sum(value > 0 for value in pnl) / len(pnl) if pnl else 0.0,
+        "total_r": sum(float(row["result_r"] or 0.0) for row in ordered),
+        "expectancy_r_per_trade": sum(float(row["result_r"] or 0.0) for row in ordered) / len(ordered) if ordered else 0.0,
+        "expectancy_r_per_session": sum(float(row["result_r"] or 0.0) for row in ordered) / len(daily_rows) if daily_rows else 0.0,
+        "total_pnl_usd": sum(pnl), "starting_balance_usd": starting_balance, "ending_balance_usd": ending,
+        "return_pct": (ending - starting_balance) / starting_balance * 100.0,
+        "max_drawdown_usd": max_dd_usd, "max_drawdown_pct": max_dd_pct,
+        "profit_factor": gross_profit / gross_loss if gross_loss else None,
+        "target_exits": sum(row["exit_reason"] == "TARGET" for row in ordered),
+        "stop_exits": sum(row["exit_reason"] == "STOP" for row in ordered),
+        "hard_flat_exits": sum(str(row["exit_reason"]).startswith("HARD_") for row in ordered),
+        "unresolved_trades": sum(int(row["unresolved_trades"]) for row in daily_rows),
+    }
+
+
+def _run_stage3_strategy(
+    strategy: StrategySpec, period: PeriodSpec, root: Path, stage1_root: Path, stage2_root: Path,
+    *, selection: str, starting_balance: float,
+) -> dict[str, Any]:
+    selected, stage2_marker, config_identity = _stage3_selected_config(
+        strategy, stage1_root=stage1_root, stage2_root=stage2_root, selection=selection,
+    )
+    identity = _identity(strategy, period, stage="stage3", extra={
+        "selection": selection, "starting_balance_usd": starting_balance,
+        "stage2_config_identity": config_identity, "stage2_input_identity": stage2_marker["input_identity"],
+    })
+    strategy_root = root / "strategies" / _safe_name(strategy.strategy_id)
+    reused = _complete_or_raise(strategy_root, identity)
+    if reused:
+        return {**reused, "strategy_id": strategy.strategy_id, "status": "REUSED", "root": str(strategy_root)}
+    trades, daily, provenance_sha256 = _stage3_replay_strategy(
+        strategy=strategy, period=period, selected=selected, config_identity=config_identity, selection=selection,
+    )
+    _write_csv(strategy_root / "trades.csv", trades, ("strategy_id", "canonical_trade_id"))
+    _write_json(strategy_root / "daily-input.json", daily)
+    complete = {
+        "stage": "stage3", "status": "COMPLETE", "input_identity": identity, "strategy_id": strategy.strategy_id,
+        "selection_type": selection, "starting_balance_usd": starting_balance, "selected_configuration": selected,
+        "stage2_config_identity": config_identity, "stage2_input_identity": stage2_marker["input_identity"],
+        "trade_count": len(trades), "daily_inputs": daily, "level_provenance_sha256": provenance_sha256,
+        "evidence_label": EVIDENCE_LABEL,
+    }
+    _write_json(strategy_root / "complete.json", complete)
+    return {**complete, "strategy_id": strategy.strategy_id, "status": "COMPLETE", "root": str(strategy_root)}
+
+
+def _run_stage3_worker(args: tuple[StrategySpec, PeriodSpec, Path, Path, Path, str, float]) -> dict[str, Any]:
+    strategy, period, root, stage1_root, stage2_root, selection, starting_balance = args
+    try:
+        return _run_stage3_strategy(strategy, period, root, stage1_root, stage2_root,
+                                    selection=selection, starting_balance=starting_balance)
+    except Exception as exc:
+        failure_root = root / "strategies" / _safe_name(strategy.strategy_id)
+        _write_json(failure_root / "failure.json", {"stage": "stage3", "strategy_id": strategy.strategy_id, "error": str(exc)})
+        return {"strategy_id": strategy.strategy_id, "status": "FAILED", "error": str(exc), "root": str(failure_root)}
+
+
+def _write_stage3_markdown(path: Path, journal: Sequence[Mapping[str, Any]], overall: Mapping[str, Any]) -> None:
+    lines = ["# Stage 3 trade journal", "", f"Portfolio type: `{STAGE3_PORTFOLIO_TYPE}`.",
+             f"Warning: `{STAGE3_PORTFOLIO_WARNING}`.", ""]
+    by_strategy: dict[str, dict[str, list[Mapping[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    for row in journal:
+        by_strategy[str(row["strategy_id"])][str(row["trading_date"])].append(row)
+    for strategy_id in sorted(by_strategy):
+        lines.extend([f"# {strategy_id}", ""])
+        for day in sorted(by_strategy[strategy_id]):
+            lines.extend([f"## {day}", ""])
+            for row in sorted(by_strategy[strategy_id][day], key=_stage3_entry_key):
+                lines.extend([
+                    f"Trade {row['trade_number_global_for_strategy']}", f"- {row['side']}",
+                    f"- Entry: {row['entry_price']}", f"- Exit: {row['exit_price']} ({row['exit_reason']})",
+                    f"- Result: {float(row['result_r'] or 0.0):+.6g}R", f"- PnL: ${float(row['pnl_usd']):+.2f}",
+                    f"- Strategy balance: ${float(row['strategy_balance_before_trade']):,.2f} -> ${float(row['strategy_balance_after_trade']):,.2f}",
+                    f"- Overall balance after realization: ${float(row['overall_balance_after_trade']):,.2f}", "",
+                ])
+    lines.extend([
+        "# Overall Aggregated Research Portfolio", "", f"- Start: ${float(overall['starting_balance_usd']):,.2f}",
+        f"- End: ${float(overall['ending_balance_usd']):,.2f}", f"- PnL: ${float(overall['total_pnl_usd']):+.2f}",
+        f"- Max DD: ${float(overall['max_drawdown_usd']):,.2f}", f"- Total trades: {overall['total_trades']}", "",
+        "This is aggregated research accounting, not a capital-constrained simultaneous portfolio simulation.", "",
+    ])
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _generate_stage3_global(
+    strategies: Sequence[StrategySpec], period: PeriodSpec, output_root: Path, statuses: Sequence[Mapping[str, Any]],
+    *, selection: str, starting_balance: float,
+) -> dict[str, Any]:
+    status_by_id = {str(item["strategy_id"]): dict(item) for item in statuses}
+    all_rows: list[dict[str, Any]] = []
+    strategy_summaries: list[dict[str, Any]] = []
+    strategy_payloads: list[dict[str, Any]] = []
+    for strategy in sorted(strategies, key=lambda item: item.strategy_id):
+        root = output_root / "strategies" / _safe_name(strategy.strategy_id)
+        if not (root / "complete.json").is_file() or not (root / "trades.csv").is_file():
+            status = status_by_id.get(strategy.strategy_id, {}).get("status", "NOT_RUN")
+            strategy_summaries.append({"strategy_id": strategy.strategy_id, "selection_type": selection,
+                                       "completion_status": status, "missing_result_files": True})
+            strategy_payloads.append({"strategy_id": strategy.strategy_id, "status": status,
+                                      "output_directory": str(root), "missing_result_files": True})
+            continue
+        complete = json.loads((root / "complete.json").read_text(encoding="utf-8"))
+        rows = _read_csv_rows(root / "trades.csv")
+        rows.sort(key=_stage3_entry_key)
+        for number, row in enumerate(rows, 1):
+            row["trade_number_global_for_strategy"] = number
+            row["trade_number_for_day"] = sum(1 for prior in rows[:number] if str(prior["trading_date"]) == str(row["trading_date"]))
+        _stage3_apply_equity(rows, prefix="strategy", starting_balance=starting_balance)
+        daily_rows = _stage3_daily_rows(strategy, rows, complete["daily_inputs"], starting_balance=starting_balance)
+        summary = _stage3_strategy_summary(strategy=strategy, selected=complete["selected_configuration"], journal=rows,
+                                           daily_rows=daily_rows, starting_balance=starting_balance, selection=selection)
+        strategy_summaries.append(summary)
+        strategy_payloads.append({"strategy_id": strategy.strategy_id, "status": status_by_id.get(strategy.strategy_id, {}).get("status", "NOT_RUN"),
+                                  "selected_configuration": complete["selected_configuration"], "stage2_config_identity": complete["stage2_config_identity"],
+                                  "summary": summary, "output_directory": str(root)})
+        all_rows.extend(rows)
+    entry_rows = sorted(all_rows, key=_stage3_entry_key)
+    for sequence, row in enumerate(entry_rows, 1):
+        row["global_trade_sequence"] = sequence
+    realized_rows = sorted(entry_rows, key=_stage3_realization_key)
+    for sequence, row in enumerate(realized_rows, 1):
+        row["overall_realization_sequence"] = sequence
+    _stage3_apply_equity(realized_rows, prefix="overall", starting_balance=starting_balance)
+    daily_by_strategy: list[dict[str, Any]] = []
+    for strategy in strategies:
+        root = output_root / "strategies" / _safe_name(strategy.strategy_id)
+        rows = [row for row in entry_rows if row["strategy_id"] == strategy.strategy_id]
+        if not (root / "complete.json").is_file():
+            continue
+        complete = json.loads((root / "complete.json").read_text(encoding="utf-8"))
+        daily = _stage3_daily_rows(strategy, rows, complete["daily_inputs"], starting_balance=starting_balance)
+        _write_csv(root / "trades.csv", rows, ("strategy_id", "canonical_trade_id"))
+        _write_csv(root / "daily-summary.csv", daily, ("strategy_id", "trading_date"))
+        daily_by_strategy.extend(daily)
+    overall_daily: list[dict[str, Any]] = []
+    by_day: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in realized_rows:
+        by_day[str(row["trading_date"])].append(row)
+    overall_balance = overall_peak = float(starting_balance)
+    for day, _path in period.sessions:
+        rows = sorted(by_day[day], key=_stage3_realization_key); pnl = [float(row["pnl_usd"]) for row in rows]
+        latest = rows[-1] if rows else None
+        start = float(rows[0]["overall_balance_before_trade"]) if rows else overall_balance
+        end = float(latest["overall_balance_after_trade"]) if latest is not None else overall_balance
+        overall_peak = float(latest["overall_peak_balance"]) if latest is not None else overall_peak
+        drawdown = overall_peak - end
+        overall_daily.append({
+            "portfolio_type": STAGE3_PORTFOLIO_TYPE, "trading_date": day,
+            "strategies_with_trades": len({row["strategy_id"] for row in rows}), "total_trades": len(rows),
+            "wins": sum(value > 0 for value in pnl), "losses": sum(value < 0 for value in pnl), "breakeven": sum(value == 0 for value in pnl),
+            "total_r": sum(float(row["result_r"] or 0.0) for row in rows), "pnl_usd": sum(pnl),
+            "overall_starting_balance_for_day": start, "overall_ending_balance_for_day": end,
+            "overall_peak_balance_to_date": overall_peak, "overall_drawdown_usd_to_date": drawdown,
+            "overall_drawdown_pct_to_date": (drawdown / overall_peak * 100.0) if overall_peak else 0.0,
+            "target_exits": sum(row["exit_reason"] == "TARGET" for row in rows),
+            "stop_exits": sum(row["exit_reason"] == "STOP" for row in rows),
+            "hard_flat_exits": sum(str(row["exit_reason"]).startswith("HARD_") for row in rows),
+            "unresolved_trades": sum(int(row["unresolved_trades"]) for row in daily_by_strategy if str(row["trading_date"]) == day),
+        })
+        overall_balance = end
+    pnl = [float(row["pnl_usd"]) for row in realized_rows]
+    gross_profit, gross_loss = sum(value for value in pnl if value > 0), -sum(value for value in pnl if value < 0)
+    ending = float(realized_rows[-1]["overall_balance_after_trade"]) if realized_rows else starting_balance
+    overall = {
+        "portfolio_type": STAGE3_PORTFOLIO_TYPE, "warning": STAGE3_PORTFOLIO_WARNING,
+        "starting_balance_usd": starting_balance, "ending_balance_usd": ending,
+        "return_pct": (ending - starting_balance) / starting_balance * 100.0, "total_pnl_usd": sum(pnl),
+        "total_r": sum(float(row["result_r"] or 0.0) for row in realized_rows), "total_trades": len(realized_rows),
+        "wins": sum(value > 0 for value in pnl), "losses": sum(value < 0 for value in pnl),
+        "win_rate": sum(value > 0 for value in pnl) / len(pnl) if pnl else 0.0,
+        "max_drawdown_usd": max((float(row["overall_drawdown_usd"]) for row in realized_rows), default=0.0),
+        "max_drawdown_pct": max((float(row["overall_drawdown_pct"]) for row in realized_rows), default=0.0),
+        "profit_factor": gross_profit / gross_loss if gross_loss else None, "number_of_strategies": len(strategies),
+        "strategies_with_at_least_one_trade": len({row["strategy_id"] for row in realized_rows}),
+        "first_trade_timestamp": None if not entry_rows else entry_rows[0]["entry_timestamp"],
+        "last_trade_timestamp": None if not realized_rows else realized_rows[-1]["exit_timestamp"],
+        "realized_pnl_ordering": "exit_timestamp, entry_timestamp, strategy_id, trade_number_global_for_strategy",
+    }
+    _write_csv(output_root / "research-trades.csv", entry_rows, ("strategy_id", "global_trade_sequence"))
+    _write_csv(output_root / "research-daily-summary.csv", daily_by_strategy, ("strategy_id", "trading_date"))
+    _write_csv(output_root / "research-overall-daily-summary.csv", overall_daily, ("portfolio_type", "trading_date"))
+    _write_csv(output_root / "research-stage3-strategy-summary.csv", strategy_summaries, ("strategy_id",))
+    _write_csv(output_root / "research-stage3-overall-summary.csv", [overall], ("portfolio_type",))
+    _write_stage3_markdown(output_root / "research-trade-journal.md", entry_rows, overall)
+    hashes = _period_input_hashes(period)
+    run_identity = _sha({"period_id": period.period_id, "strategies": [item.__dict__ for item in strategies],
+                         "selection": selection, "starting_balance_usd": starting_balance, "input_artifact_hashes": hashes,
+                         "stage2_config_identities": [item.get("stage2_config_identity") for item in strategy_payloads]})
+    payload = {
+        "run_identity": run_identity, "selection_type": selection, "strategy_list": [item.strategy_id for item in strategies],
+        "session_dates": [day for day, _path in period.sessions], "sessions": [{"date": day, "event_tape": str(path)} for day, path in period.sessions],
+        "starting_balance_usd": starting_balance, "input_artifact_hashes": hashes, "strategies": strategy_payloads,
+        "overall_aggregated_research_portfolio": overall, "trade_journal_path": str(output_root / "research-trades.csv"),
+        "strategy_daily_summary_path": str(output_root / "research-daily-summary.csv"),
+        "overall_daily_summary_path": str(output_root / "research-overall-daily-summary.csv"),
+        "completion_resume_status": [{"strategy_id": item.strategy_id, "status": status_by_id.get(item.strategy_id, {}).get("status", "NOT_RUN")} for item in strategies],
+        "trades_embedded": False,
+    }
+    _write_json(output_root / "research-stage3-summary.json", payload)
+    return {"run_identity": run_identity, "overall": overall, "strategy_summaries": strategy_summaries}
+
+
+def run_stage3(*, strategies_path: Path, period_path: Path, stage1_root: Path, stage2_root: Path,
+               output_root: Path, starting_balance_usd: float = STAGE3_STARTING_BALANCE_USD,
+               selection: str = "robust-best", workers: int = 1) -> dict[str, Any]:
+    selection = _stage3_selection_key(selection)
+    starting_balance = float(starting_balance_usd)
+    if not math.isfinite(starting_balance) or starting_balance <= 0:
+        raise MultiStrategyResearchError("Stage 3 starting balance must be a positive finite USD amount")
+    if workers < 1:
+        raise MultiStrategyResearchError("workers must be at least one")
+    strategies, period = load_strategy_manifest(strategies_path), load_period_manifest(period_path)
+    output_root = output_root.resolve(); output_root.mkdir(parents=True, exist_ok=True)
+    args = [(item, period, output_root, stage1_root.resolve(), stage2_root.resolve(), selection, starting_balance) for item in strategies]
+    if workers > 1:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(_run_stage3_worker, args))
+    else:
+        results = [_run_stage3_worker(item) for item in args]
+    results.sort(key=lambda item: item["strategy_id"])
+    global_summary = _generate_stage3_global(strategies, period, output_root, results,
+                                             selection=selection, starting_balance=starting_balance)
+    summary = {"stage": "stage3", "status": "COMPLETE", "selection_type": selection,
+               "starting_balance_usd": starting_balance, "portfolio_type": STAGE3_PORTFOLIO_TYPE,
+               "portfolio_warning": STAGE3_PORTFOLIO_WARNING, "strategies": results,
+               "global_summary": {key: value for key, value in global_summary.items() if key != "strategy_summaries"},
+               "workers": workers, "evidence_label": EVIDENCE_LABEL}
+    _write_json(output_root / "stage3-summary.json", summary)
+    return summary
+
+
 def audit_candidate_executability(*, strategies_path: Path) -> dict[str, Any]:
     """Perform a no-data capability audit of the selected strategy manifest."""
     rows = levels.candidate_executability_audit(load_strategy_manifest(strategies_path))
@@ -925,6 +1328,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     optimize.add_argument("--strategies", type=Path, required=True); optimize.add_argument("--period", type=Path, required=True)
     optimize.add_argument("--stage1-results", type=Path, required=True); optimize.add_argument("--output", type=Path, required=True)
     optimize.add_argument("--workers", type=int, default=1)
+    journal = sub.add_parser("multi-strategy-trade-journal", help="Stage 3 frozen-selection trade journal from causal tapes")
+    journal.add_argument("--strategies", type=Path, required=True); journal.add_argument("--period", type=Path, required=True)
+    journal.add_argument("--stage1-results", type=Path, required=True); journal.add_argument("--stage2-results", type=Path, required=True)
+    journal.add_argument("--output", type=Path, required=True); journal.add_argument("--starting-balance-usd", type=float, default=STAGE3_STARTING_BALANCE_USD)
+    journal.add_argument("--selection", choices=("robust-best", "raw-best"), default="robust-best"); journal.add_argument("--workers", type=int, default=1)
     audit = sub.add_parser("multi-strategy-level-audit", help="Offline structural-level capability audit; opens no market data")
     audit.add_argument("--strategies", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -935,8 +1343,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = audit_candidate_executability(strategies_path=args.strategies)
         elif args.command == "multi-strategy-screen":
             result = run_stage1(strategies_path=args.strategies, period_path=args.period, output_root=args.output, workers=args.workers)
-        else:
+        elif args.command == "multi-strategy-optimize":
             result = run_stage2(strategies_path=args.strategies, period_path=args.period, stage1_root=args.stage1_results, output_root=args.output, workers=args.workers)
+        else:
+            result = run_stage3(strategies_path=args.strategies, period_path=args.period, stage1_root=args.stage1_results,
+                                stage2_root=args.stage2_results, output_root=args.output,
+                                starting_balance_usd=args.starting_balance_usd, selection=args.selection, workers=args.workers)
     except Exception as exc:
         print(f"ERROR: {exc}")
         return 1

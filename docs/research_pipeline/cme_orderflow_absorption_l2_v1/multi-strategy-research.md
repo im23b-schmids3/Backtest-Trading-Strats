@@ -106,3 +106,31 @@ those completed files and never cause a causal-tape replay.
 Re-running `multi-strategy-optimize` with an unchanged completed identity
 regenerates missing compact exports from result files and reports `REUSED`; it
 does not rerun the optimization.
+
+## Stage 3 frozen trade journal
+
+`multi-strategy-trade-journal` replays exactly one stored Stage-2 configuration
+per strategy from the existing causal interaction and event-tape artifacts. Its
+default `--selection robust-best` reads the persisted robust winner; the only
+alternative is explicit `--selection raw-best`. It never reoptimizes weights,
+Q, RR, or stops, and it does not open raw DBN data.
+
+```text
+cme-l2-research multi-strategy-trade-journal --strategies strategies.yaml --period period.yaml --stage1-results stage1 --stage2-results stage2 --output stage3 --starting-balance-usd 50000.00 --selection robust-best
+```
+
+Every strategy has an independent starting balance of `$50,000.00` by default.
+`research-trades.csv` is canonically entry-sorted, while the added
+`overall_realization_sequence` applies aggregate accounting by
+`exit_timestamp, entry_timestamp, strategy_id, strategy sequence`. Therefore
+an earlier entry cannot book PnL before it closes. The shared balance is labeled
+`AGGREGATED_RESEARCH_PORTFOLIO` and explicitly is **not** a simultaneous,
+capital-constrained portfolio simulation: it never blocks, resizes, or changes
+an individual strategy trade.
+
+The Stage-3 root contains `research-trades.csv`, strategy and overall daily
+summaries, strategy and overall final summaries, a compact JSON summary, and a
+human-readable Markdown journal. Each strategy also owns `trades.csv`,
+`daily-summary.csv`, and `complete.json`. Matching completed strategy replays
+are reused; the global accounting outputs are always regenerated
+deterministically from those independent strategy journals.
