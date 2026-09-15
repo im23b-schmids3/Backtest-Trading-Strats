@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 fib-backtester = "fib_backtester.cli:main"
+cme-l2-research = "research_pipeline.cme_orderflow_absorption_l2_v1.multi_strategy_research:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

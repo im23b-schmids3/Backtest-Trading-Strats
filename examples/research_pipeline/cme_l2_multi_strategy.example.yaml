@@ -1,0 +1,44 @@
+# Copy this pair of manifests beside a completed causal-tape build.  Paths are
+# relative to the period manifest, not this example file.
+schema_version: 1
+strategies:
+  - strategy_id: CMEOrderflowAbsorption.ES_L2_EUROPE_PRIOR_HIGH
+    session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_HIGH
+    long_short_behavior: shared_absorption_reversal
+    uses_shared_absorption_engine: true
+    trigger_options: {}
+    baseline_quality: common_stage1_median_w04
+    allowed_research_parameters:
+      rr: [1.5, 2.0, 2.5, 3.0, 4.0]
+      stop_buffer_ticks: [3, 5, 7]
+  - strategy_id: CMEOrderflowAbsorption.ES_L2_EUROPE_CURRENT_HIGH_SWEEP
+    session: EUROPE
+    reference_level: CURRENT_EUROPE_HIGH_SWEEP
+    long_short_behavior: shared_absorption_reversal
+    uses_shared_absorption_engine: true
+    trigger_options: {}
+    baseline_quality: common_stage1_median_w04
+    allowed_research_parameters:
+      rr: [1.5, 2.0, 2.5, 3.0, 4.0]
+      stop_buffer_ticks: [3, 5, 7]
+  - strategy_id: CMEOrderflowAbsorption.ES_L2_EUROPE_PRIOR_VAH
+    session: EUROPE
+    reference_level: PRIOR_EUROPE_SESSION_VAH
+    long_short_behavior: shared_absorption_reversal
+    uses_shared_absorption_engine: true
+    trigger_options: {}
+    baseline_quality: common_stage1_median_w04
+    allowed_research_parameters:
+      rr: [1.5, 2.0, 2.5, 3.0, 4.0]
+      stop_buffer_ticks: [3, 5, 7]
+  - strategy_id: CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY
+    session: NEW_YORK_RTH
+    reference_level: PRIOR_RTH_POC
+    long_short_behavior: shared_absorption_reversal
+    uses_shared_absorption_engine: true
+    trigger_options: {}
+    baseline_quality: common_stage1_median_w04
+    allowed_research_parameters:
+      rr: [1.5, 2.0, 2.5, 3.0, 4.0]
+      stop_buffer_ticks: [3, 5, 7]

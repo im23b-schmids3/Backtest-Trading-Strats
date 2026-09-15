@@ -748,16 +748,28 @@ class L2InteractionEngine:
         self.advance(timestamp_ns, rth_end=True)
 
 
-def initial_prices(direction: str, bid: float, ask: float, zone_low: float, zone_high: float) -> dict[str, float | str]:
-    """Frozen 5-tick zone stop, 3R target, and one-tick adverse fills."""
+def initial_prices(
+    direction: str, bid: float, ask: float, zone_low: float, zone_high: float,
+    *, stop_buffer_ticks: int = STOP_BUFFER_TICKS, target_r: float = TARGET_R,
+) -> dict[str, float | str]:
+    """Zone stop and R target with one-tick adverse fills.
+
+    The defaults preserve the frozen 5-tick / 3R contract.  Research callers
+    may vary only that same geometry: long stops remain below ``zone_low`` and
+    short stops remain above ``zone_high``.
+    """
     bid, ask, zone_low, zone_high = map(_point_price, (bid, ask, zone_low, zone_high))
     if ask <= bid: raise L2ValidationError("invalid executable BBO")
+    if int(stop_buffer_ticks) != stop_buffer_ticks or stop_buffer_ticks < 0:
+        raise L2ValidationError("stop buffer ticks must be a non-negative integer")
+    if not isfinite(float(target_r)) or float(target_r) <= 0:
+        raise L2ValidationError("target R must be positive")
     if direction == "BUYER_ABSORPTION":
-        entry, stop = ask + TICK, zone_low - STOP_BUFFER_TICKS * TICK
-        return {"direction": "LONG", "entry_reference": ask, "entry": entry, "stop": stop, "stop_exit": stop - TICK, "target": entry + TARGET_R * (entry - stop)}
+        entry, stop = ask + TICK, zone_low - stop_buffer_ticks * TICK
+        return {"direction": "LONG", "entry_reference": ask, "entry": entry, "stop": stop, "stop_exit": stop - TICK, "target": entry + target_r * (entry - stop)}
     if direction == "SELLER_ABSORPTION":
-        entry, stop = bid - TICK, zone_high + STOP_BUFFER_TICKS * TICK
-        return {"direction": "SHORT", "entry_reference": bid, "entry": entry, "stop": stop, "stop_exit": stop + TICK, "target": entry - TARGET_R * (stop - entry)}
+        entry, stop = bid - TICK, zone_high + stop_buffer_ticks * TICK
+        return {"direction": "SHORT", "entry_reference": bid, "entry": entry, "stop": stop, "stop_exit": stop + TICK, "target": entry - target_r * (stop - entry)}
     raise L2ValidationError("unknown absorption direction")
 
 

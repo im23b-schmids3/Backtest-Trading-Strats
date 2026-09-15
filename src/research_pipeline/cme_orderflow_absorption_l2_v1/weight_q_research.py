@@ -37,6 +37,8 @@ from .model import (
     ES_POINT_VALUE,
     MES_COMMISSION,
     MES_POINT_VALUE,
+    STOP_BUFFER_TICKS,
+    TARGET_R,
     TICK,
     initial_prices,
     size_for_instrument,
@@ -278,8 +280,16 @@ def _boundary_classification(book_state: str) -> str:
 class SessionCausalTape:
     """Compact, read-only execution index for one causal event partition."""
 
-    def __init__(self, day: str, rows: Iterable[Mapping[str, Any]]) -> None:
+    def __init__(
+        self, day: str, rows: Iterable[Mapping[str, Any]], *,
+        stop_buffer_ticks: int = STOP_BUFFER_TICKS,
+        target_r: float = TARGET_R,
+    ) -> None:
         self.day = day
+        self.stop_buffer_ticks = int(stop_buffer_ticks)
+        self.target_r = float(target_r)
+        if self.stop_buffer_ticks < 0 or self.target_r <= 0:
+            raise WeightQResearchError("invalid execution geometry")
         self.ordinals = array("q")
         self.timestamps = array("q")
         self.streams = bytearray()
@@ -296,7 +306,7 @@ class SessionCausalTape:
         boundary_rows: list[dict[str, Any]] = []
         self.hard_event: dict[str, Any] | None = None
         self.source_end_event: dict[str, Any] | None = None
-        self._outcome_cache: dict[tuple[str, int], EntryOutcome] = {}
+        self._outcome_cache: dict[tuple[str, int, int, float], EntryOutcome] = {}
         expected_ordinal = 0
         for row in rows:
             ordinal = int(row["event_ordinal"])
@@ -411,10 +421,16 @@ class SessionCausalTape:
         }
 
     @classmethod
-    def from_parquet(cls, day: str, path: Path) -> "SessionCausalTape":
+    def from_parquet(
+        cls, day: str, path: Path, *, stop_buffer_ticks: int = STOP_BUFFER_TICKS,
+        target_r: float = TARGET_R,
+    ) -> "SessionCausalTape":
         # The canonical iterator opens only Parquet, closes every reader, and
         # has no DBN or network dependency.
-        return cls(day, master._iter_parquet_rows(path))
+        return cls(
+            day, master._iter_parquet_rows(path), stop_buffer_ticks=stop_buffer_ticks,
+            target_r=target_r,
+        )
 
     def regular_index(self, event_ordinal: int) -> int:
         index = bisect.bisect_left(self.ordinals, event_ordinal)
@@ -493,7 +509,7 @@ class SessionCausalTape:
 
     def entry_outcome(self, interaction: Mapping[str, Any], event_ordinal: int) -> EntryOutcome:
         identifier = str(interaction["interaction_id"])
-        cache_key = (identifier, event_ordinal)
+        cache_key = (identifier, event_ordinal, self.stop_buffer_ticks, self.target_r)
         cached = self._outcome_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -506,6 +522,7 @@ class SessionCausalTape:
         prices = initial_prices(
             direction, self.es_bid[index], self.es_ask[index],
             float(interaction["zone_low"]), float(interaction["zone_high"]),
+            stop_buffer_ticks=self.stop_buffer_ticks, target_r=self.target_r,
         )
         sizing = size_for_instrument(prices, "ES")
         instrument = "ES"
@@ -517,6 +534,7 @@ class SessionCausalTape:
             prices = initial_prices(
                 direction, self.mes_bid[index], self.mes_ask[index],
                 float(interaction["zone_low"]), float(interaction["zone_high"]),
+                stop_buffer_ticks=self.stop_buffer_ticks, target_r=self.target_r,
             )
             sizing = size_for_instrument(prices, "MES")
             instrument = "MES"

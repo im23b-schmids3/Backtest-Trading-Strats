@@ -1,0 +1,9 @@
+# All inputs are completed, validated causal-tape artifacts.  This command
+# never discovers or opens DBN source data.
+schema_version: 1
+period_id: DEVELOPMENT_PERIOD_NAME
+interaction_master: path/to/interaction-master.parquet
+interaction_index: path/to/interaction-event-index.parquet
+sessions:
+  - date: YYYY-MM-DD
+    event_tape: path/to/causal-event-tape/YYYY-MM-DD.parquet
