@@ -41,6 +41,13 @@ def test_multiple_depth_parses_bid_and_ask_and_preserves_identity() -> None:
     assert ask.security_id == "101" and ask.ticker == "ESH3"
 
 
+def test_multiple_depth_zero_placeholders_are_empty_levels() -> None:
+    row = _depth(side="B")
+    row["L3Price"], row["L3Size"], row["L3Orders"] = "0.0000", "0", "0"
+    parsed = algoseek.parse_multiple_depth_row(row, source_file="depth.csv", source_index=1)
+    assert len(parsed.levels) == 2
+
+
 def test_latest_side_book_is_incomplete_then_executable() -> None:
     book = algoseek.LatestSideBook()
     assert book.apply(algoseek.parse_multiple_depth_row(_depth(side="B"), source_file="d", source_index=1)) is None
@@ -60,6 +67,16 @@ def test_taq_aggressor_and_bbo_parsing_and_es_mes_separation() -> None:
     assert (bid.event_kind, ask.event_kind, bid.instrument) == ("BID", "ASK", "MES")
 
 
+def test_non_market_zero_price_control_row_is_ignored_but_parses() -> None:
+    row = algoseek.parse_taq_row(_taq(event_type="EMPTY BOOK FINAL", price="0.0000", quantity="0"), instrument="MES", source_file="mes", source_index=1)
+    assert row.event_kind == "OTHER" and row.price == 0.0
+
+
+def test_non_market_non_tick_control_price_is_ignored_but_parses() -> None:
+    row = algoseek.parse_taq_row(_taq(event_type="FIXING PRICE", price="3871.3800", quantity="0"), instrument="ES", source_file="es", source_index=1)
+    assert row.event_kind == "OTHER" and row.price == 3871.38
+
+
 def test_contracts_remain_separate_in_rows() -> None:
     march = algoseek.parse_taq_row(_taq(event_type="TRADE AGRESSOR ON BUY", ticker="ESH3", security="101"), instrument="ES", source_file="a", source_index=1)
     june = algoseek.parse_taq_row(_taq(event_type="TRADE AGRESSOR ON BUY", ticker="ESM3", security="202"), instrument="ES", source_file="b", source_index=1)
@@ -68,6 +85,15 @@ def test_contracts_remain_separate_in_rows() -> None:
     mes = algoseek.parse_taq_row(_taq(event_type="QUOTE BID", ticker="MESH3", security="9", quantity="0"), instrument="MES", source_file="mes", source_index=1)
     with pytest.raises(algoseek.AlgoseekAdapterError, match="multiple contract"):
         list(algoseek.canonical_events(es_depth=[depth], es_taq=[march, june], mes_taq=[mes]))
+
+
+def test_dataset_specific_es_security_ids_are_allowed_when_ticker_matches() -> None:
+    depth = algoseek.parse_multiple_depth_row(_depth(side="B", security="805512667"), source_file="depth", source_index=1)
+    taq = algoseek.parse_taq_row(_taq(event_type="QUOTE BID", security="206299", quantity="0"), instrument="ES", source_file="es", source_index=1)
+    mes = algoseek.parse_taq_row(_taq(event_type="QUOTE BID", ticker="MESH3", security="2080", quantity="0"), instrument="MES", source_file="mes", source_index=1)
+    identities = algoseek.validate_session_contracts(es_depth=[depth], es_taq=[taq], mes_taq=[mes])
+    assert identities["ES_DEPTH"] == ("ESH3", "805512667")
+    assert identities["ES_TAQ"] == ("ESH3", "206299")
 
 
 def test_cst_to_utc_and_dst_fail_closed_behavior() -> None:
@@ -133,6 +159,13 @@ def test_same_timestamp_duplicate_depth_rows_are_retained_not_collapsed() -> Non
     assert [item["source_index"] for item in depth_event.raw_provenance] == [1, 2, 3]
 
 
+def test_depth_batching_never_merges_adjacent_distinct_timestamps() -> None:
+    first = algoseek.parse_multiple_depth_row(_depth(side="B", timestamp="2023-03-10 09:30:00"), source_file="depth", source_index=1)
+    second = algoseek.parse_multiple_depth_row(_depth(side="S", timestamp="2023-03-10 09:30:01"), source_file="depth", source_index=2)
+    groups = list(algoseek._depth_groups([first, second]))
+    assert [len(group) for group in groups if isinstance(group, list)] == [1, 1]
+
+
 def test_batched_depth_final_state_is_invariant_to_bid_ask_input_order() -> None:
     timestamp = "2023-03-10 09:30:00"
     bid = algoseek.parse_multiple_depth_row(_depth(side="B", timestamp=timestamp), source_file="depth", source_index=1)
@@ -181,3 +214,91 @@ def test_audit_reports_ties_and_does_not_run_strategy(tmp_path: Path) -> None:
 
 def test_databento_native_adapter_remains_available() -> None:
     assert databento_native.NativeMBP10Adapter.__name__ == "NativeMBP10Adapter"
+
+
+def test_streaming_paths_batch_depth_across_chunk_boundary_and_flush_eof(tmp_path: Path) -> None:
+    first, second, es, mes = (tmp_path / name for name in ("depth-1.csv", "depth-2.csv", "es.csv", "mes.csv"))
+    _write(first, [_depth(side="B")]); _write(second, [_depth(side="S")])
+    _write(es, [_taq(event_type="QUOTE BID", quantity="0", price="4000.00")])
+    _write(mes, [_taq(event_type="QUOTE BID", ticker="MESH3", quantity="0", price="4000.00")])
+    metrics = algoseek.StreamingMetrics()
+    events = list(algoseek.iter_canonical_events_from_paths(
+        es_depth_paths=[first, second], es_taq_paths=[es], mes_taq_paths=[mes], metrics=metrics,
+    ))
+    depth = next(event for event in events if event.kind == "ES_DEPTH")
+    assert depth.raw_event_count == 2 and depth.snapshot is not None
+    assert metrics.max_depth_timestamp_rows == 2 and metrics.canonical_depth_states == 1
+
+
+def test_streaming_taq_generic_trade_is_profile_only_and_aggressors_remain_canonical(tmp_path: Path) -> None:
+    depth, es, mes = (tmp_path / name for name in ("depth.csv", "es.csv", "mes.csv"))
+    _write(depth, [_depth(side="B"), _depth(side="S")])
+    _write(es, [
+        _taq(event_type="TRADE", price="4000.00", quantity="7"),
+        _taq(event_type="TRADE AGRESSOR ON BUY", price="4000.25", quantity="3"),
+    ])
+    _write(mes, [_taq(event_type="QUOTE BID", ticker="MESH3", quantity="0", price="4000.00")])
+    profile, metrics = algoseek.StreamingProfile(), algoseek.StreamingMetrics()
+    events = list(algoseek.iter_canonical_events_from_paths(
+        es_depth_paths=[depth], es_taq_paths=[es], mes_taq_paths=[mes], profile=profile, metrics=metrics,
+    ))
+    trades = [event for event in events if event.kind == "ES_TRADE"]
+    assert len(trades) == 1 and trades[0].execution is not None and trades[0].execution.aggressor == "BUY"
+    assert profile.result() == {"POC": 4000.0, "VAH": 4000.0, "VAL": 4000.0, "HIGH": 4000.25, "LOW": 4000.0}
+    assert metrics.es_provider_trades == 2 and metrics.generic_trades == 1 and metrics.explicit_aggressor_trades == 1
+
+
+def test_zero_quantity_generic_trade_is_non_profile_provider_record_not_an_execution() -> None:
+    generic = algoseek.parse_taq_row(_taq(event_type="TRADE", quantity="0"), instrument="ES", source_file="es", source_index=1)
+    profile = algoseek.StreamingProfile(); profile.observe(generic)
+    assert generic.event_kind == "TRADE" and not generic.aggression_eligible
+    with pytest.raises(algoseek.AlgoseekAdapterError, match="ES executions"):
+        profile.result()
+
+
+def test_streaming_three_way_same_timestamp_order_is_deterministic(tmp_path: Path) -> None:
+    depth, es, mes = (tmp_path / name for name in ("depth.csv", "es.csv", "mes.csv"))
+    _write(depth, [_depth(side="S"), _depth(side="B")])
+    _write(es, [
+        _taq(event_type="QUOTE BID", quantity="0", price="4000.00"),
+        _taq(event_type="TRADE AGRESSOR ON SELL", price="4000.00", quantity="2"),
+    ])
+    _write(mes, [_taq(event_type="QUOTE BID", ticker="MESH3", quantity="0", price="4000.00")])
+    inputs = dict(es_depth_paths=[depth], es_taq_paths=[es], mes_taq_paths=[mes])
+    first = [(event.kind, event.source_index) for event in algoseek.iter_canonical_events_from_paths(**inputs)]
+    second = [(event.kind, event.source_index) for event in algoseek.iter_canonical_events_from_paths(**inputs)]
+    assert first == second == [("MES_BBO", 1), ("ES_DEPTH", 2), ("ES_TRADE", 2), ("ES_BBO", 1)]
+
+
+def test_streaming_rejects_timestamp_regression_across_chunk_boundary(tmp_path: Path) -> None:
+    first, second = tmp_path / "one.csv", tmp_path / "two.csv"
+    _write(first, [_depth(side="B", timestamp="2023-03-10 09:30:01")])
+    _write(second, [_depth(side="S", timestamp="2023-03-10 09:30:00")])
+    with pytest.raises(algoseek.AlgoseekAdapterError, match="timestamps decrease"):
+        list(algoseek.iter_multiple_depth_paths([first, second]))
+
+
+def test_streaming_empty_and_malformed_csvs_fail_or_finish_deterministically(tmp_path: Path) -> None:
+    empty, malformed = tmp_path / "empty.csv", tmp_path / "malformed.csv"
+    empty.write_text(",".join(_depth(side="B")) + "\n", encoding="utf-8")
+    malformed.write_text('EventDateTime,Ticker,SecurityID,Side,Flags\n"unterminated', encoding="utf-8")
+    assert list(algoseek.iter_multiple_depth(empty)) == []
+    with pytest.raises((algoseek.AlgoseekAdapterError, csv.Error)):
+        list(algoseek.iter_multiple_depth(malformed))
+
+
+def test_streaming_compatibility_wrapper_equals_streaming_iterator() -> None:
+    depth = [algoseek.parse_multiple_depth_row(_depth(side=side), source_file="depth", source_index=index) for index, side in enumerate(("B", "S"), 1)]
+    es = [algoseek.parse_taq_row(_taq(event_type="TRADE AGRESSOR ON BUY"), instrument="ES", source_file="es", source_index=1)]
+    mes = [algoseek.parse_taq_row(_taq(event_type="QUOTE BID", ticker="MESH3", quantity="0"), instrument="MES", source_file="mes", source_index=1)]
+    assert list(algoseek.canonical_events(es_depth=depth, es_taq=es, mes_taq=mes)) == list(
+        algoseek.iter_canonical_events(es_depth=depth, es_taq=es, mes_taq=mes)
+    )
+
+
+def test_streaming_atomic_jsonl_writer_does_not_publish_partial_artifact(tmp_path: Path) -> None:
+    output = tmp_path / "session.jsonl"
+    event = algoseek.CanonicalEvent(1, "ES_BBO", "es", 1, "ESH3", "1")
+    algoseek.write_canonical_jsonl(events=[event], output_path=output, completion_manifest={"status": "COMPLETE"})
+    assert output.read_text(encoding="utf-8").count("\n") == 1
+    assert output.with_suffix(".jsonl.complete.json").exists()
