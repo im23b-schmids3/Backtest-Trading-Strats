@@ -97,10 +97,52 @@ def test_canonical_events_follow_mes_depth_trade_es_bbo_order_and_keep_stage_con
     es_taq = [algoseek.parse_taq_row(_taq(event_type=kind, timestamp=timestamp, price=price, quantity="1" if "TRADE" in kind else "0"), instrument="ES", source_file="es.csv", source_index=index) for index, (kind, price) in enumerate((("TRADE AGRESSOR ON BUY", "4000.25"), ("QUOTE BID", "4000.00")), 1)]
     mes_taq = [algoseek.parse_taq_row(_taq(event_type="QUOTE BID", timestamp=timestamp, price="4000.00", quantity="0", ticker="MESH3"), instrument="MES", source_file="mes.csv", source_index=1)]
     events = list(algoseek.canonical_events(es_depth=depth, es_taq=es_taq, mes_taq=mes_taq))
-    assert [event.kind for event in events] == ["MES_BBO", "ES_DEPTH", "ES_DEPTH", "ES_TRADE", "ES_BBO"]
-    assert events[3].execution is not None and events[3].snapshot is not None
-    assert events[3].snapshot.__class__.__name__ == "MBP10Snapshot"
-    assert events[3].execution.__class__.__name__ == "Execution"
+    assert [event.kind for event in events] == ["MES_BBO", "ES_DEPTH", "ES_TRADE", "ES_BBO"]
+    assert events[1].raw_event_count == 2
+    assert [item["side"] for item in events[1].raw_provenance] == ["B", "A"]
+    assert events[2].execution is not None and events[2].snapshot is not None
+    assert events[2].snapshot.__class__.__name__ == "MBP10Snapshot"
+    assert events[2].execution.__class__.__name__ == "Execution"
+
+
+def test_same_timestamp_depth_exposes_final_state_not_transient_locked_state() -> None:
+    timestamp = "2023-03-10 09:30:00"
+    bid = algoseek.parse_multiple_depth_row(_depth(side="B", timestamp=timestamp), source_file="z", source_index=2)
+    ask = algoseek.parse_multiple_depth_row(_depth(side="S", timestamp=timestamp), source_file="a", source_index=1)
+    mes = algoseek.parse_taq_row(_taq(event_type="QUOTE BID", timestamp=timestamp, ticker="MESH3", quantity="0"), instrument="MES", source_file="mes", source_index=1)
+    es_trade = algoseek.parse_taq_row(_taq(event_type="TRADE AGRESSOR ON BUY", timestamp=timestamp), instrument="ES", source_file="trade", source_index=1)
+    events = list(algoseek.canonical_events(es_depth=[bid, ask], es_taq=[es_trade], mes_taq=[mes]))
+    depth_event = next(event for event in events if event.kind == "ES_DEPTH")
+    assert depth_event.book_state == "EXECUTABLE"
+    assert depth_event.snapshot is not None
+    assert depth_event.raw_event_count == 2
+    assert [item["source_file"] for item in depth_event.raw_provenance] == ["a", "z"]
+
+
+def test_same_timestamp_duplicate_depth_rows_are_retained_not_collapsed() -> None:
+    timestamp = "2023-03-10 09:30:00"
+    bid = algoseek.parse_multiple_depth_row(_depth(side="B", timestamp=timestamp), source_file="depth", source_index=1)
+    ask = algoseek.parse_multiple_depth_row(_depth(side="S", timestamp=timestamp), source_file="depth", source_index=2)
+    duplicate = algoseek.parse_multiple_depth_row(_depth(side="S", timestamp=timestamp), source_file="depth", source_index=3)
+    mes = algoseek.parse_taq_row(_taq(event_type="QUOTE BID", timestamp=timestamp, ticker="MESH3", quantity="0"), instrument="MES", source_file="mes", source_index=1)
+    es_quote = algoseek.parse_taq_row(_taq(event_type="QUOTE BID", timestamp=timestamp, quantity="0"), instrument="ES", source_file="es", source_index=1)
+    events = list(algoseek.canonical_events(es_depth=[bid, ask, duplicate], es_taq=[es_quote], mes_taq=[mes]))
+    depth_event = next(event for event in events if event.kind == "ES_DEPTH")
+    assert depth_event.raw_event_count == 3
+    assert len(depth_event.raw_provenance) == 3
+    assert [item["source_index"] for item in depth_event.raw_provenance] == [1, 2, 3]
+
+
+def test_batched_depth_final_state_is_invariant_to_bid_ask_input_order() -> None:
+    timestamp = "2023-03-10 09:30:00"
+    bid = algoseek.parse_multiple_depth_row(_depth(side="B", timestamp=timestamp), source_file="depth", source_index=1)
+    ask = algoseek.parse_multiple_depth_row(_depth(side="S", timestamp=timestamp), source_file="depth", source_index=2)
+    mes = algoseek.parse_taq_row(_taq(event_type="QUOTE BID", timestamp=timestamp, ticker="MESH3", quantity="0"), instrument="MES", source_file="mes", source_index=1)
+    es_quote = algoseek.parse_taq_row(_taq(event_type="QUOTE BID", timestamp=timestamp, quantity="0"), instrument="ES", source_file="es", source_index=1)
+    forward = next(event for event in algoseek.canonical_events(es_depth=[bid, ask], es_taq=[es_quote], mes_taq=[mes]) if event.kind == "ES_DEPTH")
+    reverse = next(event for event in algoseek.canonical_events(es_depth=[ask, bid], es_taq=[es_quote], mes_taq=[mes]) if event.kind == "ES_DEPTH")
+    assert forward.snapshot == reverse.snapshot
+    assert forward.book_state == reverse.book_state == "EXECUTABLE"
 
 
 def test_profile_uses_executions_not_quote_volume() -> None:
@@ -117,7 +159,8 @@ def test_provenance_and_session_ownership_fail_closed(tmp_path: Path) -> None:
     source = tmp_path / "source.csv"; source.write_text("x\n1\n", encoding="utf-8")
     provenance = algoseek.provider_provenance(files=[source], ticker="ESH3", security_id="101")
     assert provenance["provider_semantics"] == "ALGOSEEK_CAUSAL_VARIANT"
-    assert provenance["ordering_policy_id"] == "algoseek-causal-order-v1"
+    assert provenance["ordering_policy_id"] == "algoseek-causal-order-v2"
+    assert provenance["depth_assembly_policy_id"] == "algoseek-depth-assembly-v2-final-state-with-raw-provenance"
     assert "NO_MBO_ADD_CANCEL_FILL_MODIFY_RESET_PROVENANCE" in provenance["known_semantic_limitations"]
     assert algoseek.validate_session_provider_ownership([{"date": "2023-03-10", "provider": "ALGOSEEK"}]) == {"2023-03-10": "ALGOSEEK"}
     with pytest.raises(algoseek.AlgoseekAdapterError, match="duplicate"):
@@ -132,6 +175,7 @@ def test_audit_reports_ties_and_does_not_run_strategy(tmp_path: Path) -> None:
     report = algoseek.audit_inputs(es_depth_paths=[depth], es_taq_paths=[es], mes_taq_paths=[mes])
     assert report["status"] == "ALGOSEEK_INPUT_AUDIT_COMPLETE"
     assert report["causal_tie_diagnostics"]["same_timestamp_es_depth_es_trade"] == 1
+    assert report["locked_book_states"] == 0 and report["crossed_book_states"] == 0
     assert report["provider_provenance"]["provider"] == "ALGOSEEK"
 
 

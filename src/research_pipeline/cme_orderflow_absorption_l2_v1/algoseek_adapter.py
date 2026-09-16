@@ -7,6 +7,12 @@ about exchange event order:
 
 ``MES quote -> ES depth -> ES trade -> ES quote -> source file/row order``.
 
+Multiple Depth bid/ask rows sharing an exact timestamp are assembled before
+the depth event is exposed.  The final side states are published once and all
+raw rows remain attached as provenance.  This is a deliberate provider
+variant: it avoids exposing a synthetic half-updated book when Algoseek does
+not document a cross-dataset event sequence.
+
 Algoseek Multiple Depth has no documented MBO action provenance.  Consequently
 the resulting public events deliberately expose ``update=None``: the model can
 calculate aggregate-depth features, but must not infer add/cancel/fill history
@@ -32,8 +38,9 @@ from .model import Execution, MBP10Snapshot, MBPLevel, TICK
 
 PROVIDER = "ALGOSEEK"
 PROVIDER_SEMANTICS = "ALGOSEEK_CAUSAL_VARIANT"
-ADAPTER_VERSION = "algoseek-cme-l2-adapter-v1"
-ORDERING_POLICY_ID = "algoseek-causal-order-v1"
+ADAPTER_VERSION = "algoseek-cme-l2-adapter-v2"
+ORDERING_POLICY_ID = "algoseek-causal-order-v2"
+DEPTH_ASSEMBLY_POLICY_ID = "algoseek-depth-assembly-v2-final-state-with-raw-provenance"
 SOURCE_TIMEZONE = "America/Chicago"
 DEPTH_DATASET = "US Futures Multiple Depth"
 TAQ_DATASET = "US Futures Trade & Quote"
@@ -99,6 +106,8 @@ class CanonicalEvent:
     es_taq_bbo: tuple[float | None, float | None] | None = None
     mes_bbo: tuple[float | None, float | None] | None = None
     book_state: str = "INCOMPLETE"
+    raw_event_count: int = 1
+    raw_provenance: tuple[Mapping[str, Any], ...] = ()
 
 
 def _sha256(path: Path) -> str:
@@ -260,6 +269,32 @@ class LatestSideBook:
         return "EXECUTABLE"
 
 
+def _depth_groups(events: Iterable[DepthRow | TAQRow]) -> Iterator[list[DepthRow] | TAQRow]:
+    """Batch adjacent same-timestamp depth rows without reordering raw rows."""
+    pending: list[DepthRow] = []
+    for event in events:
+        if isinstance(event, DepthRow):
+            pending.append(event)
+            continue
+        if pending:
+            yield pending
+            pending = []
+        yield event
+    if pending:
+        yield pending
+
+
+def _depth_provenance(row: DepthRow) -> dict[str, Any]:
+    return {
+        "provider_timestamp": row.provider_timestamp,
+        "side": row.side,
+        "flags": row.flags,
+        "source_file": row.source_file,
+        "source_index": row.source_index,
+        "levels": [{"price": level.price, "size": level.size, "orders": level.order_count} for level in row.levels],
+    }
+
+
 def _event_priority(event: DepthRow | TAQRow) -> int:
     if isinstance(event, DepthRow):
         return 1
@@ -319,13 +354,19 @@ def canonical_events(*, es_depth: Iterable[DepthRow], es_taq: Iterable[TAQRow], 
     book = LatestSideBook()
     es_quote: dict[str, float | None] = {"B": None, "A": None}
     mes_quote: dict[str, float | None] = {"B": None, "A": None}
-    for row in ordered_source_events(es_depth=depth_rows, es_taq=es_taq_rows, mes_taq=mes_taq_rows):
-        if isinstance(row, DepthRow):
-            snapshot = book.apply(row)
+    for group in _depth_groups(ordered_source_events(es_depth=depth_rows, es_taq=es_taq_rows, mes_taq=mes_taq_rows)):
+        if isinstance(group, list):
+            snapshot: MBP10Snapshot | None = None
+            for row in group:
+                snapshot = book.apply(row)
+            row = group[-1]
             yield CanonicalEvent(row.timestamp_ns, "ES_DEPTH", row.source_file, row.source_index, row.ticker,
                                  row.security_id, row.provider_timestamp, row.flags, "MULTIPLE_DEPTH", "",
-                                 snapshot=snapshot, book_state=book.state)
+                                 snapshot=snapshot, book_state=book.state,
+                                 raw_event_count=len(group),
+                                 raw_provenance=tuple(_depth_provenance(item) for item in group))
             continue
+        row = group
         if row.instrument == "MES":
             if row.event_kind in {"BID", "ASK"}:
                 mes_quote["B" if row.event_kind == "BID" else "A"] = row.price
@@ -375,6 +416,7 @@ def provider_provenance(
         "provider_semantics": PROVIDER_SEMANTICS,
         "adapter_version": ADAPTER_VERSION,
         "ordering_policy_id": ORDERING_POLICY_ID,
+        "depth_assembly_policy_id": DEPTH_ASSEMBLY_POLICY_ID,
         "ordering_policy": ["timestamp_ns", "MES_BBO", "ES_DEPTH", "ES_TRADE", "ES_BBO", "source_file", "source_row"],
         "source_timezone": SOURCE_TIMEZONE,
         "canonical_timezone": "UTC",
@@ -385,7 +427,7 @@ def provider_provenance(
         "raw_files": [{"path": str(path), "sha256": _sha256(path)} for path in files],
         "known_semantic_limitations": [
             "UNDOCUMENTED_CROSS_DATASET_SAME_TIMESTAMP_ORDER",
-            "NON_ATOMIC_INDEPENDENT_BID_ASK_DEPTH_ROWS",
+            "SAME_TIMESTAMP_DEPTH_ROWS_BATCHED_TO_FINAL_STATE_RAW_ROWS_RETAINED",
             "NO_MBO_ADD_CANCEL_FILL_MODIFY_RESET_PROVENANCE",
             "FALSE_REFILL_UNEXECUTED_ADD_AND_RAPID_CANCEL_COMPONENTS_PROVIDER_LIMITED",
         ],
@@ -464,16 +506,20 @@ def audit_inputs(*, es_depth_paths: Sequence[Path], es_taq_paths: Sequence[Path]
     tie_metrics["trades_affected_pct"] = 0.0 if not trade_rows else affected * 100.0 / len(trade_rows)
     book = LatestSideBook(); incomplete = bid_only = ask_only = crossed = locked = 0; disagreements = 0
     latest_taq: dict[str, float | None] = {"B": None, "A": None}
-    for event in ordered:
-        if isinstance(event, DepthRow):
-            snapshot = book.apply(event)
+    for group in _depth_groups(ordered):
+        if isinstance(group, list):
+            snapshot: MBP10Snapshot | None = None
+            for event in group:
+                snapshot = book.apply(event)
             if book.bids is None or book.asks is None:
                 incomplete += 1; bid_only += int(book.bids is not None and book.asks is None); ask_only += int(book.asks is not None and book.bids is None)
             elif snapshot is None:
                 crossed += int(book.asks[0].price < book.bids[0].price); locked += int(book.asks[0].price == book.bids[0].price)
             if snapshot is not None and latest_taq["B"] is not None and latest_taq["A"] is not None:
                 disagreements += int((snapshot.bids[0].price, snapshot.asks[0].price) != (latest_taq["B"], latest_taq["A"]))
-        elif event.instrument == "ES" and event.event_kind in {"BID", "ASK"}:
+            continue
+        event = group
+        if event.instrument == "ES" and event.event_kind in {"BID", "ASK"}:
             latest_taq["B" if event.event_kind == "BID" else "A"] = event.price
     per_file: list[dict[str, Any]] = []
     for path in [*es_depth_paths, *es_taq_paths, *mes_taq_paths]:

@@ -11,7 +11,8 @@ Artifacts emitted from this source must carry:
 
 - `provider: ALGOSEEK`
 - `provider_semantics: ALGOSEEK_CAUSAL_VARIANT`
-- `ordering_policy_id: algoseek-causal-order-v1`
+- `ordering_policy_id: algoseek-causal-order-v2`
+- `depth_assembly_policy_id: algoseek-depth-assembly-v2-final-state-with-raw-provenance`
 
 The deterministic research convention for equal normalized timestamps is:
 
@@ -25,11 +26,16 @@ This convention is not an assertion of undocumented exchange ordering.
 `EventDateTime` is converted from `America/Chicago` to UTC using timezone-aware
 DST conversion. Ambiguous and nonexistent wall times fail closed.
 
-Multiple Depth bid and ask rows are independently maintained. A book is
-incomplete until both sides have arrived; it is never treated as an atomic
-same-timestamp snapshot merely because their timestamps match. The adapter also
-rejects a session with more than one ES or MES `(Ticker, SecurityID)` identity,
-so rollover ownership must be explicit in the input manifest.
+Multiple Depth bid and ask rows are independently maintained internally. Rows
+sharing an exact timestamp are then exposed as one final-state depth event,
+after all rows in that timestamp group have been applied. This prevents a
+synthetic half-updated, locked, or crossed book from becoming a strategy input.
+The event retains every raw row, including repeated rows, in
+`raw_provenance`; no provider observations are silently deduplicated. The
+policy is deterministic and provider-specific, not a claim that the rows were
+atomic on the exchange. The adapter also rejects a session with more than one
+ES or MES `(Ticker, SecurityID)` identity, so rollover ownership must be
+explicit in the input manifest.
 
 Algoseek does not supply the MBO action provenance used for unexecuted-add and
 rapid-cancel false-refill components. The adapter exposes no inferred
