@@ -1338,6 +1338,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     algoseek = sub.add_parser("algoseek-input-audit", help="Validate local Algoseek source files; never run research")
     for name in ("es-depth", "es-taq", "mes-taq"):
         algoseek.add_argument(f"--{name}", type=Path, action="append", required=True)
+    # Acquisition remains isolated from the Stage 1/2/3 commands.  Importing
+    # it lazily keeps the existing local/manual ingestion path dependency-free.
+    from . import algoseek_api
+    algoseek_api.add_cli_parsers(sub)
     args = parser.parse_args(argv)
     try:
         if getattr(args, "workers", 1) < 1:
@@ -1346,6 +1350,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Provider ingestion is intentionally isolated from Stage 1/2/3.
             from .algoseek_adapter import audit_inputs
             result = audit_inputs(es_depth_paths=args.es_depth, es_taq_paths=args.es_taq, mes_taq_paths=args.mes_taq)
+        elif args.command.startswith(("algoseek-api-", "algoseek-download-")) or args.command == "algoseek-compare-session":
+            result = algoseek_api.dispatch_cli(args)
         elif args.command == "multi-strategy-level-audit":
             result = audit_candidate_executability(strategies_path=args.strategies)
         elif args.command == "multi-strategy-screen":
