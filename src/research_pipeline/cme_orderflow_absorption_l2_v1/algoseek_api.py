@@ -15,9 +15,13 @@ import hashlib
 import json
 import os
 import re
+import random
 import shutil
+import socket
+import sys
 import tempfile
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -36,7 +40,11 @@ API_KEY_ENV = "ALGOSEEK_API_KEY"
 CSV_GZIP_FORMAT = "csv_gzip"
 CSV_GZIP_MAX_LIMIT = 80_000
 DEFAULT_TIMEOUT_SECONDS = 300
-DEFAULT_MAX_RETRIES = 4
+DEFAULT_MAX_RETRIES = 10
+REQUESTS_PER_MINUTE = 50
+RETRY_DELAYS_SECONDS = (2.0, 4.0, 8.0, 16.0, 30.0, 60.0, 60.0, 60.0, 60.0, 60.0)
+RETRY_JITTER_LOW = 0.8
+RETRY_JITTER_HIGH = 1.2
 SOURCE_TIMEZONE = ZoneInfo("America/Chicago")
 # Production probes show that EventDateTime filter values are evaluated in
 # the Eastern wall-clock frame while returned futures EventDateTime values
@@ -67,6 +75,23 @@ MES_TAQ = "mes-trade-and-quote"
 FEEDS = (DEPTH, ES_TAQ, MES_TAQ)
 Q1_2023_CME_CLOSED = frozenset({date(2023, 1, 2), date(2023, 1, 16), date(2023, 2, 20)})
 
+# These are the causal input fields consumed by the Algoseek adapter.  The
+# provider's BaseSymbol, declared Depth, and TAQ Orders columns are not part
+# of the causal contract.  TradeDate remains in the projection because the
+# acquisition boundary validates provider-date ownership for every page.
+DEPTH_PROJECTION_COLUMNS = (
+    "TradeDate", "EventDateTime", "Ticker", "SecurityID", "Side", "Flags",
+    *(f"L{level}{suffix}" for level in range(1, 11) for suffix in ("Price", "Size", "Orders")),
+)
+TAQ_PROJECTION_COLUMNS = (
+    "TradeDate", "EventDateTime", "Ticker", "SecurityID", "EventType", "Price", "Quantity", "Flags", "TypeMask",
+)
+FEED_PROJECTION_COLUMNS = {
+    DEPTH: DEPTH_PROJECTION_COLUMNS,
+    ES_TAQ: TAQ_PROJECTION_COLUMNS,
+    MES_TAQ: TAQ_PROJECTION_COLUMNS,
+}
+
 
 class AlgoseekAPIError(RuntimeError):
     """The remote API or locally persisted acquisition state is unsafe."""
@@ -77,6 +102,10 @@ class AlgoseekAuthenticationError(AlgoseekAPIError):
 
 
 class AlgoseekEntitlementError(AlgoseekAPIError):
+    pass
+
+
+class AlgoseekQuotaExhaustedError(AlgoseekAPIError):
     pass
 
 
@@ -153,8 +182,29 @@ def _sha256(path: Path) -> str:
 def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.part")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temporary, path)
+    _fsync_directory(path.parent)
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | flags)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
@@ -173,6 +223,14 @@ def _short_http_body(error: HTTPError, *, limit: int = 512) -> str:
         return ""
     text = body[:limit].decode("utf-8", errors="replace").strip()
     return text + ("…" if len(body) > limit else "")
+
+
+def _is_hard_quota_exhaustion(body: str) -> bool:
+    """Identify account/monthly data quotas that cannot succeed by retrying."""
+    normalized = re.sub(r"\s+", " ", body.lower()).strip()
+    if "monthly data returned limit exceeded" in normalized:
+        return True
+    return bool(re.search(r"(?:monthly|account)[^.;,]{0,100}(?:quota|data returned|limit)[^.;,]{0,100}(?:exhaust|exceeded|limit)", normalized))
 
 
 def _iso_local(value: datetime) -> str:
@@ -229,8 +287,15 @@ def _feed_spec(feed: str, contracts: ContractMap) -> tuple[str, str, str, str]:
     raise AlgoseekDownloadError(f"unknown feed: {feed}")
 
 
+def projection_columns_for_feed(feed: str) -> tuple[str, ...]:
+    try:
+        return FEED_PROJECTION_COLUMNS[feed]
+    except KeyError as exc:
+        raise AlgoseekDownloadError(f"unknown feed: {feed}") from exc
+
+
 class AlgoseekAPIClient:
-    """Small stdlib client with bounded retry and no credential persistence."""
+    """Small stdlib client with bounded retry, pacing, and no credential persistence."""
 
     def __init__(
         self,
@@ -241,21 +306,94 @@ class AlgoseekAPIClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         opener: Callable[..., Any] = urlopen,
         sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[], float] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        retry_telemetry: Callable[[str], None] | None = None,
+        requests_per_minute: int = REQUESTS_PER_MINUTE,
     ) -> None:
         self.api_key = api_key if api_key is not None else os.environ.get(API_KEY_ENV)
         if not self.api_key:
             raise AlgoseekAuthenticationError(f"{API_KEY_ENV} is required; set it in the environment")
         self.base_url = (base_url or os.environ.get(API_BASE_URL_ENV) or API_BASE_URL).rstrip("/")
+        if max_retries < 0:
+            raise AlgoseekAuthenticationError("max_retries must be non-negative")
+        if requests_per_minute < 1:
+            raise AlgoseekAuthenticationError("requests_per_minute must be positive")
         self.timeout_seconds, self.max_retries, self._opener, self._sleep = timeout_seconds, max_retries, opener, sleep
+        self._jitter = jitter or (lambda: random.uniform(RETRY_JITTER_LOW, RETRY_JITTER_HIGH))
+        self._monotonic = monotonic
+        self._retry_telemetry = retry_telemetry or (lambda message: print(message, file=sys.stderr, flush=True))
+        self._requests_per_minute = requests_per_minute
+        self._request_timestamps: deque[float] = deque()
 
     def _url(self, endpoint: str, query: Mapping[str, Any] | None = None) -> str:
         query_string = urlencode({key: str(value) for key, value in (query or {}).items() if value is not None})
         return f"{self.base_url}{endpoint}" + (f"?{query_string}" if query_string else "")
 
-    def open(self, endpoint: str, query: Mapping[str, Any] | None = None) -> Response:
+    def _wait_for_request_slot(self) -> None:
+        while True:
+            now = self._monotonic()
+            cutoff = now - 60.0
+            while self._request_timestamps and self._request_timestamps[0] <= cutoff:
+                self._request_timestamps.popleft()
+            if len(self._request_timestamps) < self._requests_per_minute:
+                self._request_timestamps.append(now)
+                return
+            delay = max(0.0, 60.0 - (now - self._request_timestamps[0]))
+            self._sleep(delay)
+
+    @staticmethod
+    def _network_error_class(error: BaseException) -> str:
+        reason = error.reason if isinstance(error, URLError) else error
+        if isinstance(reason, socket.gaierror):
+            return "DNS"
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return "TIMEOUT"
+        if isinstance(reason, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return "CONNECTION_RESET"
+        if isinstance(error, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return "CONNECTION_RESET"
+        if isinstance(error, (TimeoutError, socket.timeout)):
+            return "TIMEOUT"
+        return "NETWORK"
+
+    def _retry_delay(self, retry_index: int, retry_after: float | None = None) -> float:
+        if retry_after is not None:
+            return max(0.0, retry_after)
+        base = RETRY_DELAYS_SECONDS[min(retry_index, len(RETRY_DELAYS_SECONDS) - 1)]
+        return base * max(0.0, float(self._jitter()))
+
+    def _emit_retry(self, *, context: Mapping[str, Any] | None, attempt: int, error_class: str, delay: float) -> None:
+        values = context or {}
+        message = (
+            "ALGOSEEK_RETRY "
+            f"feed={values.get('feed', 'unknown')} "
+            f"session_date={values.get('logical_session_date', 'unknown')} "
+            f"partition={values.get('partition', 'unknown')} "
+            f"offset={values.get('offset', 'unknown')} "
+            f"attempt={attempt} error_class={error_class} "
+            f"next_retry_delay_seconds={delay:.3f}"
+        )
+        self._retry_telemetry(message)
+
+    @staticmethod
+    def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
+        value = _header(headers, "Retry-After")
+        if value is None:
+            return None
+        try:
+            return max(0.0, float(value.strip()))
+        except ValueError:
+            return None
+
+    def open(
+        self, endpoint: str, query: Mapping[str, Any] | None = None,
+        *, retry_context: Mapping[str, Any] | None = None,
+    ) -> Response:
         url = self._url(endpoint, query)
         request = Request(url, headers={"X-API-KEY": self.api_key, "User-Agent": "cme-l2-research/algoseek-api-v1"})
         for attempt in range(self.max_retries + 1):
+            self._wait_for_request_slot()
             try:
                 raw = self._opener(request, timeout=self.timeout_seconds)
                 return Response(raw, dict(raw.headers.items()), int(getattr(raw, "status", raw.getcode())))
@@ -268,14 +406,29 @@ class AlgoseekAPIClient:
                     raise AlgoseekAuthenticationError(f"Algoseek rejected ALGOSEEK_API_KEY ({detail})") from exc
                 if exc.code == 403:
                     raise AlgoseekEntitlementError(f"Algoseek denied this account/IP/dataset request ({detail})") from exc
-                retry_after = _header(dict(exc.headers.items()) if exc.headers else {}, "Retry-After")
+                response_headers = dict(exc.headers.items()) if exc.headers else {}
+                retry_after = self._retry_after_seconds(response_headers)
+                if exc.code == 429 and _is_hard_quota_exhaustion(body):
+                    raise AlgoseekQuotaExhaustedError(
+                        f"ALGOSEEK_MONTHLY_QUOTA_EXHAUSTED ({detail})"
+                    ) from exc
                 if exc.code not in (429, 500, 502, 503, 504) or attempt == self.max_retries:
                     raise AlgoseekAPIError(f"Algoseek HTTP error ({detail}; reason={exc.reason})") from exc
-                self._sleep(float(retry_after) if retry_after and retry_after.isdigit() else min(60.0, 2.0 ** attempt))
+                error_class = "HTTP_429" if exc.code == 429 else "HTTP_5XX"
+                delay = self._retry_delay(attempt, retry_after)
+                self._emit_retry(context=retry_context, attempt=attempt + 1, error_class=error_class, delay=delay)
+                self._sleep(delay)
             except (URLError, TimeoutError, OSError) as exc:
                 if attempt == self.max_retries:
-                    raise AlgoseekAPIError(f"Algoseek network failure after {attempt + 1} attempts: {exc}") from exc
-                self._sleep(min(60.0, 2.0 ** attempt))
+                    error_class = self._network_error_class(exc)
+                    raise AlgoseekAPIError(
+                        f"Algoseek network failure after {attempt + 1} attempts "
+                        f"({error_class}): {exc}"
+                    ) from exc
+                error_class = self._network_error_class(exc)
+                delay = self._retry_delay(attempt)
+                self._emit_retry(context=retry_context, attempt=attempt + 1, error_class=error_class, delay=delay)
+                self._sleep(delay)
         raise AssertionError("unreachable")
 
     def get_json(self, endpoint: str) -> Any:
@@ -417,6 +570,8 @@ def _validate_and_write_page(
             raise AlgoseekDownloadError("API page returned rows outside the intended local partition")
         digest, size = _sha256(part), part.stat().st_size
         os.replace(part, destination)
+        _fsync_file(destination)
+        _fsync_directory(destination.parent)
         return (header, returned, retained, digest, size, first_returned_timestamp,
                 last_returned_timestamp, first_retained_timestamp, last_retained_timestamp)
     except Exception:
@@ -442,6 +597,7 @@ def _new_manifest(session_date: date, contracts: ContractMap, output_root: Path,
             "provider_trade_dates": [value.isoformat() for value in window.provider_trade_dates],
             "contracts": {"ES": contracts.es, "MES": contracts.mes, "mapping_version": contracts.version},
             "output_root": str(output_root), "page_limit": page_limit, "response_format": CSV_GZIP_FORMAT,
+            "column_projections": {feed: list(columns) for feed, columns in FEED_PROJECTION_COLUMNS.items()},
             "partitioning": {"kind": "hourly-local", "timezone": "America/Chicago", "bounds": "[start,end)"},
             "filter_translation": {"timezone": PROVIDER_FILTER_TIMEZONE_NAME, "assumption": "provider filters use Eastern wall time"},
             "partitions": [], "pages": [], "session_complete": False, "audit": None}
@@ -521,7 +677,10 @@ def _download_feed(
 ) -> None:
     endpoint_template, ticker, base_symbol, prefix = _feed_spec(feed, contracts)
     endpoint = endpoint_template.format(trade_date="{trade_date}", ticker=ticker)
-    header: list[str] | None = None
+    # A resumed manifest may contain legacy full-schema pages.  New pages use
+    # the current causal projection and record their own header, so a legacy
+    # page never forces a projected response to match the old schema.
+    header: list[str] | None = list(projection_columns_for_feed(feed))
     page_index = len([page for page in manifest["pages"] if page.get("feed") == feed])
     for trade_date, requested_start, requested_end in hourly_session_partitions(session):
         api_filter_start, api_filter_end = api_filter_bounds_for_local_window(
@@ -531,8 +690,6 @@ def _download_feed(
         offsets = [int(page["pagination_offset"]) for page in prior]
         if len(offsets) != len(set(offsets)):
             raise AlgoseekDownloadError(f"duplicate page offsets in manifest for {feed} {trade_date}")
-        if prior:
-            header = list(prior[0].get("csv_header", ())) or header
         offset = int(prior[-1]["next_offset"]) if prior and prior[-1].get("next_offset") is not None else None
         if prior and offset is None:
             _upsert_partition_summary(manifest, _partition_summary(manifest, feed, trade_date, requested_start, requested_end))
@@ -541,9 +698,19 @@ def _download_feed(
         while True:
             request_endpoint = endpoint.format(trade_date=trade_date.isoformat())
             query = {"limit": page_limit, "offset": offset, "response_format": CSV_GZIP_FORMAT,
+                     "columns": ",".join(projection_columns_for_feed(feed)),
                      "EventDateTime.ge": api_filter_start, "EventDateTime.lt": api_filter_end,
                      "sort": "+EventDateTime"}
-            response = client.open(request_endpoint, query)
+            response = client.open(
+                request_endpoint,
+                query,
+                retry_context={
+                    "feed": feed,
+                    "logical_session_date": session.logical_date.isoformat(),
+                    "partition": f"{_iso_local(requested_start)}..{_iso_local(requested_end)}",
+                    "offset": offset,
+                },
+            )
             next_offset_raw = _header(response.headers, "X-Pagination-Next-Offset")
             next_offset = int(next_offset_raw) if next_offset_raw not in (None, "") else None
             page_index += 1
@@ -708,10 +875,20 @@ def tiny_probe(client: AlgoseekAPIClient, *, logical_reference_date: date = date
             endpoint_template, ticker, _, prefix = _feed_spec(feed, contracts)
             dataset_id = "US6002" if feed == DEPTH else "US6011"
             endpoint = endpoint_template.format(trade_date=logical_reference_date.isoformat(), ticker=ticker)
-            query = {"limit": limit, "offset": 0, "response_format": CSV_GZIP_FORMAT, "sort": "+EventDateTime"}
+            query = {"limit": limit, "offset": 0, "response_format": CSV_GZIP_FORMAT,
+                     "columns": ",".join(projection_columns_for_feed(feed)), "sort": "+EventDateTime"}
             url = client._url(endpoint, query)
             try:
-                response = client.open(endpoint, query)
+                response = client.open(
+                    endpoint,
+                    query,
+                    retry_context={
+                        "feed": feed,
+                        "logical_session_date": logical_reference_date.isoformat(),
+                        "partition": "tiny-probe",
+                        "offset": 0,
+                    },
+                )
             except AlgoseekAPIError as exc:
                 raise AlgoseekDownloadError(
                     f"tiny probe failed feed={feed} dataset_id={dataset_id} method=GET url={url}; {exc}"
@@ -778,22 +955,43 @@ def _canonical_comparison_value(field: str, value: Any) -> Any:
     return text
 
 
-def canonical_comparison_row(row: Mapping[str, Any]) -> dict[str, Any]:
-    return {field: _canonical_comparison_value(field, row.get(field)) for field in sorted(row)}
+def canonical_comparison_row(row: Mapping[str, Any], *, fields: Sequence[str] | None = None) -> dict[str, Any]:
+    names = sorted(row) if fields is None else list(fields)
+    return {field: _canonical_comparison_value(field, row.get(field)) for field in names}
 
 
-def normalized_row_multiset_fingerprint(paths: Iterable[Path]) -> dict[str, Any]:
-    """Constant-memory normalized multiset signature, independent of page/chunk files."""
+def normalized_row_multiset_fingerprint(
+    paths: Iterable[Path], *, fields: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Constant-memory normalized multiset signature, independent of chunks.
+
+    With ``fields`` this is the semantic comparison used by projected and
+    legacy full-schema inputs.  Without it, the helper retains its strict
+    full-row behavior for callers that explicitly need schema-sensitive
+    diagnostics.
+    """
     count = total = exclusive = 0
     modulus = 1 << 256
     for path in paths:
         opener = gzip.open if path.suffix == ".gz" else open
         with opener(path, "rt", newline="", encoding="utf-8-sig") as handle:
             for row in csv.DictReader(handle):
-                canonical = json.dumps(canonical_comparison_row(row), separators=(",", ":"), sort_keys=True).encode("utf-8")
+                canonical = json.dumps(canonical_comparison_row(row, fields=fields), separators=(",", ":"), sort_keys=True).encode("utf-8")
                 value = int.from_bytes(hashlib.sha256(canonical).digest(), "big")
                 count += 1; total = (total + value) % modulus; exclusive ^= value
     return {"row_count": count, "sha256_sum_mod_2_256": f"{total:064x}", "sha256_xor": f"{exclusive:064x}"}
+
+
+def _csv_headers(paths: Iterable[Path]) -> list[list[str]]:
+    """Return distinct persisted CSV headers for the audit report."""
+    headers: list[list[str]] = []
+    for path in paths:
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rt", newline="", encoding="utf-8-sig") as handle:
+            header = next(csv.reader(handle), [])
+        if header and header not in headers:
+            headers.append(header)
+    return headers
 
 
 def compare_session_roots(*, api_root: Path, manual_root: Path, logical_session_date: date) -> dict[str, Any]:
@@ -807,14 +1005,22 @@ def compare_session_roots(*, api_root: Path, manual_root: Path, logical_session_
         return {"row_counts": {key: audit[key] for key in ("es_depth_rows", "es_taq_rows", "mes_taq_rows", "es_trade_rows", "canonical_es_depth_states")},
                 "profile": audit["profile"], "mes_bbo_coverage": dry["mes_bbo_coverage"], "canonical_event_count": dry["canonical_events_emitted"],
                 "identities": audit["provider_provenance"],
-                "normalized_raw_row_multiset": {DEPTH: normalized_row_multiset_fingerprint(depth), ES_TAQ: normalized_row_multiset_fingerprint(es), MES_TAQ: normalized_row_multiset_fingerprint(mes)}}
+                "causal_semantic_multiset": {
+                    DEPTH: normalized_row_multiset_fingerprint(depth, fields=DEPTH_PROJECTION_COLUMNS),
+                    ES_TAQ: normalized_row_multiset_fingerprint(es, fields=TAQ_PROJECTION_COLUMNS),
+                    MES_TAQ: normalized_row_multiset_fingerprint(mes, fields=TAQ_PROJECTION_COLUMNS),
+                },
+                "raw_schema": {
+                    DEPTH: _csv_headers(depth), ES_TAQ: _csv_headers(es), MES_TAQ: _csv_headers(mes),
+                }}
     api, manual = metrics(api_root), metrics(manual_root)
-    compared = {"raw_semantic_multiset": api["normalized_raw_row_multiset"] == manual["normalized_raw_row_multiset"],
+    compared = {"causal_semantic_multiset": api["causal_semantic_multiset"] == manual["causal_semantic_multiset"],
                 "row_counts": api["row_counts"] == manual["row_counts"], "profile": api["profile"] == manual["profile"],
                 "canonical_event_count": api["canonical_event_count"] == manual["canonical_event_count"],
                 "exact_ordered_stream": False}
     return {"status": "ALGOSEEK_API_REFERENCE_COMPARISON_COMPLETE", "logical_session_date": logical_session_date.isoformat(),
             "api": api, "manual": manual, "matches": compared,
+            "comparison_contract": "causal semantic parity is required; exact full-schema raw-row parity is not required for projected versus legacy inputs",
             "ordered_stream_note": "not required: same-timestamp source order is not provider-causal and remains a known limitation",
             "semantic_match": all(value for key, value in compared.items() if key != "exact_ordered_stream")}
 

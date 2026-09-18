@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from research_pipeline.cme_orderflow_absorption_l2_v1 import algoseek_adapter as algoseek
+from research_pipeline.cme_orderflow_absorption_l2_v1 import algoseek_api as adapter_api
 from research_pipeline.cme_orderflow_absorption_l2_v1 import v3_poc_fresh_august_replay as databento_native
 
 
@@ -294,6 +295,61 @@ def test_streaming_compatibility_wrapper_equals_streaming_iterator() -> None:
     assert list(algoseek.canonical_events(es_depth=depth, es_taq=es, mes_taq=mes)) == list(
         algoseek.iter_canonical_events(es_depth=depth, es_taq=es, mes_taq=mes)
     )
+
+
+def test_projected_and_legacy_full_schema_inputs_are_causally_equivalent(tmp_path: Path) -> None:
+    timestamp = "2023-03-10 09:30:00"
+    depth_rows = [_depth(side=side, timestamp=timestamp) for side in ("B", "S")]
+    es_rows = [
+        _taq(event_type="TRADE AGRESSOR ON SELL", timestamp=timestamp, price="4000.00", quantity="4"),
+        _taq(event_type="QUOTE BID", timestamp=timestamp, price="3999.75", quantity="0"),
+        _taq(event_type="QUOTE SELL", timestamp=timestamp, price="4000.25", quantity="0"),
+    ]
+    mes_rows = [
+        _taq(event_type="QUOTE BID", timestamp=timestamp, price="3999.50", quantity="0", ticker="MESH3"),
+        _taq(event_type="QUOTE SELL", timestamp=timestamp, price="4000.50", quantity="0", ticker="MESH3"),
+    ]
+    full_paths = (tmp_path / "full-depth.csv", tmp_path / "full-es.csv", tmp_path / "full-mes.csv")
+    projected_paths = (tmp_path / "projected-depth.csv", tmp_path / "projected-es.csv", tmp_path / "projected-mes.csv")
+    for path, rows in zip(full_paths, (depth_rows, es_rows, mes_rows)):
+        _write(path, rows)
+    for path, rows, columns in zip(
+        projected_paths, (depth_rows, es_rows, mes_rows),
+        (adapter_api.DEPTH_PROJECTION_COLUMNS, adapter_api.TAQ_PROJECTION_COLUMNS, adapter_api.TAQ_PROJECTION_COLUMNS),
+    ):
+        projected = [{column: row[column] for column in columns} for row in rows]
+        _write(path, projected)
+
+    def run(paths: tuple[Path, Path, Path]) -> tuple[list[tuple[object, ...]], dict[str, float], algoseek.StreamingMetrics]:
+        profile, metrics = algoseek.StreamingProfile(), algoseek.StreamingMetrics()
+        events = list(algoseek.iter_canonical_events_from_paths(
+            es_depth_paths=[paths[0]], es_taq_paths=[paths[1]], mes_taq_paths=[paths[2]],
+            profile=profile, metrics=metrics,
+        ))
+
+        def semantic(event: algoseek.CanonicalEvent) -> tuple[object, ...]:
+            snapshot = None if event.snapshot is None else (
+                tuple((level.price, level.size, level.order_count) for level in event.snapshot.bids),
+                tuple((level.price, level.size, level.order_count) for level in event.snapshot.asks),
+            )
+            execution = None if event.execution is None else (
+                event.execution.price, event.execution.size, event.execution.aggressor,
+            )
+            return (event.kind, event.provider_timestamp, event.provider_flags, event.provider_event_type,
+                    event.provider_type_mask, snapshot, execution, event.es_taq_bbo, event.mes_bbo,
+                    event.book_state, event.raw_event_count)
+
+        return [semantic(event) for event in events], profile.result(), metrics
+
+    full_events, full_profile, full_metrics = run(full_paths)
+    projected_events, projected_profile, projected_metrics = run(projected_paths)
+    assert projected_events == full_events
+    assert projected_profile == full_profile
+    assert projected_metrics.canonical_depth_states == full_metrics.canonical_depth_states
+    assert projected_metrics.canonical_events_emitted == full_metrics.canonical_events_emitted
+    assert [event[6][2] for event in projected_events if event[0] == "ES_TRADE"] == ["SELL"]
+    assert any(event[0] == "ES_BBO" and event[7] == (3999.75, 4000.25) for event in projected_events)
+    assert any(event[0] == "MES_BBO" and event[8] == (3999.5, 4000.5) for event in projected_events)
 
 
 def test_streaming_atomic_jsonl_writer_does_not_publish_partial_artifact(tmp_path: Path) -> None:

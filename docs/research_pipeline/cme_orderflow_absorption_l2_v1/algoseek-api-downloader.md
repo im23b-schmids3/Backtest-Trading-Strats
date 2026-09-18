@@ -50,8 +50,27 @@ data calls use:
 - `/data/us-futures/multiple-depth/{trade_date}/{ticker}` for ES depth;
 - `/data/us-futures/taq/{trade_date}/{ticker}` for ES and MES TAQ.
 
-Data calls request `response_format=csv_gzip`, ascending `EventDateTime`, and
-explicit `limit`/`offset`. The documented maximum gzip CSV page size is 80,000.
+Data calls request `response_format=csv_gzip`, ascending `EventDateTime`, the
+causal `columns=` projection below, and explicit `limit`/`offset`. The
+documented maximum gzip CSV page size is 80,000.
+
+Multiple Depth requests retain:
+
+```text
+TradeDate,EventDateTime,Ticker,SecurityID,Side,Flags,
+L1Price,L1Size,L1Orders,...,L10Price,L10Size,L10Orders
+```
+
+ES and MES Trade & Quote requests retain:
+
+```text
+TradeDate,EventDateTime,Ticker,SecurityID,EventType,Price,Quantity,Flags,TypeMask
+```
+
+These fields are the causal contract consumed by the adapter. Existing
+full-schema CSV/GZIP pages remain readable because the adapter requires only
+these fields. `BaseSymbol`, Multiple Depth `Depth`, and TAQ `Orders` are not
+causal inputs and are no longer requested.
 `X-Pagination-Next-Offset` controls progress; a missing value completes that
 query. Every persisted page is independently readable gzip CSV, including the
 CSV header which the provider sends only on offset zero.
@@ -92,7 +111,18 @@ never credentials. `--resume`
 re-hashes every recorded page, fails on a mismatch, and continues only from the
 documented next offset. HTTP 429 observes `Retry-After` when present; network,
 timeout and 5xx failures use bounded exponential backoff. HTTP 401 and 403 do
-not retry.
+not retry. DNS/name-resolution, timeout, connection-reset, and other transient
+network failures retry up to ten times after the initial request with
+`2,4,8,16,30,60...` second delays and bounded jitter. HTTP 429 honors
+`Retry-After`; 5xx responses use the same transient schedule. Each retry emits
+feed, logical session, local partition, offset, attempt, error class, and next
+delay telemetry. A client-level sliding-window limiter counts retries as
+requests and keeps the request rate at or below 50 per minute.
+
+After each verified page the gzip file is fsynced, atomically published, and
+the manifest is fsynced. A failed process therefore resumes from the last
+persisted page's provider continuation offset without re-downloading completed
+pages or restarting the partition.
 
 ## Range and audit behavior
 
@@ -113,8 +143,11 @@ validated, in addition to the existing profile, canonical-event, depth-state,
 and MES BBO checks. MES BBO coverage is not used as proof that source
 partitions were complete.
 
-The read-only reference comparison uses normalized row multisets: timestamps
-are UTC nanoseconds, quarter-point prices are integer ticks, numeric counts are
-integers, and empty values remain distinct from zero. It remains separate from
-ordered-stream comparison because Algoseek does not provide a stable
-cross-stream causal sequence key.
+The read-only reference comparison uses normalized causal row multisets:
+timestamps are UTC nanoseconds, quarter-point prices are integer ticks, numeric
+counts are integers, and empty values remain distinct from zero. It compares
+the fields that remain in the causal projection; exact full-schema raw-row
+parity is not expected when one root contains legacy full-schema pages and the
+other contains projected pages. The comparison remains separate from ordered-
+stream comparison because Algoseek does not provide a stable cross-stream
+causal sequence key.

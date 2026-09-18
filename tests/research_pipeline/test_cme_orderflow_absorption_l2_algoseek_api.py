@@ -3,9 +3,11 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import socket
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -23,15 +25,24 @@ class FakeResponse(io.BytesIO):
         return self.status
 
 
-def _gzip_csv(*, ticker: str, trade_date: str, timestamp: str, header: bool = True) -> bytes:
-    columns = ["TradeDate", "EventDateTime", "Ticker", "BaseSymbol", "SecurityID", "EventType", "Price", "Quantity", "Flags", "TypeMask"]
-    row = [trade_date, timestamp, ticker, "MES" if ticker.startswith("MES") else "ES", "101", "QUOTE BID", "4000.00", "0", "T", "QUOTE BID"]
+def _gzip_csv(*, ticker: str, trade_date: str, timestamp: str, header: bool = True, columns: list[str] | None = None) -> bytes:
+    full = {
+        "TradeDate": trade_date, "EventDateTime": timestamp, "Ticker": ticker,
+        "BaseSymbol": "MES" if ticker.startswith("MES") else "ES", "SecurityID": "101",
+        "Side": "B", "Flags": "T", "Depth": "10", "EventType": "QUOTE BID",
+        "Price": "4000.00", "Quantity": "0", "Orders": "1", "TypeMask": "QUOTE BID",
+    }
+    if columns is None:
+        columns = ["TradeDate", "EventDateTime", "Ticker", "BaseSymbol", "SecurityID", "EventType", "Price", "Quantity", "Orders", "Flags", "TypeMask"]
+    row = [full[column] if not column.startswith("L") else ("4000.00" if column.endswith("Price") else "1" if column.endswith("Orders") else "1") for column in columns]
     text = ((",".join(columns) + "\n") if header else "") + ",".join(row) + "\n"
     return gzip.compress(text.encode())
 
 
-def _client(opener, *, sleep=lambda _: None) -> api.AlgoseekAPIClient:
-    return api.AlgoseekAPIClient(api_key="not-a-real-key", base_url="https://example.test/api/v1", opener=opener, sleep=sleep)
+def _client(opener, *, sleep=lambda _: None, jitter=lambda: 1.0, **kwargs) -> api.AlgoseekAPIClient:
+    kwargs.setdefault("requests_per_minute", 1_000)
+    return api.AlgoseekAPIClient(api_key="not-a-real-key", base_url="https://example.test/api/v1", opener=opener,
+                                 sleep=sleep, jitter=jitter, **kwargs)
 
 
 def _market_opener(request, timeout):
@@ -46,7 +57,8 @@ def _market_opener(request, timeout):
     else:
         timestamp = f"{trade_date} 17:00:00"
     assert query["response_format"] == ["csv_gzip"]
-    return FakeResponse(_gzip_csv(ticker=ticker, trade_date=trade_date, timestamp=timestamp), {"X-Request-ID": "request-1"})
+    return FakeResponse(_gzip_csv(ticker=ticker, trade_date=trade_date, timestamp=timestamp,
+                                  columns=query["columns"][0].split(",")), {"X-Request-ID": "request-1"})
 
 
 def test_missing_key_fails_without_network(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,7 +144,7 @@ def test_provider_trade_date_mismatch_fails_closed() -> None:
 def test_normalized_multiset_ignores_csv_formatting_and_chunk_boundaries(tmp_path: Path) -> None:
     header = "TradeDate,EventDateTime,Ticker,Price,Quantity,Orders,Depth,Flags,TypeMask\n"
     first = header + "2023-01-03,2023-01-03 15:00:00.100000000,ESH3,3900.5000,2.0,3.0,10,0.0000,1\n"
-    second = header + "2023-01-03T15:00:00.100000-06:00,ESH3,3900.5,2,3,10,0,1\n"
+    second = header + "2023-01-03,2023-01-03T15:00:00.100000-06:00,ESH3,3900.5,2,3,10,0,1\n"
     left = tmp_path / "left.csv"
     right = tmp_path / "right.csv"
     left.write_text(first)
@@ -140,11 +152,28 @@ def test_normalized_multiset_ignores_csv_formatting_and_chunk_boundaries(tmp_pat
     assert api.normalized_row_multiset_fingerprint([left]) == api.normalized_row_multiset_fingerprint([right])
 
 
+def test_causal_multiset_comparison_accepts_projected_and_legacy_taq_schema(tmp_path: Path) -> None:
+    full = tmp_path / "full.csv"
+    projected = tmp_path / "projected.csv"
+    full_names = ["TradeDate", "EventDateTime", "Ticker", "BaseSymbol", "SecurityID", "EventType", "Price", "Quantity", "Orders", "Flags", "TypeMask"]
+    values = ["2023-01-03", "2023-01-03 15:00:00.100000000", "ESH3", "ES", "101",
+              "TRADE AGRESSOR ON BUY", "3900.5000", "2", "3", "1", "TRADE AGRESSOR ON BUY"]
+    full.write_text(",".join(full_names) + "\n" + ",".join(values) + "\n")
+    keep = ["TradeDate", "EventDateTime", "Ticker", "SecurityID", "EventType", "Price", "Quantity", "Flags", "TypeMask"]
+    projected_values = [values[full_names.index(name)] for name in keep]
+    projected.write_text(",".join(keep) + "\n" + ",".join(projected_values) + "\n")
+    assert api.normalized_row_multiset_fingerprint([full]) != api.normalized_row_multiset_fingerprint([projected])
+    assert api.normalized_row_multiset_fingerprint([full], fields=api.TAQ_PROJECTION_COLUMNS) == api.normalized_row_multiset_fingerprint([projected], fields=api.TAQ_PROJECTION_COLUMNS)
+
+
 def test_tiny_probe_validates_gzip_schema_ticker_and_trade_date() -> None:
     result = api.tiny_probe(_client(_market_opener))
     assert result["ready"] and [entry["ticker"] for entry in result["results"]] == ["ESH3", "ESH3", "MESH3"]
     assert [entry["dataset_id"] for entry in result["results"]] == ["US6002", "US6011", "US6011"]
     assert result["results"][1]["request_url"].startswith("https://example.test/api/v1/data/us-futures/taq/2023-01-03/ESH3?")
+    for entry, expected in zip(result["results"], (api.DEPTH_PROJECTION_COLUMNS, api.TAQ_PROJECTION_COLUMNS, api.TAQ_PROJECTION_COLUMNS)):
+        query = parse_qs(urlparse(entry["request_url"]).query)
+        assert query["columns"] == [",".join(expected)]
 
 
 def test_tiny_probe_http_error_identifies_feed_dataset_url_and_safe_body() -> None:
@@ -179,30 +208,68 @@ def test_pagination_uses_next_offset_and_only_first_response_has_header(tmp_path
         trade_date, ticker = parsed.path.split("/")[-2:]
         translated_end = datetime.fromisoformat(query["EventDateTime.lt"][0]).replace(tzinfo=api.PROVIDER_FILTER_TIMEZONE)
         timestamp = (translated_end.astimezone(api.SOURCE_TIMEZONE) - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
-        return FakeResponse(_gzip_csv(ticker=ticker, trade_date=trade_date, timestamp=timestamp, header=offset == 0),
+        return FakeResponse(_gzip_csv(ticker=ticker, trade_date=trade_date, timestamp=timestamp, header=offset == 0,
+                                      columns=query["columns"][0].split(",")),
                             {"X-Pagination-Next-Offset": "2"} if offset == 0 else {})
     monkeypatch.setattr(api, "_run_session_audit", lambda *_: {"ok": True})
     result = api.download_session(client=_client(opener), logical_session_date=date(2023, 1, 3), output_root=tmp_path, page_limit=2)
     assert result["session_complete"] and [item[2]["offset"][0] for item in requests] == ["0", "2"] * 69
-    expected_windows = {
-        "2023-01-02": ("2023-01-02 17:00:00", "2023-01-03 00:00:00"),
-        "2023-01-03": ("2023-01-03 00:00:00", "2023-01-03 16:00:00"),
-    }
     assert {path.split("/")[-3] for path, _, _ in requests} == {"multiple-depth", "taq"}
     assert {(path.split("/")[-3], path.split("/")[-1]) for path, _, _ in requests} == {
         ("multiple-depth", "ESH3"), ("taq", "ESH3"), ("taq", "MESH3"),
     }
-    for _, trade_date, query in requests:
+    for _, _, query in requests:
         assert "EventDateTime.gte" not in query
-        assert query["EventDateTime.ge"] != [expected_windows[trade_date][0]]
-        assert query["EventDateTime.lt"] != [expected_windows[trade_date][1]]
-        assert datetime.fromisoformat(query["EventDateTime.ge"][0]).hour in {0, 1, 16, 17, 18, 19, 20, 21, 22, 23}
+        expected_projection = api.DEPTH_PROJECTION_COLUMNS if query.get("columns", [""])[0].startswith("TradeDate,EventDateTime,Ticker,SecurityID,Side") else api.TAQ_PROJECTION_COLUMNS
+        assert query["columns"] == [",".join(expected_projection)]
+        requested_columns = set(query["columns"][0].split(","))
+        assert not requested_columns.intersection({"BaseSymbol", "Depth", "Orders"})
+        assert query["EventDateTime.ge"][0] < query["EventDateTime.lt"][0]
+        assert datetime.fromisoformat(query["EventDateTime.ge"][0]).tzinfo is None
     manifest = json.loads((tmp_path / "2023-01-03" / "algoseek-download-manifest.json").read_text())
     assert len(manifest["pages"]) == 138 and {page["pagination_offset"] for page in manifest["pages"]} == {0, 2}
     assert len(manifest["partitions"]) == 69
     assert {page["feed"] for page in manifest["pages"]} == {api.DEPTH, api.ES_TAQ, api.MES_TAQ}
+    assert manifest["column_projections"] == {feed: list(columns) for feed, columns in api.FEED_PROJECTION_COLUMNS.items()}
     assert all(path.name.endswith(".csv.gz") for path in (tmp_path / "2023-01-03").rglob("*.csv.gz"))
     assert (tmp_path / "2023-01-03" / "algoseek-complete-session.json").is_file()
+
+
+def test_resume_continues_from_last_durable_page_without_duplicates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api, "_run_session_audit", lambda *_: {"ok": True})
+    calls = {"data": 0, "failed": False}
+    def interrupted(request, timeout):
+        parsed = urlparse(request.full_url)
+        if parsed.path.endswith("/account/my/quotas"):
+            return FakeResponse(b'{"quotas_usage": {}, "quotas_limit": {}}')
+        query = parse_qs(parsed.query)
+        if int(query["offset"][0]) == 2 and not calls["failed"]:
+            calls["failed"] = True
+            raise URLError(socket.gaierror(socket.EAI_AGAIN, "temporary DNS failure"))
+        calls["data"] += 1
+        trade_date, ticker = parsed.path.split("/")[-2:]
+        translated_end = datetime.fromisoformat(query["EventDateTime.lt"][0]).replace(tzinfo=api.PROVIDER_FILTER_TIMEZONE)
+        timestamp = (translated_end.astimezone(api.SOURCE_TIMEZONE) - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+        offset = int(query["offset"][0])
+        return FakeResponse(_gzip_csv(ticker=ticker, trade_date=trade_date, timestamp=timestamp, header=offset == 0,
+                                      columns=query["columns"][0].split(",")),
+                            {"X-Pagination-Next-Offset": "2"} if offset == 0 else {})
+
+    first_client = _client(interrupted, max_retries=0)
+    with pytest.raises(api.AlgoseekAPIError, match="network failure"):
+        api.download_session(client=first_client, logical_session_date=date(2023, 1, 3), output_root=tmp_path, page_limit=2)
+    manifest_path = tmp_path / "2023-01-03" / "algoseek-download-manifest.json"
+    interrupted_manifest = json.loads(manifest_path.read_text())
+    assert len(interrupted_manifest["pages"]) == 1
+    assert interrupted_manifest["pages"][0]["pagination_offset"] == 0
+
+    result = api.download_session(client=_client(interrupted, max_retries=0), logical_session_date=date(2023, 1, 3),
+                                  output_root=tmp_path, page_limit=2, resume=True)
+    manifest = json.loads(manifest_path.read_text())
+    assert result["session_complete"] and len(manifest["pages"]) == 138
+    keys = [(page["feed"], page["partition_start"], page["pagination_offset"]) for page in manifest["pages"]]
+    assert len(keys) == len(set(keys))
+    assert (tmp_path / "2023-01-03" / "es-multiple-depth" / "chunk-000001.csv.gz").is_file()
 
 
 def test_resume_verifies_hash_and_prevents_requests_when_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,6 +303,14 @@ def test_auth_entitlement_and_retry_classification() -> None:
         raise HTTPError(request.full_url, 403, "forbidden", {}, None)
     with pytest.raises(api.AlgoseekEntitlementError):
         _client(forbidden).open("/x")
+    attempts = 0
+    def unprocessable(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        raise HTTPError(request.full_url, 422, "invalid filter", {}, None)
+    with pytest.raises(api.AlgoseekAPIError):
+        _client(unprocessable).open("/x")
+    assert attempts == 1
     sleeps: list[float] = []; attempts = 0
     def throttled(request, timeout):
         nonlocal attempts; attempts += 1
@@ -251,7 +326,78 @@ def test_auth_entitlement_and_retry_classification() -> None:
             raise HTTPError(request.full_url, 503, "temporary", {}, None)
         return FakeResponse(b"{}")
     assert _client(unavailable, sleep=sleeps.append).open("/x").status == 200
-    assert attempts == 2 and sleeps == [1.0]
+    assert attempts == 2 and sleeps == [2.0]
+
+
+def test_monthly_quota_429_fails_immediately_without_retry() -> None:
+    attempts = 0
+    sleeps: list[float] = []
+    body = b'{"detail":"Monthly data returned limit exceeded: 10059714609/10000000000"}'
+    def exhausted(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        raise HTTPError(request.full_url, 429, "Too Many Requests", {"Retry-After": "60"}, io.BytesIO(body))
+    with pytest.raises(api.AlgoseekQuotaExhaustedError, match="ALGOSEEK_MONTHLY_QUOTA_EXHAUSTED"):
+        _client(exhausted, sleep=sleeps.append).open("/x")
+    assert attempts == 1 and sleeps == []
+
+
+def test_dns_fails_five_times_then_recovers_with_context_telemetry() -> None:
+    attempts = 0
+    sleeps: list[float] = []
+    telemetry: list[str] = []
+    def opener(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 5:
+            raise URLError(socket.gaierror(socket.EAI_AGAIN, "temporary name resolution failure"))
+        return FakeResponse(b"{}")
+    result = _client(opener, sleep=sleeps.append, retry_telemetry=telemetry.append).open(
+        "/x", retry_context={"feed": api.DEPTH, "logical_session_date": "2023-01-05",
+                              "partition": "2023-01-04 17:00:00..18:00:00", "offset": 160000})
+    assert result.status == 200 and attempts == 6
+    assert sleeps == [2.0, 4.0, 8.0, 16.0, 30.0]
+    assert all("error_class=DNS" in line and "offset=160000" in line for line in telemetry)
+
+
+def test_dns_fails_ten_times_then_recovers_with_long_bounded_policy() -> None:
+    attempts = 0
+    sleeps: list[float] = []
+    def opener(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 10:
+            raise URLError(socket.gaierror(socket.EAI_AGAIN, "temporary name resolution failure"))
+        return FakeResponse(b"{}")
+    assert _client(opener, sleep=sleeps.append).open("/x").status == 200
+    assert attempts == 11 and sleeps == [2.0, 4.0, 8.0, 16.0, 30.0, 60.0, 60.0, 60.0, 60.0, 60.0]
+
+
+def test_timeout_and_connection_reset_are_retryable() -> None:
+    attempts = 0
+    errors = [TimeoutError("timeout"), ConnectionResetError("reset")]
+    telemetry: list[str] = []
+    def opener(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        if errors:
+            raise errors.pop(0)
+        return FakeResponse(b"{}")
+    assert _client(opener, retry_telemetry=telemetry.append).open("/x").status == 200
+    assert attempts == 3 and "error_class=TIMEOUT" in telemetry[0] and "error_class=CONNECTION_RESET" in telemetry[1]
+
+
+def test_rate_limiter_paces_before_exceeding_configured_window() -> None:
+    now = [0.0]
+    sleeps: list[float] = []
+    def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        now[0] += delay
+    client = _client(lambda request, timeout: FakeResponse(b"{}"), sleep=sleep, monotonic=lambda: now[0], requests_per_minute=2)
+    client.open("/x")
+    client.open("/x")
+    client.open("/x")
+    assert sleeps == [60.0]
 
 
 def test_preflight_parses_available_dataset_names_without_market_request() -> None:
