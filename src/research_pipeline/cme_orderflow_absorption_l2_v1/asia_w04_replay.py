@@ -32,6 +32,7 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 from . import causal_master_tape as master
 from . import berlin_hardflat_execution as corrected
 from . import historical_runner as historical
+from . import public_book_adapters as public_books
 from . import weight_q_research as matrix
 from .model import (
     ENTRY_LATENCY_NS,
@@ -157,6 +158,9 @@ class SourceBinding:
     expected_sha256: str
     expected_bytes: int | None
     shared: bool
+    extra_paths: tuple[Path, ...] = ()
+    extra_sha256: tuple[str, ...] = ()
+    extra_bytes: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -344,17 +348,25 @@ def semantic_diff_document() -> dict[str, Any]:
     }
 
 
-def load_audit_sessions(audit_root: Path) -> tuple[AuditSession, ...]:
+def load_audit_sessions(audit_root: Path, *, include_native: bool = False) -> tuple[AuditSession, ...]:
     summary = _read_json(audit_root / "summary.json")
     if summary.get("audit_id") != "CMEOrderflowAbsorption.ES_L2_ASIA_DATA_COVERAGE_AUDIT":
         raise AsiaReplayError("wrong Asia coverage-audit identity")
     if summary.get("market_data_opened") is not False or summary.get("strategy_replay_executed") is not False:
         raise AsiaReplayError("Asia coverage audit provenance is not read-only")
     rows: list[AuditSession] = []
+    native_dec_jan: list[AuditSession] = []
     try:
         with (audit_root / "session-coverage.csv").open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
                 classification = str(row["classification"])
+                source_model = str(row["source_model"])
+                period = str(row["period"])
+                if include_native and source_model == public_books.NATIVE_MBP10 and period == "DEC2025_JAN2026_NATIVE":
+                    native_dec_jan.append(AuditSession(
+                        str(row["session_date"]), period, source_model, None, PROFILE_ONLY_CLASSIFICATION,
+                    ))
+                    continue
                 if classification not in {ELIGIBLE_CLASSIFICATION, PROFILE_ONLY_CLASSIFICATION}:
                     continue
                 rows.append(AuditSession(
@@ -363,27 +375,40 @@ def load_audit_sessions(audit_root: Path) -> tuple[AuditSession, ...]:
                 ))
     except OSError as exc:
         raise AsiaReplayError("Asia session coverage CSV is unavailable") from exc
+    native_dec_jan.sort(key=lambda item: item.day)
+    native_dec_jan = [
+        replace(item, prior_day=(native_dec_jan[index - 1].day if index else None),
+                classification=(PROFILE_ONLY_CLASSIFICATION if index == 0 else ELIGIBLE_CLASSIFICATION))
+        for index, item in enumerate(native_dec_jan)
+    ]
+    rows.extend(native_dec_jan)
     rows.sort(key=lambda item: item.day)
     days = [row.day for row in rows]
     eligible = [row for row in rows if row.eligible]
-    if len(rows) != EXPECTED_SOURCE_SESSIONS or len(eligible) != EXPECTED_ELIGIBLE_SESSIONS:
+    expected_source_count = EXPECTED_SOURCE_SESSIONS + len(native_dec_jan)
+    expected_eligible_count = EXPECTED_ELIGIBLE_SESSIONS + max(0, len(native_dec_jan) - 1)
+    if len(rows) != expected_source_count or len(eligible) != expected_eligible_count:
         raise AsiaReplayError(
             f"Asia audit chronology mismatch: source={len(rows)}, eligible={len(eligible)}"
         )
     if len(days) != len(set(days)) or days != sorted(days):
         raise AsiaReplayError("Asia source chronology is duplicate or unordered")
     excluded = [row.day for row in rows if not row.eligible]
-    if excluded != list(summary.get("candidate_session_universe", {}).get("missing_prior_asia_poc_dates", ())):
+    expected_excluded = list(summary.get("candidate_session_universe", {}).get("missing_prior_asia_poc_dates", ()))
+    if native_dec_jan:
+        expected_excluded.append(native_dec_jan[0].day)
+    if excluded != sorted(expected_excluded):
         raise AsiaReplayError("profile-only dates disagree with the sealed coverage audit")
     expected_eligible = list(
         summary.get("candidate_session_universe", {}).get(
             "es_and_prior_poc_present_but_mes_missing_dates", (),
         )
     )
+    expected_eligible = sorted(expected_eligible + [row.day for row in native_dec_jan[1:]])
     if [row.day for row in eligible] != expected_eligible:
         raise AsiaReplayError("eligible Asia sessions disagree with the sealed coverage audit")
-    if any(row.source_model != "MBO_DERIVED_MBP10" for row in rows):
-        raise AsiaReplayError("Asia baseline must use only the audited MBO-derived public view")
+    if any(row.source_model not in public_books.SUPPORTED_SOURCE_MODELS for row in rows):
+        raise AsiaReplayError("Asia manifest declares an unsupported public-book source model")
     return tuple(rows)
 
 
@@ -424,22 +449,48 @@ def _retro_binding(repository_root: Path, sessions: Sequence[AuditSession]) -> l
     return output
 
 
+def _dec_jan_native_binding(repository_root: Path, sessions: Sequence[AuditSession]) -> list[SourceBinding]:
+    """Bind the declared native pre-NY file to the existing post-NY file."""
+    pre_root = repository_root / "data/cme_orderflow_absorption_l2_v1/historical_completion/dec_jan_asia_europe"
+    pre_manifest = _read_json(pre_root / "acquisition-manifest.json")
+    post_root = repository_root / "data/cme_orderflow_absorption_l2_v3/dec2025_jan2026"
+    post_manifest = _read_json(post_root / "acquisition-manifest.json")
+    pre_files, post_files = pre_manifest.get("files"), post_manifest.get("files")
+    if not isinstance(pre_files, dict) or not isinstance(post_files, dict):
+        raise AsiaReplayError("native Dec/Jan source manifests are invalid")
+    output: list[SourceBinding] = []
+    for session in sessions:
+        pre = next((row for row in pre_files.values() if isinstance(row, dict) and row.get("session_date") == session.day and row.get("schema") == "mbp-10"), None)
+        post_key = next((key for key, row in post_files.items() if str(key).startswith("es_mbp10/") and isinstance(row, dict) and row.get("target_session") == session.day), None)
+        post = post_files.get(post_key) if post_key is not None else None
+        if not isinstance(pre, dict) or not isinstance(post, dict) or post_key is None:
+            raise AsiaReplayError(f"native Dec/Jan MBP-10 binding is missing: {session.day}")
+        output.append(SourceBinding(
+            session.period, pre_root / str(pre["local_path"]), (session.day,), str(pre["sha256"]), int(pre["bytes"]), False,
+            (post_root / str(post_key),), (str(post["sha256"]),), (int(post["bytes"]),),
+        ))
+    return output
+
+
 def source_bindings(repository_root: Path, sessions: Sequence[AuditSession]) -> tuple[SourceBinding, ...]:
     grouped: dict[str, list[AuditSession]] = defaultdict(list)
     for session in sessions:
         grouped[session.period].append(session)
-    expected = {
+    baseline = {
         "MAY_2026_MBO_DERIVED",
         "RETRO_JUNE_JULY_2026_MBO_DERIVED",
         "JULY_20_31_PILOT_MBO",
         "AUGUST_03_07_SHARED_MBO",
     }
-    if set(grouped) != expected:
+    allowed = baseline | {"DEC2025_JAN2026_NATIVE"}
+    if not set(grouped).issubset(allowed) or not baseline.issubset(set(grouped)):
         raise AsiaReplayError(f"unexpected Asia source periods: {sorted(grouped)}")
     bindings = [
         *_may_binding(repository_root, grouped["MAY_2026_MBO_DERIVED"]),
         *_retro_binding(repository_root, grouped["RETRO_JUNE_JULY_2026_MBO_DERIVED"]),
     ]
+    if "DEC2025_JAN2026_NATIVE" in grouped:
+        bindings.extend(_dec_jan_native_binding(repository_root, grouped["DEC2025_JAN2026_NATIVE"]))
     pilot_manifest = _read_json(
         repository_root / "docs/research_pipeline/cme_orderflow_absorption_v1/mbo-pilot-manifest.json"
     )
@@ -459,10 +510,10 @@ def source_bindings(repository_root: Path, sessions: Sequence[AuditSession]) -> 
         tuple(row.day for row in grouped["AUGUST_03_07_SHARED_MBO"]),
         str(acquired.get("file_sha256")), int(acquired.get("file_bytes")), True,
     ))
-    flattened = [day for binding in bindings for day in binding.days]
-    if flattened != [row.day for row in sessions]:
+    binding_by_day = {day: binding for binding in bindings for day in binding.days}
+    if set(binding_by_day) != {row.day for row in sessions}:
         raise AsiaReplayError("source bindings do not preserve the audited 48-session chronology")
-    return tuple(bindings)
+    return tuple(binding_by_day[row.day] for row in sessions)
 
 
 def verify_source_bindings(bindings: Sequence[SourceBinding]) -> list[dict[str, Any]]:
@@ -480,6 +531,11 @@ def verify_source_bindings(bindings: Sequence[SourceBinding]) -> list[dict[str, 
         actual_sha256 = _sha256(binding.path)
         if actual_sha256.lower() != binding.expected_sha256.lower():
             raise AsiaReplayError(f"sealed local MBO SHA-256 mismatch: {binding.path}")
+        if len(binding.extra_paths) != len(binding.extra_sha256) or len(binding.extra_paths) != len(binding.extra_bytes):
+            raise AsiaReplayError("native source binding hash metadata is incomplete")
+        for extra_path, extra_hash, extra_size in zip(binding.extra_paths, binding.extra_sha256, binding.extra_bytes):
+            if not extra_path.is_file() or extra_path.stat().st_size != extra_size or _sha256(extra_path).lower() != extra_hash.lower():
+                raise AsiaReplayError(f"sealed native source hash/size mismatch: {extra_path}")
         verified.append({
             "period": binding.period,
             "path": str(binding.path),
@@ -685,7 +741,7 @@ def _classify_asia_entry_cutoff(
 class _AsiaMboState:
     def __init__(self, spec: SessionSpec, prior_poc: float | None) -> None:
         self.spec = spec
-        self.adapter = historical.HistoricalMBOToMBP10Adapter()
+        self.adapter = public_books.source_model_adapter(spec.source_model)
         self.profile_volume: Counter[int] = Counter()
         self.profile_execution_records = 0
         self.decoded_records = 0
@@ -758,12 +814,13 @@ class _AsiaMboState:
         self.ordinal += 1
         self.stored_events += 1
 
-    def observe(self, record: historical.PrivateMBORecord) -> None:
+    def observe(self, record: object) -> None:
         if self.closed:
             raise AsiaReplayError(f"event routed to closed Asia session: {self.spec.day}")
         self.source_index += 1
         self.decoded_records += 1
-        if record.timestamp_ns >= self.spec.cutoff_ns:
+        timestamp_ns = public_books.source_timestamp_ns(record)
+        if timestamp_ns >= self.spec.cutoff_ns:
             self.reached_cutoff = True
             return
         previous_state = self.adapter.state
@@ -774,7 +831,7 @@ class _AsiaMboState:
                     self.latest_es_quote = self.prior_es_quote = None
                     self.latest_es_quote_ns = None
                     self._append(
-                        timestamp_ns=record.timestamp_ns,
+                        timestamp_ns=timestamp_ns,
                         event_type="BOOK_NON_EXECUTABLE",
                         book_state=self.adapter.state,
                     )
@@ -970,7 +1027,7 @@ def _process_daily_binding(
     state = _AsiaMboState(_spec(session, binding, staging), _require_prior(session, previous_result))
     next_progress = 5_000_000
     try:
-        for record in historical._stream_private_mbo(binding.path):
+        for record in public_books.stream_source(binding.path, session.source_model, binding.extra_paths):
             state.observe(record)
             if state.reached_cutoff:
                 break
@@ -1013,8 +1070,9 @@ def _process_shared_binding(
     next_progress = 5_000_000
     records = 0
     try:
-        for record in historical._stream_private_mbo(binding.path):
-            day = _date_from_ns(record.timestamp_ns)
+        source_model = sessions[0].source_model
+        for record in public_books.stream_source(binding.path, source_model, binding.extra_paths):
+            day = _date_from_ns(public_books.source_timestamp_ns(record))
             session = pending.get(day)
             if session is None:
                 continue
@@ -1477,7 +1535,7 @@ def run_replay(
         raise FileExistsError(f"immutable Asia output root already exists: {output_root}")
     staging = output_root.with_name(output_root.name + ".building")
     staging.mkdir(parents=True, exist_ok=True)
-    sessions = load_audit_sessions(audit_root)
+    sessions = load_audit_sessions(audit_root, include_native=True)
     bindings = source_bindings(repository_root, sessions)
     semantic_diff = semantic_diff_document()
     ny_before = _protected_ny_snapshot(repository_root)
