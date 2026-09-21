@@ -663,33 +663,36 @@ def source_bindings(repository_root: Path, sessions: Sequence[AuditSession]) -> 
         "AUGUST_03_07_SHARED_MBO",
     }
     allowed = baseline | {"DEC2025_JAN2026_NATIVE"}
-    if not set(grouped).issubset(allowed) or not baseline.issubset(set(grouped)):
+    if not set(grouped).issubset(allowed):
         raise EuropeReplayError(f"unexpected Europe source periods: {sorted(grouped)}")
-    bindings = [
-        *_may_binding(repository_root, grouped["MAY_2026_MBO_DERIVED"]),
-        *_retro_binding(repository_root, grouped["RETRO_JUNE_JULY_2026_MBO_DERIVED"]),
-    ]
+    bindings: list[SourceBinding] = []
+    if "MAY_2026_MBO_DERIVED" in grouped:
+        bindings.extend(_may_binding(repository_root, grouped["MAY_2026_MBO_DERIVED"]))
+    if "RETRO_JUNE_JULY_2026_MBO_DERIVED" in grouped:
+        bindings.extend(_retro_binding(repository_root, grouped["RETRO_JUNE_JULY_2026_MBO_DERIVED"]))
     if "DEC2025_JAN2026_NATIVE" in grouped:
         bindings.extend(_dec_jan_native_binding(repository_root, grouped["DEC2025_JAN2026_NATIVE"]))
-    pilot_manifest = _read_json(
-        repository_root / "docs/research_pipeline/cme_orderflow_absorption_v1/mbo-pilot-manifest.json"
-    )
-    pilot_path = repository_root / "data/cme_orderflow_absorption_v1/ESU6/mbo/ESU6_2026-07-20_2026-08-01_mbo.dbn"
-    bindings.append(SourceBinding(
-        "JULY_20_31_PILOT_MBO", pilot_path,
-        tuple(row.day for row in grouped["JULY_20_31_PILOT_MBO"]),
-        str(pilot_manifest["dbn_sha256"]), int(pilot_manifest["dbn_bytes"]), True,
-    ))
-    oos_manifest = _read_json(
-        repository_root / "docs/research_pipeline/cme_orderflow_absorption_v1/oos-v1-data-manifest.json"
-    )
-    acquired = oos_manifest.get("proposed_acquisition", {})
-    oos_path = repository_root / str(acquired.get("target_path"))
-    bindings.append(SourceBinding(
-        "AUGUST_03_07_SHARED_MBO", oos_path,
-        tuple(row.day for row in grouped["AUGUST_03_07_SHARED_MBO"]),
-        str(acquired.get("file_sha256")), int(acquired.get("file_bytes")), True,
-    ))
+    if "JULY_20_31_PILOT_MBO" in grouped:
+        pilot_manifest = _read_json(
+            repository_root / "docs/research_pipeline/cme_orderflow_absorption_v1/mbo-pilot-manifest.json"
+        )
+        pilot_path = repository_root / "data/cme_orderflow_absorption_v1/ESU6/mbo/ESU6_2026-07-20_2026-08-01_mbo.dbn"
+        bindings.append(SourceBinding(
+            "JULY_20_31_PILOT_MBO", pilot_path,
+            tuple(row.day for row in grouped["JULY_20_31_PILOT_MBO"]),
+            str(pilot_manifest["dbn_sha256"]), int(pilot_manifest["dbn_bytes"]), True,
+        ))
+    if "AUGUST_03_07_SHARED_MBO" in grouped:
+        oos_manifest = _read_json(
+            repository_root / "docs/research_pipeline/cme_orderflow_absorption_v1/oos-v1-data-manifest.json"
+        )
+        acquired = oos_manifest.get("proposed_acquisition", {})
+        oos_path = repository_root / str(acquired.get("target_path"))
+        bindings.append(SourceBinding(
+            "AUGUST_03_07_SHARED_MBO", oos_path,
+            tuple(row.day for row in grouped["AUGUST_03_07_SHARED_MBO"]),
+            str(acquired.get("file_sha256")), int(acquired.get("file_bytes")), True,
+        ))
     binding_by_day = {day: binding for binding in bindings for day in binding.days}
     if set(binding_by_day) != {row.day for row in sessions}:
         raise EuropeReplayError("source bindings do not preserve the audited 48-session chronology")
@@ -1608,6 +1611,7 @@ def _materialize(
     semantic_diff: Mapping[str, Any],
     ny_before: Mapping[str, str],
     ny_after: Mapping[str, str],
+    expected_eligible_sessions: int = EXPECTED_ELIGIBLE_SESSIONS,
 ) -> dict[str, Any]:
     eligible_sessions = [row for row in sessions if bool(row["eligible"])]
     setups, trades = _trade_and_setup_rows(sessions)
@@ -1699,8 +1703,11 @@ def _materialize(
         "native_mes_evidence": False,
         "fresh_oos_evidence": False,
     }
-    if summary["eligible_session_count"] != EXPECTED_ELIGIBLE_SESSIONS:
-        raise EuropeReplayError("final output does not contain exactly 46 eligible sessions")
+    if summary["eligible_session_count"] != expected_eligible_sessions:
+        raise EuropeReplayError(
+            f"final output eligible-session count mismatch: "
+            f"expected {expected_eligible_sessions}, got {summary['eligible_session_count']}"
+        )
     if summary["ny_artifacts_mutated"]:
         raise EuropeReplayError("protected NY W04 source or artifact changed during Europe replay")
     eligible_rows = [{
@@ -1730,6 +1737,8 @@ def run_replay(
     *, repository_root: Path,
     output_root: Path = OUTPUT_ROOT,
     audit_root: Path = AUDIT_ROOT,
+    session_dates: Sequence[str] | None = None,
+    profile_only_dates: Sequence[str] = (),
 ) -> dict[str, Any]:
     repository_root = repository_root.resolve()
     output_root = output_root if output_root.is_absolute() else repository_root / output_root
@@ -1740,7 +1749,44 @@ def run_replay(
         raise FileExistsError(f"immutable Europe output root already exists: {output_root}")
     staging = output_root.with_name(output_root.name + ".building")
     staging.mkdir(parents=True, exist_ok=True)
-    sessions = load_audit_sessions(audit_root, include_native=True)
+    all_sessions = load_audit_sessions(audit_root, include_native=True)
+    if session_dates is None:
+        sessions = all_sessions
+        expected_eligible_sessions = EXPECTED_ELIGIBLE_SESSIONS
+    else:
+        requested = tuple(sorted(str(day) for day in session_dates))
+        if len(requested) != len(set(requested)):
+            raise EuropeReplayError("requested Europe session dates contain duplicates")
+        by_day = {row.day: row for row in all_sessions}
+        missing = sorted(set(requested) - set(by_day))
+        if missing:
+            raise EuropeReplayError(f"requested Europe session dates are not audited: {missing}")
+        profile_only = {str(day) for day in profile_only_dates}
+        unknown_profile_only = sorted(profile_only - set(by_day))
+        if unknown_profile_only:
+            raise EuropeReplayError(f"requested Europe profile-only dates are not audited: {unknown_profile_only}")
+        if profile_only & set(requested):
+            raise EuropeReplayError("a requested Europe strategy date cannot also be profile-only")
+        for day in profile_only:
+            by_day[day] = replace(by_day[day], classification=PROFILE_ONLY_CLASSIFICATION)
+        ineligible = sorted(day for day in requested if not by_day[day].eligible)
+        if ineligible:
+            raise EuropeReplayError(f"requested Europe session dates are not replay-compatible: {ineligible}")
+        selected_days = set(requested)
+        frontier = list(requested)
+        while frontier:
+            current = by_day[frontier.pop()]
+            prior = current.prior_day
+            if prior and prior not in selected_days:
+                if prior not in by_day:
+                    raise EuropeReplayError(f"requested Europe session lacks audited prior profile: {current.day}")
+                selected_days.add(prior)
+                frontier.append(prior)
+        sessions = tuple(
+            replace(row, classification=PROFILE_ONLY_CLASSIFICATION) if row.day in profile_only else row
+            for row in all_sessions if row.day in selected_days
+        )
+        expected_eligible_sessions = len(requested)
     bindings = source_bindings(repository_root, sessions)
     semantic_diff = semantic_diff_document()
     ny_before = _protected_ny_snapshot(repository_root)
@@ -1780,6 +1826,7 @@ def run_replay(
         semantic_diff=semantic_diff,
         ny_before=ny_before,
         ny_after=ny_after,
+        expected_eligible_sessions=expected_eligible_sessions,
     )
     work = staging / "_work"
     if work.exists():

@@ -54,6 +54,9 @@ TAPE_ROOT = allp.TAPE_ROOT
 BASELINE_ROOT = Path(
     "research_runs/CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY_BERLIN_HARDFLAT_ALL_PERIOD"
 )
+TRAIN_DATE_SUBSET_ROOT = Path(
+    "research_runs/CMEOrderflowAbsorption.ES_L2_V3_POC_ONLY_BERLIN_HARDFLAT_TRAIN_DATE_SUBSET"
+)
 PREFLIGHT_ROOT = Path(
     "research_runs/CMEOrderflowAbsorption.ES_L2_BERLIN_HARDFLAT_SEMANTIC_PREFLIGHT"
 )
@@ -482,6 +485,176 @@ def _simulate_v3_period(bundle: allp.PeriodBundle) -> tuple[dict[str, Any], list
         "historical_observed_unresolved": historical_accumulator.unresolved,
     }
     return row, corrected_trades, audit
+
+
+def _simulate_v3_day(
+    bundle: allp.PeriodBundle,
+    day: str,
+    by_day: Mapping[str, Sequence[Mapping[str, Any]]],
+    indexes: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Replay one compact causal day through the existing Berlin engine.
+
+    This is deliberately a thin date-filtered entry point over the same
+    ``BerlinSessionCausalTape`` and ``simulate_berlin_session`` functions used
+    by the immutable all-period baseline.  It exists only to materialize
+    missing zero/low-activity date artifacts; it does not introduce a second
+    signal or execution implementation.
+    """
+    candidates = [
+        row for row in by_day.get(day, ())
+        if master.interaction_is_accepted(row, threshold="0.50")
+    ]
+    day_indexes = {str(row["interaction_id"]): indexes[str(row["interaction_id"])] for row in candidates}
+    tape = BerlinSessionCausalTape.from_parquet(day, _tape_path(bundle, day))
+    session = simulate_berlin_session(tape, candidates, day_indexes)
+    trades = [dict(row) for row in session.trades]
+    performance = historical._performance(trades)
+    outcomes = {str(key): str(value) for key, value in session.terminal_outcomes.items()}
+    exit_counts = Counter(str(row["exit_reason"]) for row in trades)
+    metrics = {
+        "period_id": bundle.period.period_id,
+        "session_date": day,
+        "source_model": bundle.period.source_model,
+        "source_group": bundle.period.source_group,
+        "completed_interactions": len(by_day.get(day, ())),
+        "accepted_setups": len(candidates),
+        "confirmations": int(session.confirmations),
+        "hard_flat_berlin_exits": exit_counts["HARD_FLAT_BERLIN"],
+        "data_gap_3s_force_flat_exits": exit_counts["DATA_GAP_3S_FORCE_FLAT"],
+        "source_end_force_flat_last_valid_bbo_exits": exit_counts[
+            "SOURCE_END_FORCE_FLAT_LAST_VALID_BBO"
+        ],
+        "unresolved": int(session.unresolved),
+        "integrity_failures": 0,
+        **performance,
+    }
+    audit = {
+        "accepted_setup_ids": sorted(str(row["interaction_id"]) for row in candidates),
+        "corrected_terminal_outcomes": outcomes,
+        "corrected_trades": trades,
+        "source_event_tape": str(_tape_path(bundle, day).resolve()),
+    }
+    return metrics, trades, audit
+
+
+def run_date_subset(
+    *,
+    repository_root: Path,
+    tape_root: Path = TAPE_ROOT,
+    dates: Sequence[str],
+    output_root: Path = TRAIN_DATE_SUBSET_ROOT,
+) -> dict[str, Any]:
+    """Materialize an immutable exact-date Berlin artifact supplement.
+
+    Only Dec/Jan dates backed by the already-built causal master are allowed.
+    The requested set must be unique, sorted deterministically for output, and
+    no unrequested session is replayed or published.
+    """
+    requested = tuple(str(day) for day in dates)
+    if not requested or len(requested) != len(set(requested)):
+        raise CorrectedAllPeriodError("date subset must be non-empty and duplicate-free")
+    if tuple(sorted(requested)) != requested:
+        raise CorrectedAllPeriodError("date subset must be supplied in chronological order")
+    repository_root = repository_root.resolve()
+    output_root = _resolve(repository_root, output_root)
+    if output_root.exists() or output_root.with_name(output_root.name + ".building").exists():
+        raise FileExistsError(f"immutable date-subset output exists or is staged: {output_root}")
+    bundles = {
+        bundle.period.period_id: bundle
+        for bundle in allp._period_bundles(repository_root, _resolve(repository_root, tape_root))
+    }
+    bundle_by_day: dict[str, allp.PeriodBundle] = {}
+    for period_id in ("DECEMBER_2025", "JANUARY_2026"):
+        bundle = bundles[period_id]
+        for day in bundle.days:
+            bundle_by_day[day] = bundle
+    unknown = [day for day in requested if day not in bundle_by_day]
+    if unknown:
+        raise CorrectedAllPeriodError(f"date subset is outside Dec/Jan causal master: {unknown}")
+
+    staging = output_root.with_name(output_root.name + ".building")
+    staging.mkdir(parents=True)
+    session_rows: list[dict[str, Any]] = []
+    all_trades: list[dict[str, Any]] = []
+    try:
+        # Load each period once, then replay only the requested dates.
+        period_inputs: dict[str, tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]] = {}
+        for period_id, bundle in bundles.items():
+            selected = [day for day in requested if bundle_by_day[day].period.period_id == period_id]
+            if not selected:
+                continue
+            _, indexes, by_day = _period_inputs(bundle)
+            period_inputs[period_id] = (indexes, by_day)
+        for day in requested:
+            bundle = bundle_by_day[day]
+            indexes, by_day = period_inputs[bundle.period.period_id]
+            metrics, trades, audit = _simulate_v3_day(bundle, day, by_day, indexes)
+            _write_json(staging / "sessions" / f"{day}.json", {
+                "metrics": metrics,
+                "trades": trades,
+                "semantic_audit": audit,
+            })
+            session_rows.append(metrics)
+            all_trades.extend(trades)
+        manifest = {
+            "status": "BERLIN_TRAIN_DATE_SUBSET_COMPLETE",
+            "strategy_id": STRATEGY_ID,
+            "execution_contract_sha256": CONTRACT_SHA256,
+            "historical_v3_contract_sha256": HISTORICAL_V3_CONTRACT_SHA256,
+            "evidence_label": EVIDENCE_LABEL,
+            "source_model": "EXISTING_CAUSAL_MASTER_UNDERLYING_NATIVE_MBP10",
+            "dates": list(requested),
+            "session_count": len(session_rows),
+            "trades": len(all_trades),
+            "network_calls": 0,
+            "downloads": 0,
+            "dbn_files_opened": 0,
+            "source_tape_files": [
+                {"date": day, "path": str(_tape_path(bundle_by_day[day], day).resolve()),
+                 "sha256": _sha256(_tape_path(bundle_by_day[day], day))}
+                for day in requested
+            ],
+        }
+        _write_json(staging / "manifest.json", manifest)
+        os.rename(staging, output_root)
+        return {**manifest, "output_root": str(output_root), "sessions": session_rows, "trades": all_trades}
+    except Exception:
+        raise
+
+
+def load_date_subset(repository_root: Path, output_root: Path, dates: Sequence[str]) -> dict[str, Any]:
+    """Load and validate an exact-date artifact supplement for Block 1."""
+    root = _resolve(repository_root.resolve(), output_root)
+    manifest = _read_json(root / "manifest.json")
+    requested = tuple(str(day) for day in dates)
+    if manifest.get("status") != "BERLIN_TRAIN_DATE_SUBSET_COMPLETE":
+        raise CorrectedAllPeriodError("Berlin date-subset manifest status invalid")
+    if tuple(manifest.get("dates", ())) != requested:
+        raise CorrectedAllPeriodError("Berlin date-subset dates do not match requested dates")
+    if manifest.get("execution_contract_sha256") != CONTRACT_SHA256:
+        raise CorrectedAllPeriodError("Berlin date-subset execution contract hash mismatch")
+    sessions: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
+    for day in requested:
+        payload = _read_json(root / "sessions" / f"{day}.json")
+        metrics = payload.get("metrics")
+        day_trades = payload.get("trades")
+        if not isinstance(metrics, dict) or str(metrics.get("session_date")) != day or not isinstance(day_trades, list):
+            raise CorrectedAllPeriodError(f"Berlin date-subset session artifact invalid: {day}")
+        sessions.append(dict(metrics))
+        trades.extend(dict(row) for row in day_trades)
+    if len(sessions) != len(requested) or len({str(row["session_date"]) for row in sessions}) != len(requested):
+        raise CorrectedAllPeriodError("Berlin date-subset session identity mismatch")
+    return {
+        "status": "PASS",
+        "execution_mode": "REUSED_CORRECTED_BERLIN_DATE_SUBSET_ARTIFACT",
+        "strategy_id": STRATEGY_ID,
+        "contract_hash": CONTRACT_SHA256,
+        "sessions": sessions,
+        "trades": trades,
+        "source_period_artifact_hashes": {"date_subset_manifest.json": _sha256(root / "manifest.json")},
+    }
 
 
 def _aggregate_baseline(periods: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
