@@ -32,6 +32,8 @@ RISK_BUDGET_USD = 250.0
 ES_POINT_VALUE, MES_POINT_VALUE = 50.0, 5.0
 ES_COMMISSION, MES_COMMISSION = 3.0, 1.25
 ES_CAP, MES_CAP = 6, 60
+NATIVE_EXECUTION_POLICY = "NATIVE_INSTRUMENT_PRICE_PATH"
+ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS = "ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS"
 RECOVERY_WINDOWS_NS = (100_000_000, 250_000_000, 500_000_000, 1_000_000_000)
 LEVEL_NAMES = (
     "PRIOR_RTH_HIGH", "PRIOR_RTH_LOW", "PRIOR_RTH_POC", "PRIOR_RTH_VAH",
@@ -371,6 +373,35 @@ class L2Config:
     rapid_cancel_penalty_component_weight: float = 0.30
     adverse_progress_penalty_component_weight: float = 0.20
     weights_label: str = "L2_V1_PREDECLARED_RESEARCH_WEIGHTS"
+
+
+@dataclass(frozen=True)
+class L2ClassBConfig:
+    """Execution/confirmation parameters varied only by Class-B research.
+
+    Entry latency is deliberately absent: the 2 ms readiness latency is a
+    frozen semantic constant, not an optimization dimension.
+    """
+
+    min_confirmation_seconds: float = MIN_CONFIRMATION_NS / 1_000_000_000
+    max_confirmation_seconds: float = MAX_CONFIRMATION_NS / 1_000_000_000
+    favorable_confirmation_ticks: float = 3.0
+    confirmation_execution_count: int = 1
+    confirmation_volume_threshold: int = 0
+    stop_ticks: int = STOP_BUFFER_TICKS
+    target_r: float = TARGET_R
+
+    def __post_init__(self) -> None:
+        if self.min_confirmation_seconds < 0 or self.max_confirmation_seconds < self.min_confirmation_seconds:
+            raise L2ValidationError("invalid Class-B confirmation window")
+        if self.favorable_confirmation_ticks <= 0:
+            raise L2ValidationError("favorable confirmation ticks must be positive")
+        if self.confirmation_execution_count < 1 or self.confirmation_volume_threshold < 0:
+            raise L2ValidationError("invalid Class-B confirmation requirement")
+        if int(self.stop_ticks) != self.stop_ticks or self.stop_ticks < 0:
+            raise L2ValidationError("Class-B stop ticks must be a non-negative integer")
+        if self.target_r <= 0:
+            raise L2ValidationError("Class-B target R must be positive")
 
 
 @dataclass
@@ -813,8 +844,10 @@ class L2Position:
 class L2SignalEngine:
     """Predeclared L2 setup qualification and frozen causal confirmation gate."""
 
-    def __init__(self, config: L2Config = L2Config()) -> None:
-        self.config = config; self.pending: dict[str, L2Setup] = {}; self.position: L2Position | None = None
+    def __init__(self, config: L2Config = L2Config(), class_b: L2ClassBConfig = L2ClassBConfig()) -> None:
+        self.config = config; self.class_b = class_b; self.pending: dict[str, L2Setup] = {}; self.position: L2Position | None = None
+        self._confirmation_counts: dict[str, int] = {}
+        self._confirmation_volume: dict[str, int] = {}
         self.events: list[dict[str, object]] = []; self.rejections: list[dict[str, object]] = []
 
     def register_completed(self, interaction: L2Interaction) -> L2Setup | None:
@@ -823,34 +856,73 @@ class L2SignalEngine:
         if not accepted:
             self.rejections.append({"interaction_id": interaction.interaction_id, "reasons": reasons, **quality}); return None
         setup = L2Setup(f"L2:{interaction.interaction_id}", interaction); self.pending[setup.setup_id] = setup
+        self._confirmation_counts[setup.setup_id] = 0
+        self._confirmation_volume[setup.setup_id] = 0
         self.events.append({"setup_id": setup.setup_id, "state": setup.state, "timestamp_ns": interaction.end_ns, **quality, "weights_label": self.config.weights_label})
         return setup
 
+    def _observe_confirmation(self, setup: L2Setup, event: Execution) -> float | None:
+        if setup.terminal_reason is not None or setup.state == "CONFIRMED":
+            return None
+        end = setup.interaction.end_ns or 0
+        age = event.timestamp_ns - end
+        min_ns = int(self.class_b.min_confirmation_seconds * 1_000_000_000)
+        max_ns = int(self.class_b.max_confirmation_seconds * 1_000_000_000)
+        if age > max_ns:
+            setup.state, setup.terminal_reason = "FAILED", "CONFIRMATION_WINDOW_EXPIRED"
+            return None
+        if age < min_ns:
+            return None
+        self._confirmation_counts[setup.setup_id] += 1
+        self._confirmation_volume[setup.setup_id] += event.size
+        favorable = (
+            (event.price - float(setup.interaction.end_price)) / TICK
+            if setup.interaction.direction == "BUYER_ABSORPTION"
+            else (float(setup.interaction.end_price) - event.price) / TICK
+        )
+        if (
+            favorable >= self.class_b.favorable_confirmation_ticks
+            and self._confirmation_counts[setup.setup_id] >= self.class_b.confirmation_execution_count
+            and self._confirmation_volume[setup.setup_id] >= self.class_b.confirmation_volume_threshold
+        ):
+            setup.state = "CONFIRMED"
+            setup.confirmation_timestamp_ns, setup.confirmation_price = event.timestamp_ns, event.price
+            # Entry latency is intentionally not parameterized.
+            setup.entry_ready_ns = event.timestamp_ns + ENTRY_LATENCY_NS
+            self.events.append({"setup_id": setup.setup_id, "state": "CONFIRMED", "timestamp_ns": event.timestamp_ns, "favorable_ticks": favorable})
+        return favorable
+
     def observe_execution(self, event: Execution) -> None:
         for setup in self.pending.values():
-            if setup.terminal_reason is not None or setup.state == "CONFIRMED": continue
-            end = setup.interaction.end_ns or 0; age = event.timestamp_ns - end
-            if age > MAX_CONFIRMATION_NS:
-                setup.state, setup.terminal_reason = "FAILED", "CONFIRMATION_WINDOW_EXPIRED"; continue
-            if age < MIN_CONFIRMATION_NS: continue
-            favorable = ((event.price - float(setup.interaction.end_price)) / TICK if setup.interaction.direction == "BUYER_ABSORPTION" else (float(setup.interaction.end_price) - event.price) / TICK)
-            if favorable >= 3:
-                setup.state = "CONFIRMED"; setup.confirmation_timestamp_ns, setup.confirmation_price = event.timestamp_ns, event.price; setup.entry_ready_ns = event.timestamp_ns + ENTRY_LATENCY_NS
-                self.events.append({"setup_id": setup.setup_id, "state": "CONFIRMED", "timestamp_ns": event.timestamp_ns, "favorable_ticks": favorable})
+            self._observe_confirmation(setup, event)
 
     def advance(self, timestamp_ns: int) -> None:
         for setup in self.pending.values():
-            if setup.terminal_reason is None and setup.state != "CONFIRMED" and timestamp_ns > (setup.interaction.end_ns or 0) + MAX_CONFIRMATION_NS:
+            max_ns = int(self.class_b.max_confirmation_seconds * 1_000_000_000)
+            if setup.terminal_reason is None and setup.state != "CONFIRMED" and timestamp_ns > (setup.interaction.end_ns or 0) + max_ns:
                 setup.state, setup.terminal_reason = "FAILED", "CONFIRMATION_WINDOW_EXPIRED"
 
-    def try_enter(self, setup_id: str, *, timestamp_ns: int, es_bid: float, es_ask: float, mes_bid: float | None = None, mes_ask: float | None = None) -> L2Position | None:
+    def try_enter(self, setup_id: str, *, timestamp_ns: int, es_bid: float, es_ask: float,
+                  mes_bid: float | None = None, mes_ask: float | None = None,
+                  execution_policy: str = NATIVE_EXECUTION_POLICY) -> L2Position | None:
+        if execution_policy not in {NATIVE_EXECUTION_POLICY, ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS}:
+            raise L2ValidationError(f"unsupported execution policy: {execution_policy}")
         setup = self.pending[setup_id]
         if setup.state != "CONFIRMED" or setup.entry_ready_ns is None or timestamp_ns < setup.entry_ready_ns: return None
         if self.position is not None:
             setup.state, setup.terminal_reason = "FAILED", "COMPLIANCE_BLOCK_ACTIVE_POSITION"; return None
-        prices = initial_prices(setup.interaction.direction, es_bid, es_ask, setup.interaction.zone_low, setup.interaction.zone_high); sizing = size_for_instrument(prices, "ES"); instrument = "ES"
-        if int(sizing["contracts"]) < 1 and mes_bid is not None and mes_ask is not None:
-            prices = initial_prices(setup.interaction.direction, mes_bid, mes_ask, setup.interaction.zone_low, setup.interaction.zone_high); sizing = size_for_instrument(prices, "MES"); instrument = "MES"
+        prices = initial_prices(setup.interaction.direction, es_bid, es_ask, setup.interaction.zone_low, setup.interaction.zone_high,
+                                stop_buffer_ticks=self.class_b.stop_ticks, target_r=self.class_b.target_r); sizing = size_for_instrument(prices, "ES"); instrument = "ES"
+        if int(sizing["contracts"]) < 1 and execution_policy == ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS:
+            sizing = size_for_instrument(prices, "MES")
+            instrument = "MES"
+        elif int(sizing["contracts"]) < 1 and mes_bid is not None and mes_ask is not None:
+            prices = initial_prices(
+                setup.interaction.direction, mes_bid, mes_ask,
+                setup.interaction.zone_low, setup.interaction.zone_high,
+                stop_buffer_ticks=self.class_b.stop_ticks, target_r=self.class_b.target_r,
+            )
+            sizing = size_for_instrument(prices, "MES"); instrument = "MES"
         if int(sizing["contracts"]) < 1:
             setup.state, setup.terminal_reason = "FAILED", "INSUFFICIENT_RISK_BUDGET_FOR_ONE_CONTRACT"; return None
         self.position = L2Position(setup, instrument, int(sizing["contracts"]), prices, timestamp_ns)

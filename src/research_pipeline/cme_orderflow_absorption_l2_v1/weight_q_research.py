@@ -40,6 +40,8 @@ from .model import (
     STOP_BUFFER_TICKS,
     TARGET_R,
     TICK,
+    NATIVE_EXECUTION_POLICY,
+    ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS,
     initial_prices,
     size_for_instrument,
 )
@@ -284,10 +286,14 @@ class SessionCausalTape:
         self, day: str, rows: Iterable[Mapping[str, Any]], *,
         stop_buffer_ticks: int = STOP_BUFFER_TICKS,
         target_r: float = TARGET_R,
+        execution_policy: str = NATIVE_EXECUTION_POLICY,
     ) -> None:
         self.day = day
         self.stop_buffer_ticks = int(stop_buffer_ticks)
         self.target_r = float(target_r)
+        if execution_policy not in {NATIVE_EXECUTION_POLICY, ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS}:
+            raise WeightQResearchError(f"unsupported execution policy: {execution_policy}")
+        self.execution_policy = execution_policy
         if self.stop_buffer_ticks < 0 or self.target_r <= 0:
             raise WeightQResearchError("invalid execution geometry")
         self.ordinals = array("q")
@@ -469,12 +475,16 @@ class SessionCausalTape:
         hard_ordinal = int(terminal["event_ordinal"])
         start = bisect.bisect_right(self.ordinals, entry_ordinal)
         end = bisect.bisect_left(self.ordinals, hard_ordinal)
+        path_instrument = (
+            "ES" if self.execution_policy == ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS
+            and instrument == "MES" else instrument
+        )
         if direction == "LONG":
-            series = self._series[(instrument, "bid")]
+            series = self._series[(path_instrument, "bid")]
             stop_index = series.first_le(start, end, stop)
             target_index = series.first_ge(start, end, target)
         else:
-            series = self._series[(instrument, "ask")]
+            series = self._series[(path_instrument, "ask")]
             stop_index = series.first_ge(start, end, stop)
             target_index = series.first_le(start, end, target)
         indexes = [(index, reason) for index, reason in ((stop_index, "STOP"), (target_index, "TARGET")) if index is not None]
@@ -485,8 +495,8 @@ class SessionCausalTape:
             if boundary is not None:
                 raise PositionBoundaryOverlap(boundary, instrument)
             reference = (
-                self.es_bid[trigger_index] if instrument == "ES" and direction == "LONG"
-                else self.es_ask[trigger_index] if instrument == "ES"
+                self.es_bid[trigger_index] if path_instrument == "ES" and direction == "LONG"
+                else self.es_ask[trigger_index] if path_instrument == "ES"
                 else self.mes_bid[trigger_index] if direction == "LONG"
                 else self.mes_ask[trigger_index]
             )
@@ -497,7 +507,7 @@ class SessionCausalTape:
             raise PositionBoundaryOverlap(boundary, instrument)
         if self.source_end_event is not None:
             return None
-        quote_prefix = "es" if instrument == "ES" else "mes"
+        quote_prefix = "es" if path_instrument == "ES" else "mes"
         quote_timestamp = self.hard_event.get(f"{quote_prefix}_quote_timestamp_ns")
         reference_name = f"{quote_prefix}_{'bid' if direction == 'LONG' else 'ask'}"
         reference = self.hard_event.get(reference_name)
@@ -526,7 +536,10 @@ class SessionCausalTape:
         )
         sizing = size_for_instrument(prices, "ES")
         instrument = "ES"
-        if int(sizing["contracts"]) < 1:
+        if int(sizing["contracts"]) < 1 and self.execution_policy == ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS:
+            sizing = size_for_instrument(prices, "MES")
+            instrument = "MES"
+        elif int(sizing["contracts"]) < 1:
             if not math.isfinite(self.mes_bid[index]) or not math.isfinite(self.mes_ask[index]):
                 outcome = EntryOutcome("MES_EXECUTION_UNAVAILABLE")
                 self._outcome_cache[cache_key] = outcome
@@ -583,6 +596,9 @@ class SessionCausalTape:
             "entry_timestamp_ns": int(self.timestamps[index]), "entry": float(prices["entry"]),
             "stop": float(prices["stop"]), "target": float(prices["target"]),
             "exit_timestamp_ns": exit_timestamp, "exit": exit_price, "exit_reason": reason,
+            "execution_policy": self.execution_policy, "gross_points": points,
+            "gross_r": gross / initial_risk if initial_risk else None,
+            "point_value_usd": point_value, "commission_per_side_usd": commission,
             "gross_pnl_usd": gross, "total_costs_usd": fees, "net_pnl_usd": gross - fees,
             "r_multiple": (gross - fees) / initial_risk if initial_risk else None,
         }

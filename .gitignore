@@ -3,43 +3,28 @@
 .research_worktrees/
 .tmp/
 external_data/
-data/value_area_trap/staging/
-data/value_area_trap/
+data/
 research_registry/
 research_runs/
-<<<<<<< HEAD
-job-002-recovery.patch
-random_open_artifacts.json
-random_open_report.json
-value_area_trap_artifacts.json
-value_area_trap_final_artifacts.json
-value_area_trap_final_report.json
-value_area_trap_report.json
-.phase-f2-real-*
-=======
+reports/
+
+# Research/runtime artifacts
 research_registry/*.log
 research_registry/*.sqlite3
 research_registry/b5-*/
-.phase-f2-real-*/
-data/value_area_trap/
+.phase-f2-real-*
 random_open_artifacts.json
 random_open_report.json
 value_area_trap_artifacts.json
-value_area_trap_report.jsonjob-002-recovery.patch
+value_area_trap_report.json
 value_area_trap_final_artifacts.json
 value_area_trap_final_report.json
-data/
-research_runs/
+job-002-recovery.patch
+
+# Data artifacts
 *.parquet
 *.zip
-job-002-recovery.patch
-value_area_trap_report.json
->>>>>>> origin/feature/prop-compliance
-.env.example
-reports/
-smithers.db
-smithers.db-shm
-smithers.db-wal
+*.part
 
 # Python generated files
 __pycache__/
@@ -49,14 +34,21 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+.venv/
 
-# Local test artifacts
+# Local test/temp artifacts
 .test-tmp/
+.pytest-*
+.tmp-*
+.codex-pytest-temp-*
 
 # Local scratch prompts
 btc-study-prompt.txt
 
 # Smithers runtime state
+smithers.db
+smithers.db-shm
+smithers.db-wal
 .smithers/*.db-shm
 .smithers/*.db-wal
 .smithers/*-logs.txt
@@ -64,24 +56,25 @@ btc-study-prompt.txt
 .smithers/workflows/implement-lsmr-v1-phase-a.tsx
 .smithers/workflows/implement-lsmr-v2-strict.tsx
 
-.pytest-*
-.tmp-*
-
-
-.codex-pytest-temp-*
-.pytest-*
-.tmp-*
-
-# Temporary Databento acquisition / quote tooling
+# Temporary Databento tooling
 acquire_*.py
 quote_*_cost.py
 download_*_holdout.py
 
-# Temporary acquisition / cost planning artifacts
+# Temporary acquisition / planning docs
 docs/research_pipeline/cme_orderflow_absorption_v1/*acquisition*.md
 docs/research_pipeline/cme_orderflow_absorption_v1/*acquisition*.json
 docs/research_pipeline/cme_orderflow_absorption_v1/*completion-plan.md
 docs/research_pipeline/cme_orderflow_absorption_v1/*cost*plan.md
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+*.journal
+
+# macOS
 .DS_Store
 
-.venv/
+# Local environment example currently not versioned
+.env.example

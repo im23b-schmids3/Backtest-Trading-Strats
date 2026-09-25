@@ -27,10 +27,10 @@ from statistics import median
 from typing import Any, Iterable, Iterator, Literal
 
 from .model import (
-    ENTRY_LATENCY_NS, ES_COMMISSION, ES_POINT_VALUE, MAX_CONFIRMATION_NS, L2Config, L2Interaction,
+    ENTRY_LATENCY_NS, ES_COMMISSION, ES_POINT_VALUE, MAX_CONFIRMATION_NS, L2ClassBConfig, L2Config, L2Interaction,
     L2InteractionEngine, L2Position, L2Setup, L2SignalEngine, L2ValidationError,
     MBOEvent, MBOToMBP10View, MBP10Snapshot, MBP10Update, StructuralLevel,
-    TICK, _point_price,
+    TICK, NATIVE_EXECUTION_POLICY, ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS, _point_price,
 )
 
 
@@ -350,8 +350,14 @@ def contract_for_config(*, strategy_id: str, config: L2Config, first_run_policy:
         "interaction": {"vicinity_ticks": 4, "recovery_windows_ms": [100, 250, 500, 1000]},
         "execution": {
             "confirmation_window_seconds": [5.0, 15.0], "confirmation_favorable_ticks": 3,
-            "entry_latency_ms": ENTRY_LATENCY_NS / 1_000_000, "stop_buffer_ticks": 5,
-            "target_r": 3.0, "risk_budget_usd": 250.0, "es_first": True,
+            "entry_latency_ms": ENTRY_LATENCY_NS / 1_000_000,
+            "stop_buffer_ticks": self.class_b.stop_ticks, "target_r": self.class_b.target_r,
+            "min_confirmation_seconds": self.class_b.min_confirmation_seconds,
+            "max_confirmation_seconds": self.class_b.max_confirmation_seconds,
+            "favorable_confirmation_ticks": self.class_b.favorable_confirmation_ticks,
+            "confirmation_execution_count": self.class_b.confirmation_execution_count,
+            "confirmation_volume_threshold": self.class_b.confirmation_volume_threshold,
+            "risk_budget_usd": 250.0, "es_first": True,
             "mes_fallback": True, "max_es_contracts": 6, "max_mes_contracts": 60,
         },
         "configuration": {field.name: getattr(config, field.name) for field in fields(config)},
@@ -383,13 +389,18 @@ def _quote(snapshot: MBP10Snapshot) -> tuple[float, float] | None:
 class HistoricalL2Runner:
     """Incremental single-session runner over public MBP-10 and execution events."""
 
-    def __init__(self, *, date: str, evidence_label: str, levels: Iterable[StructuralLevel], config: L2Config = L2Config(), strategy_id: str = STRATEGY_ID,
-                 require_native_mes_for_fallback: bool = False) -> None:
+    def __init__(self, *, date: str, evidence_label: str, levels: Iterable[StructuralLevel], config: L2Config = L2Config(),
+                 class_b: L2ClassBConfig = L2ClassBConfig(), strategy_id: str = STRATEGY_ID,
+                 require_native_mes_for_fallback: bool = False,
+                 execution_policy: str = NATIVE_EXECUTION_POLICY) -> None:
         assert_no_order_identity_in_strategy_layer()
-        self.date, self.evidence_label, self.config, self.strategy_id = date, evidence_label, config, strategy_id
+        if execution_policy not in {NATIVE_EXECUTION_POLICY, ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS}:
+            raise HistoricalReplayError(f"unsupported execution policy: {execution_policy}")
+        self.date, self.evidence_label, self.config, self.class_b, self.strategy_id = date, evidence_label, config, class_b, strategy_id
         self.require_native_mes_for_fallback = require_native_mes_for_fallback
+        self.execution_policy = execution_policy
         self.interactions = L2InteractionEngine(list(levels), config)
-        self.signals = L2SignalEngine(config)
+        self.signals = L2SignalEngine(config, class_b)
         self.completed_seen = 0
         self.es_quote: tuple[float, float] | None = None
         self.mes_quote: tuple[float, float] | None = None
@@ -438,7 +449,11 @@ class HistoricalL2Runner:
             # frozen risk sizing permits it.  The standard runner retains its
             # historical INSUFFICIENT_RISK_BUDGET classification unless this
             # explicit source-unavailable policy is enabled by a later runner.
-            if getattr(self, "require_native_mes_for_fallback", False) and self.mes_quote is None:
+            if (
+                getattr(self, "require_native_mes_for_fallback", False)
+                and self.execution_policy != ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS
+                and self.mes_quote is None
+            ):
                 from .model import initial_prices, size_for_instrument
                 es_prices = initial_prices(
                     setup.interaction.direction, self.es_quote[0], self.es_quote[1],
@@ -452,11 +467,21 @@ class HistoricalL2Runner:
             position = self.signals.try_enter(
                 setup_id, timestamp_ns=timestamp_ns, es_bid=self.es_quote[0], es_ask=self.es_quote[1],
                 mes_bid=self.mes_quote[0] if self.mes_quote else None, mes_ask=self.mes_quote[1] if self.mes_quote else None,
+                execution_policy=self.execution_policy,
             )
             if position is not None:
                 self.diagnostic_events.append({"event": "ENTRY", "setup_id": setup_id, "timestamp_ns": timestamp_ns,
                                                "instrument": position.instrument, "contracts": position.contracts})
                 break
+
+    def _price_path_instrument(self, sizing_instrument: str) -> str:
+        """Return the quote stream used for entry, exits, and hard-flat pricing."""
+        if (
+            self.execution_policy == ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS
+            and sizing_instrument == "MES"
+        ):
+            return "ES"
+        return sizing_instrument
 
     def _close_position(self, timestamp_ns: int, reference: float, reason: str) -> None:
         position = self.signals.position
@@ -476,7 +501,10 @@ class HistoricalL2Runner:
             "level": position.setup.interaction.level.name, "instrument": position.instrument, "contracts": position.contracts,
             "entry_timestamp_ns": position.entry_timestamp_ns, "entry": position.prices["entry"], "stop": position.prices["stop"],
             "target": position.prices["target"], "exit_timestamp_ns": timestamp_ns, "exit": exit_price,
-            "exit_reason": reason, "gross_pnl_usd": gross, "total_costs_usd": fees, "net_pnl_usd": gross - fees,
+            "exit_reason": reason, "execution_policy": self.execution_policy,
+            "gross_points": points, "gross_r": gross / initial_risk if initial_risk else None,
+            "point_value_usd": point_value, "commission_per_side_usd": commission,
+            "gross_pnl_usd": gross, "total_costs_usd": fees, "net_pnl_usd": gross - fees,
             "r_multiple": (gross - fees) / initial_risk if initial_risk else None,
         })
         self.diagnostic_events.append({"event": "EXIT", "setup_id": position.setup.setup_id, "timestamp_ns": timestamp_ns, "reason": reason})
@@ -484,7 +512,11 @@ class HistoricalL2Runner:
 
     def _manage_position(self, timestamp_ns: int, quote: tuple[float, float] | None, instrument: str) -> None:
         position = self.signals.position
-        if position is None or position.instrument != instrument or quote is None:
+        uses_es_path = (
+            self.execution_policy == ES_DERIVED_PRICE_PATH_WITH_ES_OR_MES_ECONOMICS
+            and position is not None and position.instrument == "MES" and instrument == "ES"
+        )
+        if position is None or (position.instrument != instrument and not uses_es_path) or quote is None:
             return
         long = position.prices["direction"] == "LONG"
         adverse, favorable = (quote[0], quote[0]) if long else (quote[1], quote[1])
@@ -521,7 +553,8 @@ class HistoricalL2Runner:
         self._new_completed()
         self.signals.advance(timestamp_ns)
         if self.signals.position is not None:
-            quote = self.es_quote if self.signals.position.instrument == "ES" else self.mes_quote
+            path_instrument = self._price_path_instrument(self.signals.position.instrument)
+            quote = self.es_quote if path_instrument == "ES" else self.mes_quote
             if quote is None:
                 raise HistoricalReplayError("cannot close active position without native executable quote")
             self._close_position(timestamp_ns, quote[0] if self.signals.position.prices["direction"] == "LONG" else quote[1], "SESSION_END")
@@ -543,7 +576,7 @@ class HistoricalL2Runner:
                 setup.state, setup.terminal_reason = "SOURCE_INCOMPLETE", "EXECUTION_UNRESOLVED_SOURCE_INCOMPLETE"
                 self.source_end_unresolved.append({"setup_id": setup.setup_id, "timestamp_ns": timestamp_ns,
                                                    "reason": setup.terminal_reason})
-            elif timestamp_ns <= (setup.interaction.end_ns or 0) + MAX_CONFIRMATION_NS:
+            elif timestamp_ns <= (setup.interaction.end_ns or 0) + int(self.class_b.max_confirmation_seconds * 1_000_000_000):
                 setup.state, setup.terminal_reason = "SOURCE_INCOMPLETE", "CONFIRMATION_UNRESOLVED_SOURCE_INCOMPLETE"
                 self.source_end_unresolved.append({"setup_id": setup.setup_id, "timestamp_ns": timestamp_ns,
                                                    "reason": setup.terminal_reason})
@@ -561,7 +594,8 @@ class HistoricalL2Runner:
         """Frozen 22:45 UTC hard-flat handling using the current native quote."""
         if self.signals.position is None:
             return
-        quote = self.es_quote if self.signals.position.instrument == "ES" else self.mes_quote
+        path_instrument = self._price_path_instrument(self.signals.position.instrument)
+        quote = self.es_quote if path_instrument == "ES" else self.mes_quote
         if quote is None:
             raise HistoricalReplayError("cannot hard-flat active position without native executable quote")
         reference = quote[0] if self.signals.position.prices["direction"] == "LONG" else quote[1]
@@ -572,7 +606,8 @@ class HistoricalL2Runner:
         position = self.signals.position
         if position is None:
             return
-        quote_timestamp = self.es_quote_timestamp_ns if position.instrument == "ES" else self.mes_quote_timestamp_ns
+        path_instrument = self._price_path_instrument(position.instrument)
+        quote_timestamp = self.es_quote_timestamp_ns if path_instrument == "ES" else self.mes_quote_timestamp_ns
         if quote_timestamp is None or not cutoff_ns - CUTOFF_QUOTE_LOOKBACK_NS <= quote_timestamp <= cutoff_ns:
             raise HistoricalReplayError("hard-cutoff execution requires a valid inclusive causal BBO observation")
         # Keep the frozen normal-session reason by default.  A separately
@@ -584,7 +619,7 @@ class HistoricalL2Runner:
             position = self.signals.position
             if position is None:
                 return
-            quote = self.es_quote if position.instrument == "ES" else self.mes_quote
+            quote = self.es_quote if path_instrument == "ES" else self.mes_quote
             if quote is None:
                 raise HistoricalReplayError("cannot hard-flat active position without native executable quote")
             reference = quote[0] if position.prices["direction"] == "LONG" else quote[1]
@@ -603,6 +638,7 @@ class HistoricalL2Runner:
             row["confirmation_price"] = setup.confirmation_price
             row["confirmation_seconds"] = ((setup.confirmation_timestamp_ns - int(row["interaction_end_ns"])) / 1_000_000_000
                                            if setup.confirmation_timestamp_ns is not None else None)
+            row["entry_ready_ns"] = setup.entry_ready_ns
             row["terminal_reason"] = setup.terminal_reason
             trade = trades.get(str(setup_id))
             row["entry_displacement_points"] = (
@@ -618,6 +654,7 @@ class HistoricalL2Runner:
         rejected = len(self.setup_ledger) - accepted
         confirmed = sum(setup.state == "CONFIRMED" or setup.terminal_reason == "ENTRY" for setup in self.signals.pending.values())
         result = {"strategy_id": self.strategy_id, "date": self.date, "evidence_label": self.evidence_label,
+                  "execution_policy": self.execution_policy,
                   "weights_label": self.config.weights_label, "interactions_completed": len(self.interaction_ledger),
                   "accepted_setups": accepted, "rejected_setups": rejected, "confirmed_setups": confirmed,
                   "trades": len(self.trade_ledger), "es_trades": sum(row["instrument"] == "ES" for row in self.trade_ledger),
