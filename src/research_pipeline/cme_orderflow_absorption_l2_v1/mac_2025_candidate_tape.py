@@ -252,7 +252,10 @@ def _atomic_npz(path: Path, *, candidates: Sequence[Mapping[str, Any]], matrix: 
             events=events,
             metadata_json=np.asarray(json.dumps(dict(metadata), sort_keys=True, default=_json_default)),
         )
-        with open(temporary, "rb") as handle:
+        # Windows requires a writable file handle for os.fsync().  The file
+        # contents are already complete; opening r+b only flushes that same
+        # byte stream before the atomic replace.
+        with open(temporary, "r+b") as handle:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
     finally:
@@ -431,13 +434,16 @@ def classify_parameters(config: L2Config | None = None) -> list[dict[str, str]]:
 def build_candidate_tape(day: str, path: Path, prior_profiles: Mapping[str, baseline.Profile],
                          current_profiles: Mapping[str, baseline.Profile], *, output_path: Path,
                          source_sha256: str, semantic_sha256: str,
-                         config: L2Config | None = None) -> tuple[CandidateTape, dict[str, Any]]:
+                         config: L2Config | None = None,
+                         source_paths: Sequence[Path] | None = None) -> tuple[CandidateTape, dict[str, Any]]:
     """Run the existing causal route once and persist a reusable candidate tape."""
     config = config or L2Config()
     event_spool = EventSpool()
     try:
         result = baseline._route_day(day, path, dict(prior_profiles), config,
-                                     dict(current_profiles), capture_events=event_spool)  # type: ignore[arg-type]
+                                     dict(current_profiles), capture_events=event_spool,
+                                     source_paths=tuple(source_paths) if source_paths is not None else None,
+                                     candidate_tape_terminal_policy=True)  # type: ignore[arg-type]
         events = event_spool.to_array()
     finally:
         event_spool.close()
@@ -445,10 +451,18 @@ def build_candidate_tape(day: str, path: Path, prior_profiles: Mapping[str, base
     event_array = events if isinstance(events, np.ndarray) else _event_array(events)
     metadata = {
         "tape_version": TAPE_VERSION, "date": day, "source_path": str(path),
+        "source_paths": [str(item) for item in source_paths] if source_paths is not None else [str(path)],
         "source_sha256": source_sha256, "semantic_sha256": semantic_sha256,
         "feature_names": list(FEATURE_NAMES), "candidate_count": len(candidates),
         "event_count": len(event_array), "session_order": list(baseline.SESSION_ORDER),
+        "available_families": sorted({item.family_id for item in result["families"]}),
         "session_windows": {session: list(window) for session, window in baseline._session_windows(day).items()},
+        "completed_strategy_sessions": result["completed_strategy_sessions"],
+        "final_strategy_window_end_ns": result["final_strategy_window_end_ns"],
+        "source_last_timestamp_ns": result["source_last_timestamp_ns"],
+        "last_strategy_timestamp_ns": result["last_strategy_timestamp_ns"],
+        "book_state_at_last_strategy_record": result["book_state_at_last_strategy_record"],
+        "post_session_terminal_state_accepted": result["post_session_terminal_state_accepted"],
         "raw_replay_seconds": result["timings"]["total_seconds"],
         "candidate_definition": "all completed causally valid family-level interactions, including baseline rejects",
         "confirmation_horizon_seconds": MAX_CONFIRMATION_NS / 1_000_000_000,

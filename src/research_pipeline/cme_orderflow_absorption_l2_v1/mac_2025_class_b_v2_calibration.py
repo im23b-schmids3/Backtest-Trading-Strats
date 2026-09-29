@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-import optuna
+try:  # Evaluation helpers are also reused by frozen replays without Optuna.
+    import optuna
+except ImportError:  # pragma: no cover - depends on the local optional extra
+    optuna = None  # type: ignore[assignment]
 
 from . import mac_2025_candidate_tape as candidate_tape
 from . import mac_2025_class_b_optuna as v1

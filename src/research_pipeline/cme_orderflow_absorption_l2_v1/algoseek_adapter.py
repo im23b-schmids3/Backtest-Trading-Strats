@@ -26,7 +26,7 @@ import gzip
 import hashlib
 import json
 import os
-import resource
+import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -34,6 +34,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Literal, Mapping, Sequence
 from zoneinfo import ZoneInfo
+
+try:  # ``resource`` is unavailable on Windows; this is diagnostic-only.
+    import resource
+except ImportError:  # pragma: no cover - exercised on Windows
+    resource = None  # type: ignore[assignment]
 
 from . import historical_runner as historical
 from .model import Execution, MBP10Snapshot, MBPLevel, TICK
@@ -1091,24 +1096,21 @@ def streaming_dry_build(
     """Exercise one session's canonical merge without retaining or writing events."""
     metrics, profile = StreamingMetrics(), StreamingProfile()
     started = time.monotonic()
-    start_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    start_rss = _peak_rss_bytes()
     mes_coverage = _RawBBOCoverage()
     for event in iter_canonical_events_from_paths(es_depth_paths=es_depth_paths, es_taq_paths=es_taq_paths,
                                                   mes_taq_paths=mes_taq_paths, profile=profile, metrics=metrics,
                                                   mes_bbo_coverage=mes_coverage):
         pass
-    end_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # macOS reports bytes; Linux reports KiB.  The measurement is process-wide
-    # high-water mark, so callers should run this in a fresh process for a
-    # meaningful per-session peak.
-    peak_bytes = end_rss if os.uname().sysname == "Darwin" else end_rss * 1024
-    start_bytes = start_rss if os.uname().sysname == "Darwin" else start_rss * 1024
+    peak_bytes = _peak_rss_bytes()
+    start_bytes = start_rss
     session_start, session_end = (None, None) if metrics.raw_first_timestamp_ns is None else _logical_cme_session_bounds(metrics.raw_first_timestamp_ns)
     return {
         "status": "ALGOSEEK_STREAMING_DRY_BUILD_COMPLETE",
         "elapsed_seconds": time.monotonic() - started,
         "peak_rss_bytes": peak_bytes,
-        "peak_rss_increment_bytes": max(0, peak_bytes - start_bytes),
+        "peak_rss_increment_bytes": (max(0, peak_bytes - start_bytes)
+                                      if peak_bytes is not None and start_bytes is not None else None),
         "canonical_events_emitted": metrics.canonical_events_emitted,
         "maximum_depth_timestamp_rows": metrics.max_depth_timestamp_rows,
         "maximum_merge_pending_events": metrics.max_merge_pending_events,
@@ -1117,6 +1119,20 @@ def streaming_dry_build(
         "profile": profile.result(),
         "streaming_metrics": metrics.as_dict(),
     }
+
+
+def _peak_rss_bytes() -> int | None:
+    """Return process peak RSS in bytes where the host exposes it.
+
+    This value is diagnostic only and does not participate in replay or feature
+    calculations. Windows Python does not provide the standard-library
+    ``resource`` module, so report ``None`` there rather than preventing other
+    consumers of this provider adapter from importing it.
+    """
+    if resource is None:
+        return None
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform == "darwin" else value * 1024
 
 
 def main(argv: Sequence[str] | None = None) -> int:
