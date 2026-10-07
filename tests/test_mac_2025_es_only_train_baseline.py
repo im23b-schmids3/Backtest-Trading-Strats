@@ -36,6 +36,22 @@ def test_family_matrix_contains_required_cross_session_and_dynamic_cells() -> No
     assert all(item.causal_ready_timestamp.endswith("Z") for item in families)
 
 
+def test_explicit_session_windows_drive_family_causal_boundaries() -> None:
+    day = "2025-03-03"
+    windows = baseline._session_windows(day)
+    shifted = {**windows, "EUROPE": (windows["EUROPE"][0] + 3_600_000_000_000,
+                                     windows["EUROPE"][1])}
+    current = {session: baseline.Profile.create(day, session, *windows[session])
+               for session in baseline.SESSION_ORDER}
+    prior = {session: baseline.Profile.create("2025-02-28", session,
+                                              *baseline._session_windows("2025-02-28")[session])
+             for session in baseline.SESSION_ORDER}
+    family = next(row for row in baseline.build_families(day, prior, current, shifted)
+                  if row.family_id == "EUROPE|EUROPE|CURRENT|HIGH")
+    assert family.dynamic is True
+    assert family.causal_ready_timestamp == baseline._iso(shifted["EUROPE"][1])
+
+
 def test_train_plan_is_exactly_train_only() -> None:
     assert len(baseline.TRAIN_DATES) == 35
     assert baseline.DEPENDENCY_DATE == "2025-02-28"

@@ -57,6 +57,7 @@ def _candidate_tape_terminal_state_accepted(*, state: str, initial_executable_ns
                                             first_strategy_start_ns: int, final_strategy_end_ns: int,
                                             last_source_timestamp_ns: int | None,
                                             sessions_seen: set[str], sessions_finished: set[str],
+                                            source_coverage_end_ns: int | None = None,
                                             in_window_non_executable: bool = False,
                                             integrity_error: str | None = None) -> bool:
     """Validate the candidate-tape-only post-session EOF exception.
@@ -77,13 +78,55 @@ def _candidate_tape_terminal_state_accepted(*, state: str, initial_executable_ns
         )
     if initial_executable_ns is None or initial_executable_ns > first_strategy_start_ns:
         raise BaselineError("native MBP-10 was not executable before strategy processing")
-    if last_source_timestamp_ns is None or last_source_timestamp_ns < final_strategy_end_ns:
+    if last_source_timestamp_ns is None:
         raise BaselineError("native MBP-10 source ended before the final strategy window")
+    if last_source_timestamp_ns < final_strategy_end_ns:
+        # Historical queries are half-open. A complete, hash-verified source
+        # may therefore end at the last event strictly before its exclusive
+        # requested endpoint. Accept this only when the source manifest proves
+        # that endpoint covers the requested window and the last book is still
+        # executable; post-window non-executable EOF remains a separate case.
+        if source_coverage_end_ns is None or source_coverage_end_ns < final_strategy_end_ns or state != "EXECUTABLE":
+            raise BaselineError("native MBP-10 source ended before the final strategy window")
+        return False
     if state == "EXECUTABLE":
         return False
     if state == "TEMPORARILY_NON_EXECUTABLE" and last_source_timestamp_ns > final_strategy_end_ns:
         return True
     raise BaselineError(f"incomplete native MBP-10 source: {state}")
+
+
+def _session_for_timestamp(timestamp_ns: int, windows: Mapping[str, tuple[int, int]]) -> str | None:
+    """Return strategy-session membership without filtering the raw book stream."""
+    for session in SESSION_ORDER:
+        start, end = windows[session]
+        if start <= timestamp_ns < end:
+            return session
+    return None
+
+
+def _feed_market_state(adapter: "FastNativeReplayAdapter", raw: Any, *, session: str | None,
+                       action: str, active: bool,
+                       interest_prices: frozenset[float]) -> "_FastPublic | None":
+    """Consume each raw record; session membership only controls public materialization.
+
+    This preserves continuous MBP-10 warm-up across shifted session boundaries.
+    The adapter's Policy-C transition handles temporary crossed/locked books;
+    they do not produce public strategy events until the book reopens.
+    """
+    return adapter.feed_array(raw, materialize_public=session is not None and
+                              (action == "T" or active), interest_prices=interest_prices)
+
+
+def _candidate_tape_in_window_book_state_supported(state: str) -> bool:
+    """Recognize Policy-C states that are allowed to recover on later raw rows.
+
+    Strategy dispatch remains fail-closed: the adapter returns no public event
+    while these states are active. Route-level coverage tracks whether a
+    temporary state overlaps a required window and requires recovery before
+    accepting the tape.
+    """
+    return state in {"EXECUTABLE", "TEMPORARILY_NON_EXECUTABLE", "WAITING_FOR_REOPEN_BOOK"}
 
 
 class BroadSignalEngine(L2SignalEngine):
@@ -714,8 +757,9 @@ def _causal_ready(day: str, session: str, current_source: str | None, windows: M
     return windows[current_source][1]
 
 
-def build_families(day: str, prior_profiles: Mapping[str, Profile], current_profiles: Mapping[str, Profile]) -> tuple[Family, ...]:
-    windows = _session_windows(day)
+def build_families(day: str, prior_profiles: Mapping[str, Profile], current_profiles: Mapping[str, Profile],
+                   windows: Mapping[str, tuple[int, int]] | None = None) -> tuple[Family, ...]:
+    windows = windows or _session_windows(day)
     specs: list[tuple[str, str, str, str, str | None]] = []
     # The same-session prior profile and prior RTH context are always causal.
     for level in PROFILE_LEVELS:
@@ -785,9 +829,11 @@ def _new_runner(day: str, session: str, families: tuple[Family, ...], prior_prof
     )
 
 
-def _profile_only_day(day: str, path: Path, *, source_paths: tuple[Path, ...] | None = None) -> dict[str, Profile]:
+def _profile_only_day(day: str, path: Path, *, source_paths: tuple[Path, ...] | None = None,
+                      session_windows: Mapping[str, tuple[int, int]] | None = None,
+                      record_observer: Any | None = None) -> dict[str, Profile]:
     """Build a dependency profile without running any strategy logic."""
-    windows = _session_windows(day)
+    windows = session_windows or _session_windows(day)
     profiles = {session: _profiles_for_phase(day, session, windows) for session in SESSION_ORDER}
     from databento import DBNStore
     ordered_sources = source_paths or (path,)
@@ -804,6 +850,8 @@ def _profile_only_day(day: str, path: Path, *, source_paths: tuple[Path, ...] | 
             actions = batch["action"]
             prices = batch["price"]
             sizes = batch["size"]
+            if record_observer is not None:
+                record_observer(day, timestamps, actions, sizes)
             trade_mask = (actions == b"T") & (sizes > 0)
             if not bool(trade_mask.any()):
                 continue
@@ -839,15 +887,23 @@ def _route_day(day: str, path: Path, prior_profiles: dict[str, Profile], config:
                capture_events: list[dict[str, Any]] | None = None,
                class_b: L2ClassBConfig = L2ClassBConfig(),
                source_paths: tuple[Path, ...] | None = None,
-               candidate_tape_terminal_policy: bool = False) -> dict[str, Any]:
+               candidate_tape_terminal_policy: bool = False,
+               session_windows: Mapping[str, tuple[int, int]] | None = None,
+               family_ids: frozenset[str] | None = None,
+               source_coverage_end_ns: int | None = None) -> dict[str, Any]:
     replay_started = wall_time.perf_counter()
     adapter_seconds = 0.0
     profile_seconds = 0.0
     strategy_seconds = 0.0
-    windows = _session_windows(day)
+    windows = session_windows or _session_windows(day)
     current_profiles = known_current_profiles or {session: _profiles_for_phase(day, session, windows) for session in SESSION_ORDER}
     profiles_are_sealed = known_current_profiles is not None
-    families = build_families(day, prior_profiles, current_profiles)
+    families = build_families(day, prior_profiles, current_profiles, windows)
+    if family_ids is not None:
+        families = tuple(family for family in families if family.family_id in family_ids)
+        absent = family_ids - {family.family_id for family in families}
+        if absent:
+            raise BaselineError(f"requested replay families unavailable on {day}: {sorted(absent)}")
     by_session = {session: tuple(family for family in families if family.trading_session == session) for session in SESSION_ORDER}
     runners: dict[str, historical.HistoricalL2Runner] = {}
     extrema: dict[str, float] = {}
@@ -856,6 +912,7 @@ def _route_day(day: str, path: Path, prior_profiles: dict[str, Profile], config:
     sessions_finished: set[str] = set()
     last_strategy_timestamp_ns: int | None = None
     book_state_at_last_strategy_record: str | None = None
+    in_window_non_executable = False
     adapter = FastNativeReplayAdapter()
     from databento import DBNStore
     records = 0
@@ -867,17 +924,16 @@ def _route_day(day: str, path: Path, prior_profiles: dict[str, Profile], config:
 
     def ensure_session(timestamp_ns: int) -> str | None:
         nonlocal active_session
-        for session in SESSION_ORDER:
-            start, end = windows[session]
-            if start <= timestamp_ns < end:
-                if active_session != session:
-                    if active_session is not None:
-                        finish_session(active_session)
-                    runners[session] = _new_runner(day, session, by_session[session], prior_profiles, current_profiles, config, class_b)
-                    active_session = session
-                    sessions_seen.add(session)
-                return session
-        return None
+        session = _session_for_timestamp(timestamp_ns, windows)
+        if session is None:
+            return None
+        if active_session != session:
+            if active_session is not None:
+                finish_session(active_session)
+            runners[session] = _new_runner(day, session, by_session[session], prior_profiles, current_profiles, config, class_b)
+            active_session = session
+            sessions_seen.add(session)
+        return session
 
     # Multiple adjacent DBN partitions for one UTC date are one logical
     # source stream.  Process each partition sequentially so book state,
@@ -909,10 +965,13 @@ def _route_day(day: str, path: Path, prior_profiles: dict[str, Profile], config:
                                    or getattr(runners[session].signals, "_entry_ready", ())))
         interest = frozenset(level.price for level in runners[session].interactions.levels) if session is not None else frozenset()
         adapter_started = wall_time.perf_counter()
-        public = adapter.feed_array(raw, materialize_public=session is not None and
-                                    (action == "T" or active),
+        public = _feed_market_state(adapter, raw, session=session, action=action, active=active,
                                     interest_prices=interest)
         adapter_seconds += wall_time.perf_counter() - adapter_started
+        if session is not None and adapter.state != "EXECUTABLE":
+            in_window_non_executable = True
+        elif adapter.state == "EXECUTABLE":
+            in_window_non_executable = False
         if session is not None:
             last_strategy_timestamp_ns = timestamp_ns
             book_state_at_last_strategy_record = adapter.state
@@ -921,9 +980,9 @@ def _route_day(day: str, path: Path, prior_profiles: dict[str, Profile], config:
         # state after every required window has completed; the ordinary
         # baseline route keeps the historical strict adapter.finish() rule.
         if (candidate_tape_terminal_policy and timestamp_ns <= max(end for _, end in windows.values())
-                and adapter.state != "EXECUTABLE"):
+                and not _candidate_tape_in_window_book_state_supported(adapter.state)):
             raise BaselineError(
-                f"non-executable native MBP-10 inside required strategy coverage for {day}: "
+                f"invalid native MBP-10 state inside required strategy coverage for {day}: "
                 f"{adapter.state} at {_iso(timestamp_ns)}"
             )
         # Candidate-tape capture is deliberately independent of the baseline
@@ -979,6 +1038,8 @@ def _route_day(day: str, path: Path, prior_profiles: dict[str, Profile], config:
             last_source_timestamp_ns=last_source_timestamp_ns,
             sessions_seen=sessions_seen,
             sessions_finished=sessions_finished,
+            source_coverage_end_ns=source_coverage_end_ns,
+            in_window_non_executable=in_window_non_executable,
         )
         if not terminal_state_accepted:
             adapter.finish()

@@ -435,7 +435,10 @@ def build_candidate_tape(day: str, path: Path, prior_profiles: Mapping[str, base
                          current_profiles: Mapping[str, baseline.Profile], *, output_path: Path,
                          source_sha256: str, semantic_sha256: str,
                          config: L2Config | None = None,
-                         source_paths: Sequence[Path] | None = None) -> tuple[CandidateTape, dict[str, Any]]:
+                         source_paths: Sequence[Path] | None = None,
+                         session_windows: Mapping[str, tuple[int, int]] | None = None,
+                         family_ids: frozenset[str] | None = None,
+                         source_coverage_end_ns: int | None = None) -> tuple[CandidateTape, dict[str, Any]]:
     """Run the existing causal route once and persist a reusable candidate tape."""
     config = config or L2Config()
     event_spool = EventSpool()
@@ -443,7 +446,10 @@ def build_candidate_tape(day: str, path: Path, prior_profiles: Mapping[str, base
         result = baseline._route_day(day, path, dict(prior_profiles), config,
                                      dict(current_profiles), capture_events=event_spool,
                                      source_paths=tuple(source_paths) if source_paths is not None else None,
-                                     candidate_tape_terminal_policy=True)  # type: ignore[arg-type]
+                                     candidate_tape_terminal_policy=True,
+                                     session_windows=session_windows,
+                                     family_ids=family_ids,
+                                     source_coverage_end_ns=source_coverage_end_ns)  # type: ignore[arg-type]
         events = event_spool.to_array()
     finally:
         event_spool.close()
@@ -456,7 +462,8 @@ def build_candidate_tape(day: str, path: Path, prior_profiles: Mapping[str, base
         "feature_names": list(FEATURE_NAMES), "candidate_count": len(candidates),
         "event_count": len(event_array), "session_order": list(baseline.SESSION_ORDER),
         "available_families": sorted({item.family_id for item in result["families"]}),
-        "session_windows": {session: list(window) for session, window in baseline._session_windows(day).items()},
+        "session_windows": {session: list(window) for session, window in
+                            (session_windows or baseline._session_windows(day)).items()},
         "completed_strategy_sessions": result["completed_strategy_sessions"],
         "final_strategy_window_end_ns": result["final_strategy_window_end_ns"],
         "source_last_timestamp_ns": result["source_last_timestamp_ns"],

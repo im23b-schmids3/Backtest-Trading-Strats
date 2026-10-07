@@ -48,6 +48,20 @@ def test_source_truncated_before_final_required_window_end_is_fatal():
         _validate(last_source_timestamp_ns=99, state="EXECUTABLE")
 
 
+def test_half_open_verified_source_bound_accepts_executable_last_record_before_end():
+    assert _validate(state="EXECUTABLE", last_source_timestamp_ns=99,
+                     source_coverage_end_ns=100) is False
+
+
+def test_half_open_source_bound_does_not_allow_unverified_or_non_executable_eof():
+    with pytest.raises(baseline.BaselineError, match="ended before the final strategy window"):
+        _validate(state="EXECUTABLE", last_source_timestamp_ns=99,
+                  source_coverage_end_ns=99)
+    with pytest.raises(baseline.BaselineError, match="ended before the final strategy window"):
+        _validate(state="TEMPORARILY_NON_EXECUTABLE", last_source_timestamp_ns=99,
+                  source_coverage_end_ns=100)
+
+
 def test_parser_or_integrity_failure_before_cutoff_is_fatal():
     with pytest.raises(baseline.BaselineError, match="integrity failure"):
         _validate(state="EXECUTABLE", integrity_error="synthetic parser failure")
